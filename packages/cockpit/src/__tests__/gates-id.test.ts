@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { deriveGateId, deriveGateKey } from '../gates/index.js';
 
 describe('deriveGateKey', () => {
-  it('emits `<owner>/<repo>#<number>:<gateType>:<generation>` verbatim', () => {
-    const key = deriveGateKey({
-      issueRef: { owner: 'generacy-ai', repo: 'generacy', number: 1020 },
-      gateType: 'artifact-review',
-      generation: 'spec-review:abc1234',
-    });
+  it('emits `<issueRef>:<gateType>:<generation>` verbatim (issueRef already owner/repo#N)', () => {
+    const key = deriveGateKey(
+      'generacy-ai/generacy#1020',
+      'artifact-review',
+      'spec-review:abc1234',
+    );
     expect(key).toBe('generacy-ai/generacy#1020:artifact-review:spec-review:abc1234');
     expect(key).toMatch(/^[a-zA-Z0-9-_.]+\/[a-zA-Z0-9-_.]+#\d+:[a-z-]+:.+$/);
+  });
+
+  it('coerces a numeric generation to string', () => {
+    expect(deriveGateKey('generacy-ai/generacy#1000', 'phase-queue', 2)).toBe(
+      'generacy-ai/generacy#1000:phase-queue:2',
+    );
   });
 });
 
@@ -34,24 +40,16 @@ describe('deriveGateId', () => {
   });
 
   it('changes when gateType changes (d)', () => {
-    const issueRef = { owner: 'generacy-ai', repo: 'generacy', number: 1020 };
-    const a = deriveGateId(
-      deriveGateKey({ issueRef, gateType: 'artifact-review', generation: 'x' }),
-    );
-    const b = deriveGateId(
-      deriveGateKey({ issueRef, gateType: 'implementation-review', generation: 'x' }),
-    );
+    const issueRef = 'generacy-ai/generacy#1020';
+    const a = deriveGateId(deriveGateKey(issueRef, 'artifact-review', 'x'));
+    const b = deriveGateId(deriveGateKey(issueRef, 'implementation-review', 'x'));
     expect(a).not.toBe(b);
   });
 
   it('changes when generation changes (d)', () => {
-    const issueRef = { owner: 'generacy-ai', repo: 'generacy', number: 1020 };
-    const a = deriveGateId(
-      deriveGateKey({ issueRef, gateType: 'artifact-review', generation: 'g1' }),
-    );
-    const b = deriveGateId(
-      deriveGateKey({ issueRef, gateType: 'artifact-review', generation: 'g2' }),
-    );
+    const issueRef = 'generacy-ai/generacy#1020';
+    const a = deriveGateId(deriveGateKey(issueRef, 'artifact-review', 'g1'));
+    const b = deriveGateId(deriveGateKey(issueRef, 'artifact-review', 'g2'));
     expect(a).not.toBe(b);
   });
 });

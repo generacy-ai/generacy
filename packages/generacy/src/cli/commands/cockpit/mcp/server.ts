@@ -216,7 +216,7 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
     'cockpit_gate_ack',
     {
       description:
-        "Ack a previously-opened gate with an outcome (e.g. 'approved'/'rejected'). Thin HTTP client over POST /cockpit/gates/:id/ack.",
+        "Ack a previously-opened gate with a terminal outcome ('applied' | 'superseded' | 'failed'). Emits the frozen gate-outcome record over POST /cockpit/gates/:id/ack.",
       inputSchema: CockpitGateAckInputSchema,
     },
     async (args) => toCallToolResult(await cockpitGateAck(args, deps)),

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { listGates } from '../gate-vocabulary.js';
 import { SESSION_ID_REGEX } from './claim/payload.js';
 import {
-  GateRecordSchema as InternalGateRecordSchema,
+  GateOpenInputSchema as InternalGateOpenInputSchema,
   GateAckInputSchema as InternalGateAckInputSchema,
 } from './gates/schemas.js';
 
@@ -188,12 +188,17 @@ export type CockpitRelayClarifyAnswersInput = z.infer<
 >;
 
 /**
- * #1022 — remote-gate MCP-boundary schemas. Re-exported from
+ * #1022 / #843 — remote-gate MCP-boundary schemas. Re-exported from
  * `./gates/schemas.ts` so the tool handlers (and the parity/audit tests)
- * consume a stable public-import surface. Wire contracts owned by the epic —
- * see `contracts/cockpit_gate_open.md`.
+ * consume a stable public-import surface. These are the SEMANTIC inputs: the
+ * plugin passes semantic + presentation fields and `cockpit_gate_open` derives
+ * gateKey/gateId and assembles the frozen `type:'gate-open'` record; the ack
+ * input carries the closed `outcome` enum and the tool emits `gate-outcome`.
+ * Both are flat `z.object`s so the MCP `inputSchema` has a `.shape`
+ * (gen#1032/#1033). Wire contract: cockpit-remote-gates-plan.md § "Wire
+ * contracts".
  */
-export const CockpitGateOpenInputSchema = InternalGateRecordSchema;
+export const CockpitGateOpenInputSchema = InternalGateOpenInputSchema;
 export type CockpitGateOpenInput = z.infer<typeof CockpitGateOpenInputSchema>;
 
 export const CockpitGateAckInputSchema = InternalGateAckInputSchema;

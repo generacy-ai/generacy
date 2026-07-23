@@ -1,19 +1,15 @@
 import { z } from 'zod';
 
-export const GATE_TYPES = [
-  'clarification',
-  'artifact-review',
-  'implementation-review',
-  'manual-validation',
-  'escalation',
-  'phase-queue',
-  'filing',
-  'scope-drained',
-] as const;
-
-export const GateTypeSchema = z.enum(GATE_TYPES);
-export type GateType = z.infer<typeof GateTypeSchema>;
-
+/**
+ * Artifact-review kinds — a cluster-local enumeration used only by the
+ * `deriveArtifactReviewGeneration` helper (generation.ts) to build the
+ * `<kind>:<headSha>` discriminator. It is NOT a wire type: the gate-open
+ * record carries `gateType: 'artifact-review'`, and the kind is folded into
+ * `gateKey`'s generation slot.
+ *
+ * The wire enum (`GateTypeSchema`), the gate option/answer/outcome shapes and
+ * the gateKey/gateId derivation all live in `./schema.ts` — the single source.
+ */
 export const ARTIFACT_REVIEW_KINDS = [
   'spec-review',
   'plan-review',
@@ -23,7 +19,3 @@ export const ARTIFACT_REVIEW_KINDS = [
 
 export const ArtifactReviewKindSchema = z.enum(ARTIFACT_REVIEW_KINDS);
 export type ArtifactReviewKind = z.infer<typeof ArtifactReviewKindSchema>;
-
-export const GATE_OUTCOMES = ['applied', 'superseded', 'failed'] as const;
-export const GateOutcomeSchema = z.enum(GATE_OUTCOMES);
-export type GateOutcome = z.infer<typeof GateOutcomeSchema>;

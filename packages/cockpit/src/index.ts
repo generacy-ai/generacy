@@ -83,43 +83,34 @@ export {
   type RateLimitProbeResult,
 } from './gh/rate-limit-scheduler.js';
 
-// Wire contracts — see specs/1020-part-cockpit-remote-gates/
-// NB: gates' `IssueRef` type collides with resolver's `IssueRef` (different shapes:
-// resolver = { owner, repo, issueNumber }; gates = { owner, repo, number }).
+// Wire contracts — the frozen cockpit remote-gate contract (Shapes 1/2/3).
+// See tetrad-development/docs/cockpit-remote-gates-plan.md § "Wire contracts".
+// The single source is packages/cockpit/src/gates/schema.ts.
+// NB: gates' object `IssueRef` type collides with resolver's `IssueRef`
+// (resolver = { owner, repo, issueNumber }; gates = { owner, repo, number }).
 // We re-export the gates version as `GateIssueRef`. `IssueRefSchema` is unique so
-// it stays unaliased.
+// it stays unaliased. The wire shapes carry issueRef/epicRef as flat strings.
 export {
-  // Wire-envelope schemas (transport contracts)
+  // Wire shapes (Shapes 1/2/3)
   GateOpenSchema,
-  GateAckSchema,
-  GateAnswerEnvelopeSchema,
-  type GateOpen,
-  type GateAck,
-  type GateAnswerEnvelope,
-  // Schemas
-  GateRecordSchema,
+  GateOutcomeSchema,
   GateAnswerSchema,
-  GateOutcomeAckSchema,
-  GateOptionSchema,
-  IssueRefSchema,
-  ActorSchema,
-  // Enums
+  type GateOpen,
+  type GateOutcome,
+  type GateAnswer,
+  // Enum + option
   GateTypeSchema,
   GATE_TYPES,
+  GateOptionSchema,
   ArtifactReviewKindSchema,
   ARTIFACT_REVIEW_KINDS,
-  GateOutcomeSchema,
-  GATE_OUTCOMES,
-  // Types
   type GateType,
   type ArtifactReviewKind,
-  type GateOutcome,
   type GateOption,
+  // Object ref helper (cluster-local; not a wire type)
+  IssueRefSchema,
+  issueRefToString,
   type IssueRef as GateIssueRef,
-  type Actor,
-  type GateRecord,
-  type GateAnswer,
-  type GateOutcomeAck,
   // Derivation
   deriveGateKey,
   deriveGateId,
@@ -136,14 +127,14 @@ export {
   MALFORMED_FIXTURES,
   VALID_ANSWER_FIXTURES,
   VALID_ACK_FIXTURES,
-  // Wire-envelope fixture builders (#1024 integration harness)
+  // Wire-frame fixture builders (#1024 integration harness)
   gateOpenFixture,
-  gateAckFixture,
+  gateOutcomeFixture,
   answerLineFixture,
   DEFAULT_WIRE_SCOPE,
   DEFAULT_WIRE_EPIC_REF,
   type WireScope,
   type GateOpenFixtureOverrides,
-  type GateAckFixtureOverrides,
+  type GateOutcomeFixtureOverrides,
   type AnswerLineFixtureOverrides,
 } from './gates/index.js';

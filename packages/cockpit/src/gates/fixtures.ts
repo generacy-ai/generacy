@@ -1,32 +1,35 @@
-import { deriveGateKey, deriveGateId } from './gate-id.js';
-import {
-  deriveClarificationGeneration,
-  deriveArtifactReviewGeneration,
-  deriveImplementationReviewGeneration,
-  deriveManualValidationGeneration,
-  deriveEscalationGeneration,
-  derivePhaseQueueGeneration,
-  deriveFilingGeneration,
-  deriveScopeDrainedGeneration,
-} from './generation.js';
 import {
   GateAnswerSchema,
-  GateOutcomeAckSchema,
-  GateRecordSchema,
+  GateOpenSchema,
+  GateOutcomeSchema,
+  deriveGateId,
+  deriveGateKey,
   type GateAnswer,
-  type GateOutcomeAck,
-  type GateRecord,
-  type IssueRef,
-} from './schemas.js';
-import type { GateType } from './types.js';
+  type GateOpen,
+  type GateOutcome,
+  type GateType,
+} from './schema.js';
+import { issueRefToString, type IssueRef } from './schemas.js';
+import {
+  deriveArtifactReviewGeneration,
+  deriveClarificationGeneration,
+  deriveEscalationGeneration,
+  deriveFilingGeneration,
+  deriveImplementationReviewGeneration,
+  deriveManualValidationGeneration,
+  derivePhaseQueueGeneration,
+  deriveScopeDrainedGeneration,
+} from './generation.js';
 
 const EPIC_REF: IssueRef = { owner: 'generacy-ai', repo: 'generacy', number: 1000 };
 const ISSUE_REF: IssueRef = { owner: 'generacy-ai', repo: 'generacy', number: 1020 };
 const TRACKING_REF: IssueRef = { owner: 'generacy-ai', repo: 'generacy', number: 900 };
+const EPIC_REF_STR = issueRefToString(EPIC_REF);
+const ISSUE_REF_STR = issueRefToString(ISSUE_REF);
 const SESSION_ID = 'sess-abc123def456';
 const ASKED_AT = '2026-07-21T12:00:00.000Z';
 const ANSWERED_AT = '2026-07-21T12:05:00.000Z';
-const ACK_AT = '2026-07-21T12:05:01.000Z';
+const OUTCOME_AT = '2026-07-21T12:05:01.000Z';
 
 const ACTOR = {
   userId: 'user-1',
@@ -39,60 +42,39 @@ const DEFAULT_OPTIONS = [
   { id: 'opt-b', label: 'Reject', description: 'Reject and halt', recommended: true },
 ] as const;
 
-interface GenerationBundle {
-  gateType: GateType;
-  generation: string;
-}
-
-const GENERATIONS: Record<GateType, GenerationBundle> = {
-  clarification: {
-    gateType: 'clarification',
-    generation: deriveClarificationGeneration({ batchId: 'batch-abc123' }),
-  },
-  'artifact-review': {
-    gateType: 'artifact-review',
-    generation: deriveArtifactReviewGeneration({ kind: 'spec-review', headSha: 'abc1234' }),
-  },
-  'implementation-review': {
-    gateType: 'implementation-review',
-    generation: deriveImplementationReviewGeneration({ headSha: 'def5678' }),
-  },
-  'manual-validation': {
-    gateType: 'manual-validation',
-    generation: deriveManualValidationGeneration({ phaseNumber: 2 }),
-  },
-  escalation: {
-    gateType: 'escalation',
-    generation: deriveEscalationGeneration({
-      subtype: 'stalled',
-      labelOrState: 'agent:error',
-      counter: 1,
-    }),
-  },
-  'phase-queue': {
-    gateType: 'phase-queue',
-    generation: derivePhaseQueueGeneration({ phaseNumber: 3 }),
-  },
-  filing: {
-    gateType: 'filing',
-    generation: deriveFilingGeneration({ draftHash: 'feedbeef1234' }),
-  },
-  'scope-drained': {
-    gateType: 'scope-drained',
-    generation: deriveScopeDrainedGeneration({ trackingIssueRef: TRACKING_REF, counter: 1 }),
-  },
+const GENERATIONS: Record<GateType, string> = {
+  clarification: deriveClarificationGeneration({ batchId: 'batch-abc123' }),
+  'artifact-review': deriveArtifactReviewGeneration({ kind: 'spec-review', headSha: 'abc1234' }),
+  'implementation-review': deriveImplementationReviewGeneration({ headSha: 'def5678' }),
+  'manual-validation': deriveManualValidationGeneration({ phaseNumber: 2 }),
+  escalation: deriveEscalationGeneration({
+    subtype: 'stalled',
+    labelOrState: 'agent:error',
+    counter: 1,
+  }),
+  'phase-queue': derivePhaseQueueGeneration({ phaseNumber: 3 }),
+  filing: deriveFilingGeneration({ draftHash: 'feedbeef1234' }),
+  'scope-drained': deriveScopeDrainedGeneration({ trackingIssueRef: TRACKING_REF, counter: 1 }),
 };
 
-function buildRecord(gateType: GateType): GateRecord {
-  const { generation } = GENERATIONS[gateType];
-  const gateKey = deriveGateKey({ issueRef: ISSUE_REF, gateType, generation });
+// phase-queue is the sole per-issue exception: its wire `issueRef` slot carries
+// the EPIC ref, not a child issue (see the auto.md UI-mode gate-mapping table).
+function issueRefFor(gateType: GateType): string {
+  return gateType === 'phase-queue' ? EPIC_REF_STR : ISSUE_REF_STR;
+}
+
+function buildRecord(gateType: GateType): GateOpen {
+  const generation = GENERATIONS[gateType];
+  const issueRef = issueRefFor(gateType);
+  const gateKey = deriveGateKey(issueRef, gateType, generation);
   const gateId = deriveGateId(gateKey);
   return {
+    type: 'gate-open',
     gateId,
     gateKey,
     gateType,
-    epicRef: EPIC_REF,
-    issueRef: ISSUE_REF,
+    epicRef: EPIC_REF_STR,
+    issueRef,
     issueTitle: `Issue #${ISSUE_REF.number}: cockpit remote gates`,
     issueUrl: `https://github.com/${ISSUE_REF.owner}/${ISSUE_REF.repo}/issues/${ISSUE_REF.number}`,
     title: `${gateType} gate`,
@@ -104,7 +86,7 @@ function buildRecord(gateType: GateType): GateRecord {
   };
 }
 
-export const VALID_FIXTURES: Record<GateType, GateRecord> = {
+export const VALID_FIXTURES: Record<GateType, GateOpen> = {
   clarification: buildRecord('clarification'),
   'artifact-review': buildRecord('artifact-review'),
   'implementation-review': buildRecord('implementation-review'),
@@ -118,22 +100,24 @@ export const VALID_FIXTURES: Record<GateType, GateRecord> = {
 // Assert every valid fixture parses at module load — fixture drift fails the build,
 // not a test run.
 for (const gateType of Object.keys(VALID_FIXTURES) as GateType[]) {
-  GateRecordSchema.parse(VALID_FIXTURES[gateType]);
+  GateOpenSchema.parse(VALID_FIXTURES[gateType]);
 }
 
 interface AnswerSpec {
   optionId: string | null;
-  freeText?: string;
+  freeText: string | null;
 }
 
+// optionId XOR free-text is NOT enforced on the wire (the cloud sends the unused
+// side as an explicit null); every fixture therefore carries both fields.
 const ANSWER_SPECS: Record<GateType, AnswerSpec> = {
-  clarification: { optionId: 'opt-a' },
+  clarification: { optionId: 'opt-a', freeText: null },
   'artifact-review': { optionId: null, freeText: 'approve with concerns' },
-  'implementation-review': { optionId: 'opt-a' },
+  'implementation-review': { optionId: 'opt-a', freeText: null },
   'manual-validation': { optionId: null, freeText: 'verified manually on 2026-07-21' },
-  escalation: { optionId: 'opt-a' },
+  escalation: { optionId: 'opt-a', freeText: null },
   'phase-queue': { optionId: null, freeText: 'proceed with next phase' },
-  filing: { optionId: 'opt-a' },
+  filing: { optionId: 'opt-a', freeText: null },
   'scope-drained': { optionId: null, freeText: 'confirmed scope drained' },
 };
 
@@ -145,7 +129,7 @@ function buildAnswer(gateType: GateType): GateAnswer {
     gateId: record.gateId,
     gateKey: record.gateKey,
     optionId: spec.optionId,
-    ...(spec.freeText !== undefined ? { freeText: spec.freeText } : {}),
+    freeText: spec.freeText,
     actor: { ...ACTOR },
     answeredAt: ANSWERED_AT,
     deliveryId: `delivery-${gateType}-1`,
@@ -167,28 +151,32 @@ for (const gateType of Object.keys(VALID_ANSWER_FIXTURES) as GateType[]) {
   GateAnswerSchema.parse(VALID_ANSWER_FIXTURES[gateType]);
 }
 
-export const VALID_ACK_FIXTURES: Record<'applied' | 'superseded' | 'failed', GateOutcomeAck> = {
+// gate-outcome (the ACK) fixtures — one per closed outcome enum value.
+export const VALID_ACK_FIXTURES: Record<'applied' | 'superseded' | 'failed', GateOutcome> = {
   applied: {
+    type: 'gate-outcome',
     gateId: VALID_FIXTURES.clarification.gateId,
     outcome: 'applied',
-    at: ACK_AT,
+    at: OUTCOME_AT,
   },
   superseded: {
+    type: 'gate-outcome',
     gateId: VALID_FIXTURES['artifact-review'].gateId,
     outcome: 'superseded',
     detail: 'A newer answer arrived first',
-    at: ACK_AT,
+    at: OUTCOME_AT,
   },
   failed: {
+    type: 'gate-outcome',
     gateId: VALID_FIXTURES.escalation.gateId,
     outcome: 'failed',
     detail: 'Label mutation returned 422',
-    at: ACK_AT,
+    at: OUTCOME_AT,
   },
 };
 
 for (const key of Object.keys(VALID_ACK_FIXTURES) as Array<keyof typeof VALID_ACK_FIXTURES>) {
-  GateOutcomeAckSchema.parse(VALID_ACK_FIXTURES[key]);
+  GateOutcomeSchema.parse(VALID_ACK_FIXTURES[key]);
 }
 
 const BASE_RECORD_UNKNOWN = VALID_FIXTURES.clarification as unknown as Record<string, unknown>;
@@ -197,32 +185,43 @@ const BASE_ANSWER_UNKNOWN = VALID_ANSWER_FIXTURES.clarification as unknown as Re
   unknown
 >;
 
-function withoutKey<T extends Record<string, unknown>>(obj: T, key: string): Record<string, unknown> {
+function withoutKey<T extends Record<string, unknown>>(
+  obj: T,
+  key: string,
+): Record<string, unknown> {
   const clone: Record<string, unknown> = { ...obj };
   delete clone[key];
   return clone;
 }
 
 export const MALFORMED_FIXTURES: Record<string, unknown> = {
-  'missing-description': {
+  // Wrong up-path discriminator (must be the 'gate-open' literal).
+  'wrong-type-literal': {
     ...BASE_RECORD_UNKNOWN,
-    options: [{ id: 'opt-a', label: 'Approve' }],
+    type: 'gate-ack',
   },
-  'allow-free-text-false': {
+  // Option missing its required `id` (description is OPTIONAL in the frozen shape).
+  'option-missing-id': {
     ...BASE_RECORD_UNKNOWN,
-    allowFreeText: false,
+    options: [{ label: 'Approve' }],
   },
+  // allowFreeText is a REQUIRED boolean — a non-boolean must reject.
+  'allow-free-text-non-boolean': {
+    ...BASE_RECORD_UNKNOWN,
+    allowFreeText: 'yes',
+  },
+  // gateId is pinned to exactly 24 chars.
   'empty-gate-id': {
     ...BASE_RECORD_UNKNOWN,
     gateId: '',
   },
+  'wrong-length-gate-id': {
+    ...BASE_RECORD_UNKNOWN,
+    gateId: '0123456789abcdef0123', // 20 chars
+  },
   'unknown-gate-type': {
     ...BASE_RECORD_UNKNOWN,
     gateType: 'not-a-real-gate-type',
-  },
-  'non-hex-gate-id-prefix': {
-    ...BASE_RECORD_UNKNOWN,
-    gateId: 'ZZZZZZZZZZZZZZZZZZZZZZZZ',
   },
   'invalid-issue-url': {
     ...BASE_RECORD_UNKNOWN,
@@ -232,15 +231,15 @@ export const MALFORMED_FIXTURES: Record<string, unknown> = {
     ...BASE_RECORD_UNKNOWN,
     askedAt: 'Tue Jul 21 2026 12:00:00 GMT+0000',
   },
-  'answer-null-option-empty-free-text': {
-    ...BASE_ANSWER_UNKNOWN,
-    optionId: null,
-    freeText: '',
-  },
-  // Additional coverage: missing required field, invalid actor email.
   'record-missing-title': withoutKey(BASE_RECORD_UNKNOWN, 'title'),
+  // Down-path: actor.email must be a valid email OR null; a malformed string rejects.
   'answer-invalid-email': {
     ...BASE_ANSWER_UNKNOWN,
     actor: { ...ACTOR, email: 'not-an-email' },
+  },
+  // Down-path: wrong discriminator (must be the 'gate-answer' literal).
+  'answer-wrong-type-literal': {
+    ...BASE_ANSWER_UNKNOWN,
+    type: 'gate-open',
   },
 };
