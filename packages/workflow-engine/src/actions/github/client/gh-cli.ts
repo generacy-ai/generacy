@@ -754,12 +754,16 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
+    // #1043 Finding 3: the issue-branch resolver filters this full list down to
+    // `<N>-*` head refs, so a low cap can hide the canonical PR for a
+    // high-numbered issue in a busy repo. `gh pr list --limit` paginates
+    // internally up to the limit; raise it well above any plausible open-PR count.
     const result = await this.executeGh([
       'pr', 'list',
       '-R', `${owner}/${repo}`,
       '--state', 'open',
       '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
-      '--limit', '100',
+      '--limit', '1000',
     ]);
 
     if (result.exitCode !== 0) {
@@ -1306,10 +1310,14 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listBranches(owner: string, repo: string): Promise<string[]> {
-    // List remote branches using gh api
+    // List remote branches using gh api. #1043 Finding 3: paginate — the
+    // /branches endpoint caps at 30 results per page by default, so without
+    // `--paginate` + per_page=100 any `<N>-*` branch past page 1 is silently
+    // dropped and the issue-branch resolver returns null → duplicate branch.
     const result = await this.executeGh([
       'api',
-      `/repos/${owner}/${repo}/branches`,
+      '--paginate',
+      `/repos/${owner}/${repo}/branches?per_page=100`,
       '--jq', '.[].name',
     ]);
 

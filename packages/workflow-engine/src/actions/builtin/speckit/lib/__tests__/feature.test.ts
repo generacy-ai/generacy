@@ -439,6 +439,90 @@ describe('createFeature()', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Test: cold/fresh-workspace re-entry onto an existing remote branch
+  // (#1043 Finding 2) — must NOT clobber the real spec.md with a template stub.
+  // -------------------------------------------------------------------------
+  describe('cold re-entry onto existing remote branch (#1043 Finding 2)', () => {
+    it('preserves the existing spec.md instead of overwriting it with a template', async () => {
+      // featureDir absent locally (cold workspace) → create-path. The resolver
+      // pins branchName to the real canonical branch, which exists on origin and
+      // already carries spec.md from prior phases.
+      existsFor({
+        '.git': true,
+        'config.yaml': false,
+        // NOTE: featureDir key ('1038-issue-1038') intentionally NOT set → absent
+        // → create-path is taken. spec.md exists after checkout of the remote branch.
+        'spec.md': true,
+      });
+
+      // Local branch missing; remote branch present.
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: [],
+        current: 'develop',
+      });
+      (git().branch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: ['remotes/origin/1038-issue-1038'],
+      });
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '1038-issue-1038';
+        return 'abc123def456';
+      });
+
+      const result = await createFeature({
+        description: 'a completely different description that would derive a new slug',
+        number: 1038,
+        resolveExistingBranch: async () => '1038-issue-1038',
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.branch_name).toBe('1038-issue-1038');
+      // Resumed the real remote branch...
+      expect(git().checkout).toHaveBeenCalledWith([
+        '-b',
+        '1038-issue-1038',
+        'origin/1038-issue-1038',
+      ]);
+      // ...and did NOT overwrite the existing spec.md with a template stub.
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+      expect(result.spec_file).toContain('1038-issue-1038');
+      expect(result.spec_file).toContain('spec.md');
+    });
+
+    it('still writes the initial spec.md when the resumed remote branch has none yet', async () => {
+      // Same cold re-entry, but the remote branch does not yet carry a spec.md.
+      // The guard is spec-existence-gated, so the template is written normally.
+      existsFor({
+        '.git': true,
+        'config.yaml': false,
+        'spec.md': false,
+      });
+
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: [],
+        current: 'develop',
+      });
+      (git().branch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: ['remotes/origin/1038-issue-1038'],
+      });
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '1038-issue-1038';
+        return 'abc123def456';
+      });
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 1038,
+        resolveExistingBranch: async () => '1038-issue-1038',
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockFs.writeFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Test: feature numbers >= 1000 (no cap)
   // -------------------------------------------------------------------------
   describe('feature numbers >= 1000', () => {

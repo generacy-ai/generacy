@@ -153,6 +153,107 @@ describe('Deterministic Operations', () => {
       expect(result.success).toBe(true);
       expect(result.branch_name).toBe('001-my-feature');
     });
+
+    it('#1043: prefers resolveExistingBranch return over slug derivation on resume', async () => {
+      const { createFeature } = await import(
+        '../../../src/actions/builtin/speckit/lib/feature.js'
+      );
+
+      // Existing feature dir under the canonical (older) branch name.
+      vi.mocked(fs.exists).mockImplementation(async (path: string) => {
+        if (path === '/repo/.git') return true;
+        if (path === '/repo/specs/1038-issue-1038') return true;
+        if (path === '/repo/specs/1038-issue-1038/spec.md') return true;
+        return false;
+      });
+
+      // Local branch exists at the canonical name — resume path takes
+      // the `branchLocal` branch, so no fresh branch is cut.
+      mockGit.branchLocal.mockResolvedValue({
+        all: ['1038-issue-1038'],
+        current: '1038-part-cockpit-remote-gates',
+      });
+      mockGit.revparse.mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) {
+          return '1038-issue-1038';
+        }
+        return 'abc123';
+      });
+
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+      const result = await createFeature({
+        number: 1038,
+        description: 'part cockpit remote gates',
+        cwd: '/repo',
+        resolveExistingBranch: async () => '1038-issue-1038',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.branch_name).toBe('1038-issue-1038');
+      expect(result.feature_dir).toBe('/repo/specs/1038-issue-1038');
+      // No fresh branch cut — resume path uses git.checkout, not
+      // checkoutLocalBranch, when the local branch already exists.
+      expect(mockGit.checkoutLocalBranch).not.toHaveBeenCalledWith(
+        expect.stringContaining('1038-part-cockpit-remote-gates')
+      );
+      expect(mockGit.checkout).toHaveBeenCalledWith('1038-issue-1038');
+
+      // Structured log event asserts SC-003 wiring.
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[createFeature] workflow-reentry-branch-reused',
+        expect.objectContaining({
+          event: 'workflow-reentry-branch-reused',
+          issueNumber: 1038,
+          canonicalBranch: '1038-issue-1038',
+          wouldHaveDerived: expect.stringMatching(/^1038-/),
+        })
+      );
+      // Sanity: the derived slug is the alternate one that would have
+      // caused the #1038 duplicate-PR bug.
+      const call = infoSpy.mock.calls.find(
+        (c) => c[0] === '[createFeature] workflow-reentry-branch-reused'
+      );
+      expect(call?.[1]).toMatchObject({ wouldHaveDerived: expect.not.stringMatching(/^1038-issue-1038$/) });
+
+      infoSpy.mockRestore();
+    });
+
+    it('#1043: warn + slug-derivation fallback when resolveExistingBranch returns invalid pattern', async () => {
+      const { createFeature } = await import(
+        '../../../src/actions/builtin/speckit/lib/feature.js'
+      );
+
+      vi.mocked(fs.exists).mockImplementation(async (path: string) => {
+        if (path === '/repo/.git') return true;
+        return false;
+      });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await createFeature({
+        number: 1038,
+        description: 'a valid description',
+        cwd: '/repo',
+        resolveExistingBranch: async () => 'not-a-slug!',
+      });
+
+      // Falls back to slug derivation → branch matches derived pattern.
+      expect(result.success).toBe(true);
+      expect(result.branch_name).toMatch(/^\d+-/);
+      expect(result.branch_name).not.toBe('not-a-slug!');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[createFeature] issue-branch-resolver-invalid-return',
+        expect.objectContaining({
+          event: 'issue-branch-resolver-invalid-return',
+          returned: 'not-a-slug!',
+          issueNumber: 1038,
+        })
+      );
+
+      warnSpy.mockRestore();
+    });
   });
 
   describe('getPaths', () => {

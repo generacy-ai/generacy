@@ -57,6 +57,14 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   }),
   registerProcessLauncher: vi.fn(),
   clearProcessLauncher: vi.fn(),
+  // #1043: PrManager.ensureDraftPr imports these for its best-effort dedup
+  // probe. Provide them so the mock module surface matches the real one —
+  // otherwise the probe throws on an undefined `resolveIssueBranch` and (before
+  // the try/catch isolation fix) would abort PR creation. Default to "no
+  // canonical branch" so the probe is a clean no-op and the normal PR-creation
+  // path runs. Dedup/adoption behavior is covered by pr-manager-issue-dedup.test.ts.
+  resolveIssueBranch: vi.fn().mockResolvedValue(null),
+  simpleGit: vi.fn(() => ({})),
   // #889: LabelManager imports WORKFLOW_LABELS to drive the ensure-pass.
   // Provide it here so the mock module surface matches the real one.
   WORKFLOW_LABELS: [],
