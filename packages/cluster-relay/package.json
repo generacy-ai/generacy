@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@generacy-ai/cockpit": "workspace:*",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
   },

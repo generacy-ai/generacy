@@ -366,4 +366,145 @@ describe('cockpit gates routes', () => {
       expect(res.statusCode).toBe(400);
     });
   });
+
+  describe('GET /cockpit/gates (status query — #1038)', () => {
+    // A minimal stub matching the GateStatusQueryService interface used by the handler.
+    interface StubService {
+      querySingle: (input: {
+        issueRef: string;
+        gateType: string;
+        generation: string;
+      }) => Promise<{ gateId: string; status: 'open' | 'answered' | 'absent' }>;
+      queryList: (input: {
+        issueRef: string;
+        gateTypeFilter?: string;
+      }) => Promise<{
+        gates: Array<{ gateId: string; gateType: string; status: 'open' | 'answered' }>;
+      }>;
+    }
+
+    function setupWithService(service: StubService | null) {
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => makeMockClient(),
+        logger: silentLogger,
+        getQueryService: service
+          ? () => service as unknown as import('../../services/gate-status-query.js').GateStatusQueryService
+          : undefined,
+      });
+    }
+
+    it('400 VALIDATION when issueRef is missing', async () => {
+      setupWithService({
+        querySingle: async () => ({ gateId: 'x'.repeat(24), status: 'open' }),
+        queryList: async () => ({ gates: [] }),
+      });
+      await server.ready();
+      const res = await server.inject({ method: 'GET', url: '/cockpit/gates?mode=list' });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('VALIDATION');
+    });
+
+    it('400 VALIDATION when mode=single is missing gateType', async () => {
+      setupWithService({
+        querySingle: async () => ({ gateId: 'x'.repeat(24), status: 'open' }),
+        queryList: async () => ({ gates: [] }),
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('o/r#1')}&mode=single&generation=g`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).details.missing).toContain('gateType');
+    });
+
+    it('200 mode=list happy path returns the gates array', async () => {
+      const gates = [
+        { gateId: 'a'.repeat(24), gateType: 'clarification', status: 'open' as const },
+        { gateId: 'b'.repeat(24), gateType: 'implementation-review', status: 'answered' as const },
+      ];
+      setupWithService({
+        querySingle: async () => ({ gateId: 'x'.repeat(24), status: 'open' }),
+        queryList: async () => ({ gates }),
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('o/r#1')}&mode=list`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ gates });
+    });
+
+    it('200 mode=single happy path returns gateId + status', async () => {
+      setupWithService({
+        querySingle: async () => ({ gateId: 'z'.repeat(24), status: 'open' }),
+        queryList: async () => ({ gates: [] }),
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('o/r#1')}&mode=single&gateType=clarification&generation=g1`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ gateId: 'z'.repeat(24), status: 'open' });
+    });
+
+    it('503 QUERY_UNREACHABLE when service throws QueryUnreachableError', async () => {
+      const { QueryUnreachableError } = await import('../../services/gate-status-query.js');
+      setupWithService({
+        querySingle: async () => {
+          throw new QueryUnreachableError({ attempts: 3, lastReason: 'firestore down' });
+        },
+        queryList: async () => ({ gates: [] }),
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('o/r#1')}&mode=single&gateType=clarification&generation=g`,
+      });
+      expect(res.statusCode).toBe(503);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe('QUERY_UNREACHABLE');
+      expect(body.details.attempts).toBe(3);
+      expect(body.details.lastError).toBe('firestore down');
+    });
+
+    it('500 MALFORMED_RESPONSE when service throws MalformedCloudResponseError', async () => {
+      const { MalformedCloudResponseError } = await import('../../services/gate-status-query.js');
+      setupWithService({
+        querySingle: async () => ({ gateId: 'x'.repeat(24), status: 'open' }),
+        queryList: async () => {
+          throw new MalformedCloudResponseError({
+            issues: [{ path: 'payload', message: 'missing' }],
+          });
+        },
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('o/r#1')}&mode=list`,
+      });
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body).code).toBe('MALFORMED_RESPONSE');
+    });
+
+    it('mode=list passes gateType through as gateTypeFilter', async () => {
+      let receivedFilter: string | undefined;
+      setupWithService({
+        querySingle: async () => ({ gateId: 'x'.repeat(24), status: 'open' }),
+        queryList: async (input) => {
+          receivedFilter = input.gateTypeFilter;
+          return { gates: [] };
+        },
+      });
+      await server.ready();
+      await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('o/r#1')}&mode=list&gateType=clarification`,
+      });
+      expect(receivedFilter).toBe('clarification');
+    });
+  });
 });

@@ -1,13 +1,35 @@
+import { createHash } from 'node:crypto';
 import type { IssueRef } from './schemas.js';
 import type { ArtifactReviewKind } from './types.js';
 
 // Note: untrusted callers should validate `kind` via ArtifactReviewKindSchema.parse before calling.
 
-export interface ClarificationGenerationInput {
-  batchId: string;
+/**
+ * Single question within an unanswered clarification batch. See
+ * `ClarificationGenerationInput` for the canonicalization contract.
+ */
+export interface ClarificationBatchQuestion {
+  questionNumber: number;
+  questionText: string;
 }
+
+export interface ClarificationGenerationInput {
+  questions: ClarificationBatchQuestion[];
+}
+
+/**
+ * Derive the `generation` discriminator for a clarification gate.
+ *
+ * Canonicalization contract (frozen — sweep + live paths MUST hash identical
+ * bytes): sort ascending by questionNumber, re-emit each entry with fixed key
+ * order (questionNumber then questionText), JSON.stringify with no
+ * pretty-print, sha256, hex, slice first 24 chars.
+ */
 export function deriveClarificationGeneration(input: ClarificationGenerationInput): string {
-  return input.batchId;
+  const canonical = [...input.questions]
+    .sort((a, b) => a.questionNumber - b.questionNumber)
+    .map((q) => ({ questionNumber: q.questionNumber, questionText: q.questionText }));
+  return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex').slice(0, 24);
 }
 
 export interface ArtifactReviewGenerationInput {

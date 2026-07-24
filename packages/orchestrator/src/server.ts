@@ -790,6 +790,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // the onReady hook (post-listen) so it cannot reorder any bootstrap
   // fire-and-forget chain. See the onReady scheduling site below.
   let cockpitWriter: CockpitAnswersWriter | null = null;
+  // #1038: gate-status query service. Constructed inside the cockpit-routes
+  // block and threaded through initializeRelayBridge so the relay's inbound
+  // message dispatcher routes gate_query_response frames to onRelayMessage.
+  let gateStatusQuery: import('./services/gate-status-query.js').GateStatusQueryService | null = null;
   if (!isWorkerMode) {
     const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
     if (controlPlaneKey) {
@@ -863,10 +867,20 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       maxBytes: cockpitRetainMaxBytes,
     });
 
+    // #1038: read-only gate-status query service. Constructed before the routes
+    // are registered so the GET /cockpit/gates handler can delegate. Wired into
+    // the relay client's inbound `message` events by initializeRelayBridge.
+    const { GateStatusQueryService } = await import('./services/gate-status-query.js');
+    gateStatusQuery = new GateStatusQueryService({
+      getRelayClient: () => relayClientRef,
+      logger: server.log,
+    });
+
     setupCockpitGatesRoute(server, {
       retainer: cockpitRetainer,
       getRelayClient: () => relayClientRef,
       logger: server.log,
+      getQueryService: () => gateStatusQuery!,
     });
     setupCockpitAnswersRoute(server, {
       writer: cockpitWriter,
@@ -892,6 +906,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       (reporter) => { statusReporterRef = reporter; },
       (monitor) => { postActivationSettledMonitor = monitor; },
       cockpitRetainer,
+      gateStatusQuery,
     ).catch((error) => {
       activationPending = false;
       server.log.warn(
@@ -900,7 +915,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     });
   } else if (!isWorkerMode && config.relay.apiKey) {
     // API key already exists: initialize relay bridge synchronously
-    const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; }, cockpitRetainer);
+    const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; }, cockpitRetainer, gateStatusQuery);
     relayBridge = result.relayBridge;
     relayBridgeRef = result.relayBridge;
     statusReporterRef = result.statusReporter;
@@ -1313,6 +1328,7 @@ async function activateInBackground(
   setStatusReporter?: (reporter: StatusReporter) => void,
   setPostActivationSettledMonitor?: (monitor: PostActivationSettledMonitor | null) => void,
   cockpitRetainer?: RetainedCockpitEvents | null,
+  gateStatusQuery?: import('./services/gate-status-query.js').GateStatusQueryService | null,
 ): Promise<void> {
   const initialWorkersRaw = process.env['GENERACY_INITIAL_WORKERS'];
   let initialWorkers: number | undefined;
@@ -1364,6 +1380,7 @@ async function activateInBackground(
       setRelayClient?.(client);
     },
     cockpitRetainer,
+    gateStatusQuery,
   );
   setStatusReporter?.(statusReporter);
   setPostActivationSettledMonitor?.(postActivationSettledMonitor);
@@ -1424,6 +1441,7 @@ async function initializeRelayBridge(
   apiKeyStore: InMemoryApiKeyStore,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
   cockpitRetainer?: RetainedCockpitEvents | null,
+  gateStatusQuery?: import('./services/gate-status-query.js').GateStatusQueryService | null,
 ): Promise<{
   relayBridge: RelayBridge | null;
   statusReporter: StatusReporter;
@@ -1470,6 +1488,14 @@ async function initializeRelayBridge(
     // Assign relay client ref for the deferred-binding route registered in createServer()
     if (setRelayClient) {
       setRelayClient(relayClient);
+    }
+
+    // #1038: route inbound gate_query_response frames to the status-query service.
+    if (gateStatusQuery) {
+      const gateStatusHandler = (msg: import('./types/relay.js').RelayMessage) => {
+        gateStatusQuery.onRelayMessage(msg as unknown as Parameters<typeof gateStatusQuery.onRelayMessage>[0]);
+      };
+      relayClient.on('message', gateStatusHandler);
     }
 
     // Single Docker Engine client shared across all relay-driven Engine paths

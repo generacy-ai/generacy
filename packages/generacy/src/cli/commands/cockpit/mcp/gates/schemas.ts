@@ -190,3 +190,57 @@ export type GateOpenResponse = z.infer<typeof GateOpenResponseSchema>;
  */
 export const GateAckResponseSchema = z.record(z.unknown());
 export type GateAckResponse = z.infer<typeof GateAckResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// #1038 — read-only gate-status query surface.
+//   `cockpit_gate_status` — targeted single-gate lookup
+//   `cockpit_gate_list`   — per-issue non-terminal list (primary sweep primitive)
+// See specs/1038-part-cockpit-remote-gates/contracts/{cockpit_gate_status,
+// cockpit_gate_list,get-cockpit-gates}.md for the wire contract.
+// ---------------------------------------------------------------------------
+
+/** Closed three-state query response (spec Q2→C; INV-3). */
+export const GateStatusSchema = z.enum(['open', 'answered', 'absent']);
+export type GateStatus = z.infer<typeof GateStatusSchema>;
+
+/** `cockpit_gate_status` input — strict, three required fields. */
+export const GateStatusInputSchema = z
+  .object({
+    issueRef: z.string().min(1),
+    gateType: GateTypeSchema,
+    generation: z.union([z.string().min(1), z.number()]),
+  })
+  .strict();
+export type GateStatusInput = z.infer<typeof GateStatusInputSchema>;
+
+/** `cockpit_gate_status` response — cluster-derived gateId + three-state status. */
+export const GateStatusResponseSchema = z.object({
+  gateId: z.string().length(24),
+  status: GateStatusSchema,
+});
+export type GateStatusResponse = z.infer<typeof GateStatusResponseSchema>;
+
+/** `cockpit_gate_list` input — strict, one required field + optional gateType filter. */
+export const GateListInputSchema = z
+  .object({
+    issueRef: z.string().min(1),
+    gateType: GateTypeSchema.optional(),
+  })
+  .strict();
+export type GateListInput = z.infer<typeof GateListInputSchema>;
+
+/**
+ * One row from `cockpit_gate_list`. Terminal statuses excluded server-side —
+ * the list's per-row status enum is `'open' | 'answered'` only (NOT `absent`).
+ */
+export const GateListItemSchema = z.object({
+  gateId: z.string().length(24),
+  gateType: GateTypeSchema,
+  status: z.enum(['open', 'answered']),
+});
+export type GateListItem = z.infer<typeof GateListItemSchema>;
+
+export const GateListResponseSchema = z.object({
+  gates: z.array(GateListItemSchema),
+});
+export type GateListResponse = z.infer<typeof GateListResponseSchema>;

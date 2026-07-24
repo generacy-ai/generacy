@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GateTypeSchema, type GateType } from '@generacy-ai/cockpit';
 
 // --- Interfaces ---
 
@@ -148,6 +149,44 @@ export interface TierInfoMessage {
   maxActiveClusters?: number;
 }
 
+// --- Gate query envelope pair (#1038) ---
+// Cluster → cloud: gate_query_request (single or list mode)
+// Cloud → cluster: gate_query_response (echoes correlationId; ok payload or error)
+// Wire contract: specs/1038-part-cockpit-remote-gates/contracts/gate-query-relay-envelope.md
+
+export interface GateQueryRequestMessage {
+  type: 'gate_query_request';
+  correlationId: string;
+  issueRef: string;
+  mode: 'single' | 'list';
+  gateType?: GateType;
+  generation?: string | number;
+  gateTypeFilter?: GateType;
+}
+
+export interface GateQueryResponseSinglePayload {
+  mode: 'single';
+  gateId: string;
+  status: 'open' | 'answered' | 'absent';
+}
+
+export interface GateQueryResponseListPayload {
+  mode: 'list';
+  gates: Array<{
+    gateId: string;
+    gateType: GateType;
+    status: 'open' | 'answered';
+  }>;
+}
+
+export interface GateQueryResponseMessage {
+  type: 'gate_query_response';
+  correlationId: string;
+  status: 'ok' | 'error';
+  payload?: GateQueryResponseSinglePayload | GateQueryResponseListPayload;
+  error?: string;
+}
+
 export type RelayMessage =
   | ApiRequestMessage
   | ApiResponseMessage
@@ -166,7 +205,9 @@ export type RelayMessage =
   | TunnelOpenMessage
   | TunnelOpenAckMessage
   | TunnelDataMessage
-  | TunnelCloseMessage;
+  | TunnelCloseMessage
+  | GateQueryRequestMessage
+  | GateQueryResponseMessage;
 
 export interface GitRemote {
   name: string;
@@ -357,6 +398,43 @@ const TierInfoMessageSchema = z.object({
   maxActiveClusters: z.number().optional(),
 });
 
+const GateQueryRequestMessageSchema = z.object({
+  type: z.literal('gate_query_request'),
+  correlationId: z.string().min(1),
+  issueRef: z.string().min(1),
+  mode: z.enum(['single', 'list']),
+  gateType: GateTypeSchema.optional(),
+  generation: z.union([z.string().min(1), z.number()]).optional(),
+  gateTypeFilter: GateTypeSchema.optional(),
+});
+
+const GateQueryResponseSinglePayloadSchema = z.object({
+  mode: z.literal('single'),
+  gateId: z.string().length(24),
+  status: z.enum(['open', 'answered', 'absent']),
+});
+
+const GateQueryResponseListPayloadSchema = z.object({
+  mode: z.literal('list'),
+  gates: z.array(
+    z.object({
+      gateId: z.string().length(24),
+      gateType: GateTypeSchema,
+      status: z.enum(['open', 'answered']),
+    }),
+  ),
+});
+
+const GateQueryResponseMessageSchema = z.object({
+  type: z.literal('gate_query_response'),
+  correlationId: z.string().min(1),
+  status: z.enum(['ok', 'error']),
+  payload: z
+    .union([GateQueryResponseSinglePayloadSchema, GateQueryResponseListPayloadSchema])
+    .optional(),
+  error: z.string().optional(),
+});
+
 export const RelayMessageSchema = z.discriminatedUnion('type', [
   ApiRequestMessageSchema,
   ApiResponseMessageSchema,
@@ -376,7 +454,11 @@ export const RelayMessageSchema = z.discriminatedUnion('type', [
   TunnelOpenAckMessageSchema,
   TunnelDataMessageSchema,
   TunnelCloseMessageSchema,
+  GateQueryRequestMessageSchema,
+  GateQueryResponseMessageSchema,
 ]);
+
+export { GateQueryRequestMessageSchema, GateQueryResponseMessageSchema };
 
 export { ClusterMetadataSchema, GitRemoteSchema };
 
@@ -386,5 +468,16 @@ export { ClusterMetadataSchema, GitRemoteSchema };
  */
 export function parseRelayMessage(data: unknown): RelayMessage | null {
   const result = RelayMessageSchema.safeParse(data);
-  return result.success ? (result.data as RelayMessage) : null;
+  if (!result.success) return null;
+  const msg = result.data as RelayMessage;
+  // Cross-field rule for gate_query_response: status='ok' MUST have a payload.
+  // Enforced here (not on the object schema) so the schema stays discriminated-union-friendly.
+  if (
+    msg.type === 'gate_query_response' &&
+    msg.status === 'ok' &&
+    msg.payload === undefined
+  ) {
+    return null;
+  }
+  return msg;
 }

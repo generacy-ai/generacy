@@ -26,6 +26,8 @@ import { cockpitClaim } from './tools/cockpit_claim.js';
 import { cockpitRelease } from './tools/cockpit_release.js';
 import { cockpitGateOpen } from './tools/cockpit_gate_open.js';
 import { cockpitGateAck } from './tools/cockpit_gate_ack.js';
+import { cockpitGateStatus } from './tools/cockpit_gate_status.js';
+import { cockpitGateList } from './tools/cockpit_gate_list.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -40,6 +42,8 @@ import {
   CockpitReleaseInputSchema,
   CockpitGateOpenInputSchema,
   CockpitGateAckInputSchema,
+  CockpitGateStatusInputSchema,
+  CockpitGateListInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
@@ -220,6 +224,29 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
       inputSchema: CockpitGateAckInputSchema,
     },
     async (args) => toCallToolResult(await cockpitGateAck(args, deps)),
+  );
+
+  // #1038 — read-only gate-status query surface. No CLI twin (per R8): these
+  // tools are only meaningful inside an active `/cockpit:auto` session or an
+  // operator's Claude Code MCP context.
+  server.registerTool(
+    'cockpit_gate_status',
+    {
+      description:
+        "Read-only lookup for a single natural gate. Returns {gateId, status:'open'|'answered'|'absent'} without requiring drafted title/body/options. Fails loud with class:'query-unreachable' on sustained cloud-query outage — NEVER returns 'absent' on transport failure.",
+      inputSchema: CockpitGateStatusInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateStatus(args, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_gate_list',
+    {
+      description:
+        "Read-only list of all non-terminal (open|answered|delivered) gates for one issueRef, project-wide (predecessor-cluster takeover-safe). Returns [] on none — never throws. Primary sweep primitive: caller filters by gateType client-side and skips drafting when any match is currently 'open'.",
+      inputSchema: CockpitGateListInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateList(args, deps)),
   );
 
   return server;

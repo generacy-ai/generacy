@@ -46,6 +46,7 @@ import { ClusterRelayClient } from '@generacy-ai/cluster-relay';
 import { DEFAULT_WIRE_EPIC_REF } from '@generacy-ai/cockpit';
 import type { ClusterRelayClient as ClusterRelayClientType } from '../../types/relay.js';
 import { setupCockpitGatesRoute } from '../../routes/cockpit-gates.js';
+import { GateStatusQueryService } from '../../services/gate-status-query.js';
 import { setupCockpitAnswersRoute } from '../../routes/cockpit-answers.js';
 import { createRetainedCockpitEvents } from '../../routes/retained-cockpit-events.js';
 import { CockpitAnswersWriter } from '../../services/cockpit-answers-writer.js';
@@ -149,10 +150,21 @@ export async function setupScenario(
   // reads it lazily so a POST that arrives before the client connects retains
   // instead of dropping.
   let relayClientRef: ClusterRelayClientType | null = null;
+
+  // #1038 — read-only gate-status query service. Wired into the relay client's
+  // inbound message stream below so gate_query_response frames route back to
+  // the pending promise.
+  const gateStatusQuery = new GateStatusQueryService({
+    getRelayClient: () => relayClientRef,
+    logger: SILENT_LOGGER,
+    perAttemptTimeoutMs: 3000,
+  });
+
   setupCockpitGatesRoute(orchestrator, {
     retainer,
     getRelayClient: () => relayClientRef,
     logger: SILENT_LOGGER,
+    getQueryService: () => gateStatusQuery,
   });
   setupCockpitAnswersRoute(orchestrator, { writer, logger: SILENT_LOGGER });
 
@@ -185,6 +197,17 @@ export async function setupScenario(
     on: (event: string, handler: () => void) => void;
   }).on('connected', () => {
     retainer.drainInto(relayClient);
+  });
+
+  // #1038 — route gate_query_response frames to the status-query service so
+  // the GET /cockpit/gates handler's awaits resolve. Same seam
+  // initializeRelayBridge uses in production.
+  (relayClient as unknown as {
+    on: (event: string, handler: (msg: { type: string }) => void) => void;
+  }).on('message', (msg) => {
+    if (msg.type === 'gate_query_response') {
+      gateStatusQuery.onRelayMessage(msg as unknown as Parameters<typeof gateStatusQuery.onRelayMessage>[0]);
+    }
   });
 
   // connect() runs an internal reconnect loop that only resolves on
