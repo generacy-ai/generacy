@@ -10,6 +10,16 @@ When the `speckit-feature` workflow **re-enters `implement`** (observed immediat
 
 The fix requires: (a) **deterministic + idempotent** branch and spec-slug derivation from the issue identity so re-entries land on the same branch, (b) **per-issue PR dedup** so a re-entry reuses the existing PR rather than opening a second one, and (c) an investigation into why `implementation-review` re-cycles (`waiting-for:implementation-review` + `agent:paused` re-applied after `completed:validate`) which is the *trigger* that surfaces the duplicate-PR path.
 
+## Clarifications
+
+Resolved 2026-07-24 (see [`clarifications.md`](./clarifications.md) for full context):
+
+- **Q1 → A**: The single source of truth for the issue → `<N>-<slug>` binding is **remote git branches only**. On every entry, enumerate remote branches matching `^<N>-` and reuse the oldest match. No local index, no Redis key, no issue-body marker. Chosen because the remote branch is the only artifact that survives fresh clusters and cold caches; the Redis-key path is the stale-key/TTL failure mode that produced #849.
+- **Q2 → A**: When the remote contains multiple `<N>-*` branches AND multiple open PRs for issue N, **the oldest open PR wins** — its head branch is canonical; any other `<N>-*` branch without an associated open PR is ignored (not deleted). Encodes the one-open-PR-per-issue invariant and resolves the #1038 incident correctly (keep real PR #1039, ignore spec-only #1041).
+- **Q3 → A**: This PR ships **US1 + US2 only**. US3 (review-gate re-cycle) is deferred to a follow-up issue that gates on #849's landing. FR-006 stays in the spec as intent, but its acceptance test is not required to land here. Chosen because FR-001..FR-004 make the duplicate-PR outcome impossible even if the re-cycle continues, so US1/US2 land independently.
+- **Q4 → A**: **Reuse the existing slug derivation** and persist the result ("first-derived wins forever"). This PR does not modify slug-generation logic. Under Q1-A, the first-created remote branch IS the persisted first-derived slug, so FR-002's reuse-oldest-branch enforces first-derived-wins with zero re-derivation.
+- **Q5 → A**: **Apply dedup enforcement unconditionally to all workflows**. The "Out of Scope" `speckit-feature` clause bounds test coverage, not implementation scope. This spec's own header is `workflow:speckit-bugfix`, so gating on `speckit-feature` would leave this very bugfix run unprotected; the one-open-PR / deterministic-branch invariant is universally correct.
+
 ## Observed Incident
 
 Epic `generacy-ai/generacy-cloud#850`, phase P5, issue `generacy-ai/generacy#1038`:
@@ -69,11 +79,11 @@ After the advance, the doorbell showed rapid churn (`phase:implement → agent:i
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Branch derivation for issue N MUST be idempotent: a second call with the same issue MUST return the same branch name as the first call. | P1 | Purely deterministic; no reliance on issue title mutations, PR body content, or working directory state that can drift between re-entries. |
-| FR-002 | Before deriving a new branch, orchestrator MUST query the remote for existing branches matching `<N>-*` and reuse the first (oldest) match if present. | P1 | Handles the case where the slug was persisted only in git (not in a local index) — matches the observed remediation. |
-| FR-003 | Before opening a PR for issue N, orchestrator MUST query the remote for open PRs whose head branch matches the derived branch (or any `<N>-*` branch) and reuse the first match instead of opening a second. | P1 | Guarantees "one open PR per issue" invariant. Closed/merged PRs do not block. |
+| FR-002 | Before deriving a new branch, orchestrator MUST query the remote for existing branches matching `<N>-*` and reuse the **oldest** match if present. Persistence is **remote git branches only** — no local index, no Redis key, no issue-body marker (per Q1 → A). | P1 | Handles the case where the slug was persisted only in git — matches the observed remediation and survives fresh clusters and cold caches. |
+| FR-003 | Before opening a PR for issue N, orchestrator MUST query the remote for open PRs whose head branch matches the derived branch (or any `<N>-*` branch) and reuse the match instead of opening a second. When multiple candidates exist, **the oldest open PR wins**; its head branch is canonical; any other `<N>-*` branch without an associated open PR is ignored (not deleted) (per Q2 → A). | P1 | Guarantees "one open PR per issue" invariant. Closed/merged PRs do not block. |
 | FR-004 | Spec-slug used for `specs/<slug>/` MUST equal the branch name (existing convention) and MUST persist across `implement` re-entries — i.e., if `specs/<slug>/` already exists on the branch, it MUST NOT be regenerated under a different `<slug>`. | P1 | Prevents `specs/` pollution and orphaned directories. |
 | FR-005 | On re-entry, if the orchestrator detects that its would-be new branch/PR differs from an existing open branch/PR for the same issue, it MUST log a structured warning (`{ event: 'workflow-reentry-branch-mismatch', issue, existing, wouldCreate }`) and reuse the existing one. | P2 | Observability — surfaces the class of bugs #1043 represents in future incidents. |
-| FR-006 | The trigger investigated in US3 — re-application of `waiting-for:implementation-review` + `agent:paused` after `completed:validate` on the same PR head — MUST be prevented at its source. | P1 | See [[label-monitor-service]] + sibling fix #849 (pause-paired resume-dedupe clear). May be a duplicate class of the same bug family. |
+| FR-006 | The trigger investigated in US3 — re-application of `waiting-for:implementation-review` + `agent:paused` after `completed:validate` on the same PR head — MUST be prevented at its source. | **Deferred** | Per Q3 → A: US3 (and its acceptance test) deferred to a follow-up issue that re-checks after #849 lands. FR-001..FR-004 make the duplicate-PR outcome impossible even if the re-cycle continues. FR-006 stays as intent only. |
 | FR-007 | Existing spec directories under `specs/` with the shape `<N>-*` MUST NOT be created a second time under a different suffix by any code path in the orchestrator worker. | P1 | Filesystem-level invariant; enforceable in code via an existence-check before scaffold. |
 
 ## Success Criteria
@@ -100,7 +110,9 @@ After the advance, the doorbell showed rapid churn (`phase:implement → agent:i
 - Backfilling `<N>-<slug>` renames on branches created before the fix ships (existing PRs continue on their original branches).
 - Behavior change to `cockpit_merge` picker logic (this spec ensures there is only one candidate; the picker doesn't need a tiebreaker).
 - Rewriting `cockpit_status` to reflect multiple PRs per issue (invariant enforcement means `cockpit_status` stays 1-PR-per-issue by construction).
-- Cross-workflow (non-`speckit-feature`) branch/PR dedup — this spec is scoped to `workflow:speckit-feature`.
+- ~~Cross-workflow (non-`speckit-feature`) branch/PR dedup~~ — **superseded by Q5 → A**: dedup enforcement applies unconditionally to all workflows. The `workflow:speckit-feature` phrasing here originally bounded test coverage, not implementation scope.
+- Test coverage in this PR is scoped to `workflow:speckit-feature` scenarios; broader per-workflow regression tests can land as follow-ups.
+- Slug-generation logic itself is unchanged (per Q4 → A: reuse existing derivation and persist via the remote-branch-oldest-match rule).
 
 ## Related work
 
