@@ -433,6 +433,11 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
   let gitBranchCreated = false;
   let branchedFromEpic = false;
   let baseCommit: string | undefined;
+  // #1043 Finding 2: track whether we resumed an already-existing branch
+  // (checked out from origin, or an existing local branch) rather than forking
+  // a fresh one. Such a branch already carries the real spec.md from prior
+  // phases, so we must NOT overwrite it with a template stub below.
+  let branchAlreadyExisted = false;
 
   if (await isGitRepo(repoRoot)) {
     const git = simpleGit(repoRoot);
@@ -457,6 +462,7 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       if (remoteBranchExists) {
         // Track the existing remote branch to pick up previous commits
         await git.checkout(['-b', branchName, `origin/${branchName}`]);
+        branchAlreadyExisted = true;
       } else if (input.parent_epic_branch) {
         // Check if the epic branch exists
         const epicBranchExists = allBranches.all.some(
@@ -494,6 +500,7 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       gitBranchCreated = true;
     } else {
       await git.checkout(branchName);
+      branchAlreadyExisted = true;
       // Pull latest from remote in case local is behind (resume scenario)
       try {
         await git.pull('origin', branchName);
@@ -519,6 +526,36 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
 
   // Create initial spec.md
   const specFile = join(featureDir, 'spec.md');
+
+  // #1043 Finding 2: On a cold/fresh-workspace re-entry we may have just
+  // restored an EXISTING branch (checked out from origin, or an already-present
+  // local branch) whose working tree carries the real spec.md from prior
+  // phases. Regenerating the template stub here would clobber that spec and
+  // push a spec-only reset onto the canonical PR — the exact #1043 bug. When
+  // the branch pre-existed and already has a spec.md, treat this as a resume:
+  // keep the existing spec and skip the template write.
+  if (branchAlreadyExisted && (await exists(specFile))) {
+    console.info(
+      '[createFeature] workflow-reentry-spec-preserved',
+      {
+        event: 'workflow-reentry-spec-preserved',
+        issueNumber: input.number,
+        branchName,
+      }
+    );
+    return {
+      success: true,
+      branch_name: branchName,
+      feature_num: featureNum,
+      spec_file: specFile,
+      feature_dir: featureDir,
+      git_branch_created: gitBranchCreated,
+      branched_from_epic: branchedFromEpic,
+      ...(branchedFromEpic && { parent_epic_branch: input.parent_epic_branch }),
+      ...(baseCommit && { base_commit: baseCommit }),
+    };
+  }
+
   const specContent = createInitialSpecContent(input.description, branchName);
   await writeFile(specFile, specContent);
 

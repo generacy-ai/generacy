@@ -140,12 +140,17 @@ describe('PrManager.ensureDraftPr — #1043 dedup guard', () => {
     );
   });
 
-  it('resolver reports mismatch but adoption target has no PR → no-op warn, no createPR', async () => {
+  it('#1043 Finding 1: PR-less canonical branch is IGNORED → creates PR on current branch (no stall)', async () => {
+    // Q2=A: a `<N>-*` branch with no open PR is NOT canonical. The resolver may
+    // still surface it (oldest-remote-branch), but pr-manager must ignore it and
+    // fall through to open a PR on the real work branch — never no-op/stall.
     const github = makeGithubStub({
       currentBranch: '1038-part-cockpit-remote-gates',
       prByBranch: {
-        // Explicitly no PR at the canonical branch.
+        // Explicitly no PR at the (PR-less) canonical branch, and none on the
+        // current work branch either → the create path is exercised.
         '1038-issue-1038': null,
+        '1038-part-cockpit-remote-gates': null,
       },
     });
     const logger = makeLogger();
@@ -160,13 +165,22 @@ describe('PrManager.ensureDraftPr — #1043 dedup guard', () => {
     const pr = new PrManager(github, 'generacy-ai', 'generacy', 1038, logger);
     const url = await (pr as unknown as { ensureDraftPr: () => Promise<string | undefined> }).ensureDraftPr();
 
-    expect(url).toBeUndefined();
-    expect(github.createPullRequest).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(
+    // Falls through to create a PR on the CURRENT branch (stub returns #9999).
+    expect(url).toBe('https://github.com/generacy-ai/generacy/pull/9999');
+    expect(github.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(github.createPullRequest).toHaveBeenCalledWith(
+      'generacy-ai',
+      'generacy',
+      expect.objectContaining({ head: '1038-part-cockpit-remote-gates' }),
+    );
+
+    // The PR-less canonical branch is logged as ignored, NOT a no-op stall.
+    expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'workflow-reentry-branch-mismatch',
-        action: 'no-op',
+        action: 'ignored-prless-canonical',
         canonicalBranch: '1038-issue-1038',
+        currentBranch: '1038-part-cockpit-remote-gates',
       }),
       'workflow-reentry-branch-mismatch',
     );

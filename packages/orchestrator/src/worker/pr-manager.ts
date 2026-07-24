@@ -182,7 +182,12 @@ export class PrManager {
           );
           return this.prUrl;
         }
-        this.logger.warn(
+        // #1043 Finding 1 (Q2=A): the resolver reported a canonical `<N>-*`
+        // branch that differs from our checkout but has NO open PR. A PR-less
+        // `<N>-*` branch must be IGNORED — it is not canonical. Do NOT no-op
+        // here (that permanently stalls PR creation for the real work branch);
+        // fall through to create a PR on the current branch below.
+        this.logger.info(
           {
             event: 'workflow-reentry-branch-mismatch',
             issueNumber: this.issueNumber,
@@ -190,11 +195,10 @@ export class PrManager {
             canonicalBranch: canonical.branchName,
             source: canonical.source,
             anchoringPrNumber: canonical.anchoringPrNumber,
-            action: 'no-op',
+            action: 'ignored-prless-canonical',
           },
           'workflow-reentry-branch-mismatch',
         );
-        return undefined;
       }
 
       // Check if a PR already exists for this branch

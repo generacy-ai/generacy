@@ -98,6 +98,29 @@ export async function resolveIssueBranch(
   try {
     const branches = await github.listBranches(owner, repo);
     const matching = branches.filter((b) => filter.test(b));
+
+    // #1043 Finding 4: the oldest-branch tiebreak reads commit time from the
+    // local remote-tracking ref (`refs/remotes/origin/<name>`). Branches known
+    // only via the API have no local ref yet, so `git log` would throw for
+    // every one of them → all timestamps collapse to +Infinity → the tiebreak
+    // silently degrades to alphabetical instead of oldest. Fetch the matching
+    // refs first so the timestamps are real. Best-effort: on failure we fall
+    // back to the per-ref catch below (prior behavior).
+    if (matching.length > 0) {
+      try {
+        await git.fetch([
+          'origin',
+          ...matching.map((name) => `+refs/heads/${name}:refs/remotes/origin/${name}`),
+        ]);
+      } catch (error) {
+        logger?.warn('issue-branch-resolver-branch-fetch-failed', {
+          event: 'issue-branch-resolver-branch-fetch-failed',
+          issueNumber,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     for (const name of matching) {
       let timestamp = Number.POSITIVE_INFINITY;
       try {

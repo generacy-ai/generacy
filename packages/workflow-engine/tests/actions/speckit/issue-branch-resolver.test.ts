@@ -49,12 +49,14 @@ function makeGithubStub(options: StubGitHubOptions): GitHubClient {
 interface StubGitOptions {
   timestamps?: Record<string, number>;
   failedBranches?: Set<string>;
+  fetch?: ReturnType<typeof vi.fn>;
 }
 
 function makeGitStub(options: StubGitOptions = {}) {
   const timestamps = options.timestamps ?? {};
   const failed = options.failedBranches ?? new Set<string>();
   return {
+    fetch: options.fetch ?? vi.fn(async () => undefined),
     raw: vi.fn(async (args: string[]) => {
       // Expect ['log', '-1', '--format=%ct', 'refs/remotes/origin/<branch>']
       const ref = args[args.length - 1];
@@ -286,6 +288,72 @@ describe('resolveIssueBranch', () => {
     expect(warn).toHaveBeenCalledWith(
       'issue-branch-resolver-branch-list-failed',
       expect.any(Object)
+    );
+  });
+
+  it('#1043 Finding 4: fetches candidate refs before reading commit timestamps', async () => {
+    // Branches known only via the API have no local remote-tracking ref, so the
+    // resolver must fetch the matching refs first — otherwise `git log` throws
+    // for every one of them and the oldest-branch tiebreak degrades to
+    // alphabetical instead of oldest.
+    const fetch = vi.fn(async () => undefined);
+    const github = makeGithubStub({
+      openPrs: [],
+      branches: ['develop', '1038-a-slug', '1038-b-slug'],
+    });
+    const git = makeGitStub({
+      timestamps: {
+        '1038-a-slug': 1_700_000_000,
+        '1038-b-slug': 1_700_500_000,
+      },
+      fetch,
+    });
+
+    const result = await resolveIssueBranch({
+      issueNumber: 1038,
+      owner,
+      repo,
+      github,
+      git,
+    });
+
+    // Fetch requested for the two matching refs (non-matching `develop` excluded).
+    expect(fetch).toHaveBeenCalledWith([
+      'origin',
+      '+refs/heads/1038-a-slug:refs/remotes/origin/1038-a-slug',
+      '+refs/heads/1038-b-slug:refs/remotes/origin/1038-b-slug',
+    ]);
+    // And the oldest (by real timestamp) still wins.
+    expect(result?.branchName).toBe('1038-a-slug');
+  });
+
+  it('tolerates a fetch failure and falls back to per-ref timestamp reads', async () => {
+    const warn = vi.fn();
+    const fetch = vi.fn(async () => {
+      throw new Error('fetch boom');
+    });
+    const github = makeGithubStub({
+      openPrs: [],
+      branches: ['1038-a-slug'],
+    });
+    const git = makeGitStub({
+      timestamps: { '1038-a-slug': 1_700_000_000 },
+      fetch,
+    });
+
+    const result = await resolveIssueBranch({
+      issueNumber: 1038,
+      owner,
+      repo,
+      github,
+      git,
+      logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
+    });
+
+    expect(result?.branchName).toBe('1038-a-slug');
+    expect(warn).toHaveBeenCalledWith(
+      'issue-branch-resolver-branch-fetch-failed',
+      expect.objectContaining({ event: 'issue-branch-resolver-branch-fetch-failed', issueNumber: 1038 })
     );
   });
 
