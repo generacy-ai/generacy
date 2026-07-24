@@ -242,4 +242,40 @@ describe('PrManager.ensureDraftPr — #1043 dedup guard', () => {
     );
     expect(mismatchCalls).toHaveLength(0);
   });
+
+  it('#1043 review follow-up: a dedup-probe failure must NOT abort PR creation', async () => {
+    // Regression guard: the best-effort dedup probe (resolveIssueBranch) must be
+    // isolated so ANY failure — a resolver throw, an unavailable client method,
+    // a git error — falls through to normal PR creation instead of aborting
+    // ensureDraftPr and leaving prNumber unset (which silently broke the
+    // markReadyForReview-on-completion flow in claude-cli-worker).
+    const github = makeGithubStub({
+      currentBranch: '1038-issue-1038',
+      prByBranch: {
+        // No existing PR on the current branch → the create path is exercised.
+        '1038-issue-1038': null,
+      },
+    });
+    const logger = makeLogger();
+
+    mockedResolve.mockRejectedValueOnce(new Error('resolver boom'));
+
+    const pr = new PrManager(github, 'generacy-ai', 'generacy', 1038, logger);
+    const url = await (pr as unknown as { ensureDraftPr: () => Promise<string | undefined> }).ensureDraftPr();
+
+    // Falls through to create a PR on the current branch (stub returns #9999).
+    expect(url).toBe('https://github.com/generacy-ai/generacy/pull/9999');
+    expect(pr.getPrNumber()).toBe(9999);
+    expect(github.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(github.createPullRequest).toHaveBeenCalledWith(
+      'generacy-ai',
+      'generacy',
+      expect.objectContaining({ head: '1038-issue-1038' }),
+    );
+    // The probe failure is logged as non-fatal.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ issueNumber: 1038 }),
+      expect.stringContaining('dedup probe failed'),
+    );
+  });
 });

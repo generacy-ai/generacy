@@ -137,19 +137,23 @@ export class PrManager {
    *
    * @returns The PR URL, or undefined if creation failed.
    */
-  private async ensureDraftPr(): Promise<string | undefined> {
-    // If we already know the PR URL, return it
-    if (this.prUrl) {
-      return this.prUrl;
-    }
-
+  /**
+   * Best-effort #1043 dedup probe.
+   *
+   * If an `<N>-*` branch other than the current checkout already has an OPEN
+   * PR, adopt that PR (record its number/URL and return the URL so the caller
+   * stops). A PR-less canonical branch is IGNORED (Q2=A) — logged and skipped
+   * so the caller proceeds to create a PR on the current branch.
+   *
+   * Every failure is swallowed (logged as non-fatal) so this probe can never
+   * disrupt normal PR creation or leave `this.prNumber` unset. In particular,
+   * `resolveIssueBranch`/`simpleGit` may be unavailable or a GitHub client
+   * method may be missing (e.g. in tests) — that must not abort PR creation.
+   *
+   * @returns the adopted PR URL if a canonical open PR was adopted, else undefined.
+   */
+  private async tryAdoptCanonicalPr(branch: string): Promise<string | undefined> {
     try {
-      const branch = await this.github.getCurrentBranch();
-
-      // #1043 defense-in-depth: before opening a new PR, check whether an
-      // `<N>-*` branch/PR already anchors this issue. Prevents pr-manager
-      // from being the sole dedup site when createFeature's resolver
-      // callback is not wired.
       const canonical = await resolveIssueBranch({
         issueNumber: this.issueNumber,
         owner: this.owner,
@@ -185,8 +189,8 @@ export class PrManager {
         // #1043 Finding 1 (Q2=A): the resolver reported a canonical `<N>-*`
         // branch that differs from our checkout but has NO open PR. A PR-less
         // `<N>-*` branch must be IGNORED — it is not canonical. Do NOT no-op
-        // here (that permanently stalls PR creation for the real work branch);
-        // fall through to create a PR on the current branch below.
+        // (that permanently stalls PR creation for the real work branch); the
+        // caller falls through to create a PR on the current branch.
         this.logger.info(
           {
             event: 'workflow-reentry-branch-mismatch',
@@ -199,6 +203,41 @@ export class PrManager {
           },
           'workflow-reentry-branch-mismatch',
         );
+      }
+    } catch (error) {
+      // Best-effort: a dedup failure must NEVER abort PR creation.
+      this.logger.warn(
+        { issueNumber: this.issueNumber, error: String(error) },
+        'workflow-reentry dedup probe failed (non-fatal) — proceeding with normal PR creation',
+      );
+    }
+    return undefined;
+  }
+
+  private async ensureDraftPr(): Promise<string | undefined> {
+    // If we already know the PR URL, return it
+    if (this.prUrl) {
+      return this.prUrl;
+    }
+
+    try {
+      const branch = await this.github.getCurrentBranch();
+
+      // #1043 defense-in-depth: before opening a new PR, check whether an
+      // `<N>-*` branch/PR already anchors this issue. Prevents pr-manager
+      // from being the sole dedup site when createFeature's resolver
+      // callback is not wired.
+      //
+      // This probe is best-effort — `tryAdoptCanonicalPr` isolates it in its
+      // own try/catch so that ANY failure (resolver throw, an unavailable
+      // client method such as a mock without `listOpenPullRequests`, or a git
+      // error) falls through to the normal PR-creation path below rather than
+      // aborting it. Without this isolation a dedup failure would leave
+      // `this.prNumber` unset and silently break the markReadyForReview-on-
+      // completion flow (#1043 review follow-up).
+      const adoptedUrl = await this.tryAdoptCanonicalPr(branch);
+      if (adoptedUrl) {
+        return adoptedUrl;
       }
 
       // Check if a PR already exists for this branch
