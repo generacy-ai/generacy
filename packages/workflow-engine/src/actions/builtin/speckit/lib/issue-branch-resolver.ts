@@ -65,7 +65,7 @@ export async function resolveIssueBranch(
   const filter = new RegExp('^' + issueNumber + '-');
 
   // Step 1: open PRs on <N>-* branches, oldest by created_at.
-  let candidatePrs: Array<{ number: number; branch: string; createdAt: string }> = [];
+  const candidatePrs: Array<{ number: number; branch: string; createdAt: string }> = [];
   let prListFailed = false;
   try {
     const prs = await github.listOpenPullRequests(owner, repo);
@@ -93,7 +93,7 @@ export async function resolveIssueBranch(
   }
 
   // Step 2: remote branches matching <N>-*, oldest by commit timestamp.
-  let candidateBranches: Array<{ name: string; timestamp: number }> = [];
+  const candidateBranches: Array<{ name: string; timestamp: number }> = [];
   let branchListFailed = false;
   try {
     const branches = await github.listBranches(owner, repo);
