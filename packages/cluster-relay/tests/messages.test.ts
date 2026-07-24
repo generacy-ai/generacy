@@ -167,16 +167,17 @@ describe('messages', () => {
   });
 
   describe('RelayMessageSchema', () => {
-    it('validates all 18 message types', () => {
+    it('validates all 20 message types', () => {
       const types = [
         'api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error',
         'lease_request', 'lease_release', 'lease_heartbeat', 'lease_response', 'slot_available',
         'cluster_rejected', 'tier_info',
         'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close',
+        'gate_query_request', 'gate_query_response',
       ];
-      expect(types).toHaveLength(18);
+      expect(types).toHaveLength(20);
       // Confirm schema accepts these types by checking discriminator key
-      expect(RelayMessageSchema.options).toHaveLength(18);
+      expect(RelayMessageSchema.options).toHaveLength(20);
     });
   });
 
@@ -529,6 +530,123 @@ describe('messages', () => {
         type: 'tunnel_open_ack',
         tunnelId: 'tun-1',
         status: 'pending',
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('gate_query envelope pair (#1038)', () => {
+    it('parses a well-formed gate_query_request (single mode)', () => {
+      const msg = {
+        type: 'gate_query_request',
+        correlationId: '018f4b8e-7c1d-71a2-9b3c-4d5e6f708192',
+        issueRef: 'generacy-ai/generacy#1038',
+        mode: 'single',
+        gateType: 'clarification',
+        generation: 'a3f9e2b1c4d5e6f7a8b9c0d1',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a well-formed gate_query_request (list mode, no filter)', () => {
+      const msg = {
+        type: 'gate_query_request',
+        correlationId: '018f4b8e-7c1d-71a2-9b3c-4d5e6f708193',
+        issueRef: 'generacy-ai/generacy#1038',
+        mode: 'list',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a well-formed gate_query_response with single payload', () => {
+      const msg = {
+        type: 'gate_query_response',
+        correlationId: '018f4b8e-7c1d-71a2-9b3c-4d5e6f708192',
+        status: 'ok',
+        payload: {
+          mode: 'single',
+          gateId: '1a2b3c4d5e6f7a8b9c0d1e2f',
+          status: 'open',
+        },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a well-formed gate_query_response with list payload', () => {
+      const msg = {
+        type: 'gate_query_response',
+        correlationId: '018f4b8e-7c1d-71a2-9b3c-4d5e6f708193',
+        status: 'ok',
+        payload: {
+          mode: 'list',
+          gates: [
+            { gateId: '1a2b3c4d5e6f7a8b9c0d1e2f', gateType: 'clarification', status: 'open' },
+            {
+              gateId: '3f4e5d6c7b8a9012345abcde',
+              gateType: 'implementation-review',
+              status: 'answered',
+            },
+          ],
+        },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a well-formed gate_query_response with status=error', () => {
+      const msg = {
+        type: 'gate_query_response',
+        correlationId: 'abc',
+        status: 'error',
+        error: 'firestore query timeout after 5000ms',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it("returns null for gate_query_response with status='ok' but no payload", () => {
+      const result = parseRelayMessage({
+        type: 'gate_query_response',
+        correlationId: 'abc',
+        status: 'ok',
+      });
+      expect(result).toBeNull();
+    });
+
+    it('returns null for gate_query_response with payload.gateId of wrong length', () => {
+      const result = parseRelayMessage({
+        type: 'gate_query_response',
+        correlationId: 'abc',
+        status: 'ok',
+        payload: {
+          mode: 'single',
+          gateId: 'short',
+          status: 'open',
+        },
+      });
+      expect(result).toBeNull();
+    });
+
+    it('returns null for gate_query_response with list-payload item having wrong-length gateId', () => {
+      const result = parseRelayMessage({
+        type: 'gate_query_response',
+        correlationId: 'abc',
+        status: 'ok',
+        payload: {
+          mode: 'list',
+          gates: [{ gateId: 'nope', gateType: 'clarification', status: 'open' }],
+        },
+      });
+      expect(result).toBeNull();
+    });
+
+    it('returns null for an unknown discriminant', () => {
+      const result = parseRelayMessage({
+        type: 'gate_query_unknown',
+        correlationId: 'abc',
       });
       expect(result).toBeNull();
     });

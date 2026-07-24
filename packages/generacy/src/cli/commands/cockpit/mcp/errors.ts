@@ -24,6 +24,7 @@ export type ErrorClass =
   | 'contended'
   | 'claim-conflict'
   | 'scope-not-found'
+  | 'query-unreachable'
   | 'internal';
 
 export interface ToolOkResult<T> {

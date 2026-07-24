@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   ARTIFACT_REVIEW_KINDS,
   deriveArtifactReviewGeneration,
-  deriveClarificationGeneration,
   deriveEscalationGeneration,
   deriveFilingGeneration,
   deriveImplementationReviewGeneration,
@@ -70,10 +69,6 @@ describe('per-gate-type generation helpers', () => {
   });
 
   describe('single-field-verbatim helpers (e)', () => {
-    it('deriveClarificationGeneration returns batchId verbatim', () => {
-      expect(deriveClarificationGeneration({ batchId: 'batch-abc123' })).toBe('batch-abc123');
-    });
-
     it('deriveFilingGeneration returns draftHash verbatim', () => {
       expect(deriveFilingGeneration({ draftHash: 'feedbeef1234' })).toBe('feedbeef1234');
     });

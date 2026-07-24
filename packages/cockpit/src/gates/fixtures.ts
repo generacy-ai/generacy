@@ -43,7 +43,9 @@ const DEFAULT_OPTIONS = [
 ] as const;
 
 const GENERATIONS: Record<GateType, string> = {
-  clarification: deriveClarificationGeneration({ batchId: 'batch-abc123' }),
+  clarification: deriveClarificationGeneration({
+    questions: [{ questionNumber: 1, questionText: 'Which transport should we use?' }],
+  }),
   'artifact-review': deriveArtifactReviewGeneration({ kind: 'spec-review', headSha: 'abc1234' }),
   'implementation-review': deriveImplementationReviewGeneration({ headSha: 'def5678' }),
   'manual-validation': deriveManualValidationGeneration({ phaseNumber: 2 }),

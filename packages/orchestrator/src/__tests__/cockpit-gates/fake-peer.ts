@@ -25,6 +25,8 @@ import {
   type EventMessage,
   type HandshakeMessage,
   type RelayMessage,
+  type GateQueryRequestMessage,
+  type GateQueryResponseMessage,
 } from '@generacy-ai/cluster-relay';
 
 export interface FakePeerOptions {
@@ -77,6 +79,21 @@ export interface FakePeer {
   /** Resolve on the next new client connection (FR-004 reconnect). */
   waitForReconnect(timeoutMs?: number): Promise<void>;
 
+  /**
+   * Register a responder for `gate_query_request` frames (#1038). The handler
+   * receives the request and returns a `gate_query_response` payload/error;
+   * the peer wraps it with the correct `type` and `correlationId` and sends
+   * it back on the same client.
+   */
+  setGateQueryResponder(
+    handler: (
+      req: GateQueryRequestMessage,
+    ) => Promise<Omit<GateQueryResponseMessage, 'type' | 'correlationId'>> | Omit<
+      GateQueryResponseMessage,
+      'type' | 'correlationId'
+    >,
+  ): void;
+
   /** Idempotent shutdown of the ws server. */
   close(): Promise<void>;
 }
@@ -122,6 +139,9 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
 
   let currentClient: WsWebSocket | null = null;
   let reconnectWaiters: Array<() => void> = [];
+  let gateQueryResponder:
+    | ((req: GateQueryRequestMessage) => Promise<Omit<GateQueryResponseMessage, 'type' | 'correlationId'>> | Omit<GateQueryResponseMessage, 'type' | 'correlationId'>)
+    | null = null;
 
   wss.on('connection', (ws) => {
     currentClient = ws;
@@ -169,6 +189,10 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
         }
         return;
       }
+      if (msg.type === 'gate_query_request') {
+        void handleGateQueryRequest(ws, msg);
+        return;
+      }
       // heartbeat, tunnel_*, lease_*, error, conversation — silently accept.
     });
 
@@ -176,6 +200,31 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
       if (currentClient === ws) currentClient = null;
     });
   });
+
+  async function handleGateQueryRequest(
+    ws: WsWebSocket,
+    req: GateQueryRequestMessage,
+  ): Promise<void> {
+    if (gateQueryResponder == null) {
+      // Default: return status=error so the orchestrator surfaces
+      // QueryUnreachableError instead of hanging.
+      const frame: GateQueryResponseMessage = {
+        type: 'gate_query_response',
+        correlationId: req.correlationId,
+        status: 'error',
+        error: 'no gate query responder registered',
+      };
+      ws.send(JSON.stringify(frame));
+      return;
+    }
+    const partial = await gateQueryResponder(req);
+    const frame: GateQueryResponseMessage = {
+      type: 'gate_query_response',
+      correlationId: req.correlationId,
+      ...partial,
+    };
+    ws.send(JSON.stringify(frame));
+  }
 
   const peer: FakePeer = {
     url,
@@ -239,6 +288,10 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
         client.terminate();
       }
       currentClient = null;
+    },
+
+    setGateQueryResponder(handler) {
+      gateQueryResponder = handler;
     },
 
     waitForReconnect(timeoutMs = DEFAULT_TIMEOUT_MS) {

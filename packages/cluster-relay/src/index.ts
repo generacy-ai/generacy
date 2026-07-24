@@ -21,6 +21,12 @@ export {
   ClusterMetadataSchema,
   GitRemoteSchema,
   parseRelayMessage,
+  type GateQueryRequestMessage,
+  type GateQueryResponseMessage,
+  type GateQueryResponseSinglePayload,
+  type GateQueryResponseListPayload,
+  GateQueryRequestMessageSchema,
+  GateQueryResponseMessageSchema,
 } from './messages.js';
 
 export {

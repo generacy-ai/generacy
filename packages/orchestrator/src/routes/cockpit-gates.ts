@@ -12,6 +12,10 @@ import type {
   RelayMessage,
 } from '../types/relay.js';
 import type { RetainedCockpitEvents } from './retained-cockpit-events.js';
+import {
+  QueryUnreachableError,
+  MalformedCloudResponseError,
+} from '../services/gate-status-query.js';
 
 interface Logger {
   info(msg: string): void;
@@ -28,6 +32,9 @@ export interface SetupCockpitGatesRouteOptions {
   retainer: RetainedCockpitEvents;
   getRelayClient: () => ClusterRelayClient | null;
   logger: Logger;
+  /** Read-only gate-status query service (#1038). Optional so pre-existing
+   *  test wiring that only exercises the POST paths need not construct one. */
+  getQueryService?: () => import('../services/gate-status-query.js').GateStatusQueryService;
 }
 
 interface EmitContext {
@@ -80,6 +87,85 @@ export function setupCockpitGatesRoute(
   server: FastifyInstance,
   options: SetupCockpitGatesRouteOptions,
 ): void {
+  // GET /cockpit/gates — read-only status query (#1038). Thin handler: all
+  // correlation/retry/timeout logic lives in GateStatusQueryService.
+  server.get(
+    '/cockpit/gates',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = request.query as Record<string, string | undefined>;
+      const issueRef = q.issueRef;
+      const mode = q.mode;
+      if (!issueRef || (mode !== 'single' && mode !== 'list')) {
+        return reply.status(400).send({
+          error: 'Invalid query parameters',
+          code: 'VALIDATION',
+          details: {
+            required: ['issueRef', 'mode'],
+            missing: [
+              ...(!issueRef ? ['issueRef'] : []),
+              ...(mode !== 'single' && mode !== 'list' ? ['mode'] : []),
+            ],
+          },
+        });
+      }
+      if (mode === 'single' && (!q.gateType || !q.generation)) {
+        return reply.status(400).send({
+          error: 'mode=single requires gateType and generation',
+          code: 'VALIDATION',
+          details: {
+            mode,
+            missing: [
+              ...(!q.gateType ? ['gateType'] : []),
+              ...(!q.generation ? ['generation'] : []),
+            ],
+          },
+        });
+      }
+
+      const getQueryService = options.getQueryService;
+      if (!getQueryService) {
+        return reply.status(503).send({
+          error: 'Gate-status query service not wired',
+          code: 'QUERY_UNREACHABLE',
+          details: { attempts: 0, lastError: 'service not initialized' },
+        });
+      }
+      const service = getQueryService();
+
+      try {
+        if (mode === 'single') {
+          const { gateId, status } = await service.querySingle({
+            issueRef,
+            gateType: q.gateType!,
+            generation: q.generation!,
+          });
+          return reply.status(200).send({ gateId, status });
+        }
+        const { gates } = await service.queryList({
+          issueRef,
+          gateTypeFilter: q.gateType,
+        });
+        return reply.status(200).send({ gates });
+      } catch (err) {
+        if (err instanceof QueryUnreachableError) {
+          return reply.status(503).send({
+            error: err.message,
+            code: 'QUERY_UNREACHABLE',
+            details: { attempts: err.attempts, lastError: err.lastReason },
+          });
+        }
+        if (err instanceof MalformedCloudResponseError) {
+          return reply.status(500).send({
+            error: err.message,
+            code: 'MALFORMED_RESPONSE',
+            details: { issues: err.issues },
+          });
+        }
+        throw err;
+      }
+    },
+  );
+
   // Up-path Shape 1 — gate-open. Body is the fully-assembled frozen record
   // (type:'gate-open', derived gateId/gateKey, gateType, presentation fields);
   // the route validates and forwards it verbatim onto the relay.

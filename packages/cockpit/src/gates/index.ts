@@ -45,6 +45,7 @@ export {
   derivePhaseQueueGeneration,
   deriveFilingGeneration,
   deriveScopeDrainedGeneration,
+  type ClarificationBatchQuestion,
   type ClarificationGenerationInput,
   type ArtifactReviewGenerationInput,
   type ImplementationReviewGenerationInput,

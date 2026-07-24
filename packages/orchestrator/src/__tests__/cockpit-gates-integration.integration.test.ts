@@ -284,6 +284,34 @@ describe('Cockpit gates integration', () => {
         ctx.peer.received.events.filter((e) => e.event === 'cluster.cockpit'),
       ).toHaveLength(0);
     });
+
+    // #1038 — GET /cockpit/gates round-trips over the fake peer as a
+    // gate_query_request/response envelope pair (cluster→cloud→cluster).
+    it('Q1 — GET /cockpit/gates?mode=list round-trips through the relay peer', async () => {
+      const listGates = [
+        { gateId: 'a'.repeat(24), gateType: 'clarification' as const, status: 'open' as const },
+        {
+          gateId: 'b'.repeat(24),
+          gateType: 'implementation-review' as const,
+          status: 'answered' as const,
+        },
+      ];
+      ctx.peer.setGateQueryResponder((req) => {
+        expect(req.mode).toBe('list');
+        expect(req.issueRef).toBe('generacy-ai/generacy#1038');
+        return {
+          status: 'ok',
+          payload: { mode: 'list', gates: listGates },
+        };
+      });
+
+      const res = await fetch(
+        `${ctx.orchestratorUrl}/cockpit/gates?issueRef=${encodeURIComponent('generacy-ai/generacy#1038')}&mode=list`,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { gates: unknown[] };
+      expect(body).toEqual({ gates: listGates });
+    });
   });
 
   // ---------------------------------------------------------------------------

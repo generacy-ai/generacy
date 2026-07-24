@@ -54,6 +54,10 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   // #1022 — remote-gate tools. No ref field; see the 'gate' RefKind doc.
   cockpit_gate_open: 'gate',
   cockpit_gate_ack: 'gate',
+  // #1038 — read-only gate-status query tools. No ref field (input carries
+  // issueRef + gateType + optional generation; no CLI twin per R8).
+  cockpit_gate_status: 'gate',
+  cockpit_gate_list: 'gate',
 };
 
 /**
@@ -108,6 +112,11 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   // would have.
   cockpit_gate_open: null,
   cockpit_gate_ack: null,
+  // #1038 — read-only query tools. No CLI twin (per R8) — only meaningful
+  // inside an active `/cockpit:auto` session or an operator's Claude Code MCP
+  // context.
+  cockpit_gate_status: null,
+  cockpit_gate_list: null,
 };
 
 const schemasSource = readFileSync(

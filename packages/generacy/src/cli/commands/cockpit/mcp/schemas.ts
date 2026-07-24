@@ -11,6 +11,8 @@ import { SESSION_ID_REGEX } from './claim/payload.js';
 import {
   GateOpenInputSchema as InternalGateOpenInputSchema,
   GateAckInputSchema as InternalGateAckInputSchema,
+  GateStatusInputSchema as InternalGateStatusInputSchema,
+  GateListInputSchema as InternalGateListInputSchema,
 } from './gates/schemas.js';
 
 /** Structured issue/epic reference. */
@@ -203,3 +205,14 @@ export type CockpitGateOpenInput = z.infer<typeof CockpitGateOpenInputSchema>;
 
 export const CockpitGateAckInputSchema = InternalGateAckInputSchema;
 export type CockpitGateAckInput = z.infer<typeof CockpitGateAckInputSchema>;
+
+/**
+ * #1038 — read-only gate-status query surface: `cockpit_gate_status` (single
+ * gate) and `cockpit_gate_list` (per-issue non-terminal list). Re-exported so
+ * `mcp/server.ts` registrations import from the stable public surface.
+ */
+export const CockpitGateStatusInputSchema = InternalGateStatusInputSchema;
+export type CockpitGateStatusInput = z.infer<typeof CockpitGateStatusInputSchema>;
+
+export const CockpitGateListInputSchema = InternalGateListInputSchema;
+export type CockpitGateListInput = z.infer<typeof CockpitGateListInputSchema>;
