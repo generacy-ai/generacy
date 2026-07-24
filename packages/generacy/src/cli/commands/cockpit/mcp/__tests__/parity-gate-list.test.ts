@@ -153,6 +153,22 @@ describe('cockpit_gate_list parity (#1038)', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it('500 → class:"internal" (no retry, NOT query-unreachable)', async () => {
+    // End-to-end guard for the review fix: a route 500 (deterministic
+    // CloudRequestError) must surface as `internal` WITHOUT burning the
+    // 3-attempt retry budget — proving 500 is not conflated with a transient
+    // cloud outage at the tool boundary.
+    const spy = vi.fn(async () => jsonResponse(500, undefined, 'route bug'));
+    const result = await cockpitGateList(CANONICAL_INPUT, {
+      ...BASE_DEPS,
+      fetchImpl: spy as unknown as typeof fetch,
+    });
+    expect(result.status).toBe('error');
+    if (result.status !== 'error') return;
+    expect(result.class).toBe('internal');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it('200 with missing gates array → class:"internal"', async () => {
     const spy = vi.fn(async () => jsonResponse(200, {}));
     const result = await cockpitGateList(CANONICAL_INPUT, {
