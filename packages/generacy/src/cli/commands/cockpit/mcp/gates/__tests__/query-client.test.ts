@@ -5,7 +5,8 @@
  *   - URL shape (query-string encoding) for status + list modes
  *   - 200 JSON parses through the response schemas
  *   - 400 → QueryInvalidArgsError
- *   - 5xx → QueryTransportError
+ *   - 500 → QueryInternalError (deterministic route-side fault, non-retryable)
+ *   - 502/503/504 → QueryTransportError (transient, retryable)
  *   - other 4xx → QueryInternalError
  *   - network error → QueryTransportError
  *   - 2xx with malformed body → QueryInternalError
@@ -114,12 +115,29 @@ describe('createGateQueryClient — error mapping', () => {
     ).rejects.toBeInstanceOf(QueryInvalidArgsError);
   });
 
-  it.each([500, 502, 503, 504])('%s → QueryTransportError', async (status) => {
-    const spy = vi.fn(async () => jsonResponse(status, undefined, 'boom'));
+  it.each([502, 503, 504])(
+    '%s → QueryTransportError (transient, retryable)',
+    async (status) => {
+      const spy = vi.fn(async () => jsonResponse(status, undefined, 'boom'));
+      const client = createGateQueryClient({ ...BASE, fetchImpl: spy });
+      await expect(
+        client.getGateStatus({ issueRef: 'g/r#1', gateType: 'clarification', generation: 'x' }),
+      ).rejects.toBeInstanceOf(QueryTransportError);
+    },
+  );
+
+  it('500 → QueryInternalError (deterministic route-side fault, non-retryable)', async () => {
+    // Per contract `specs/1038-issue-1038/contracts/gate-query.md`, HTTP 500
+    // is emitted by the orchestrator route for CloudRequestError (cloud 4xx,
+    // non-JSON body, malformed envelope) — a deterministic cluster-side bug
+    // that must surface as class `internal`, NOT be retried as `query-unreachable`.
+    const spy = vi.fn(async () => jsonResponse(500, undefined, 'boom'));
     const client = createGateQueryClient({ ...BASE, fetchImpl: spy });
     await expect(
       client.getGateStatus({ issueRef: 'g/r#1', gateType: 'clarification', generation: 'x' }),
-    ).rejects.toBeInstanceOf(QueryTransportError);
+    ).rejects.toBeInstanceOf(QueryInternalError);
+    // And critically: NOT retryable.
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it.each([401, 403, 404, 405, 422, 429])(
@@ -182,8 +200,10 @@ describe('createGateQueryClient — error mapping', () => {
 });
 
 describe('createGateQueryClient — single-call contract (no retry)', () => {
-  it('fetchImpl is invoked exactly once per getGateStatus call', async () => {
-    const spy = vi.fn(async () => jsonResponse(500, undefined, 'boom'));
+  it('fetchImpl is invoked exactly once per getGateStatus call (even on retryable 5xx)', async () => {
+    // Use 502 (transient/retryable) to prove the client itself does NOT retry —
+    // retry lives in the tool boundary via withRetry, not here.
+    const spy = vi.fn(async () => jsonResponse(502, undefined, 'boom'));
     const client = createGateQueryClient({ ...BASE, fetchImpl: spy });
     await client
       .getGateStatus({ issueRef: 'g/r#1', gateType: 'clarification', generation: 'x' })

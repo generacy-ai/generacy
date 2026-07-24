@@ -11,11 +11,18 @@
  * Single-call contract: no retry inside this client. Retry lives in the tool
  * handler via `withRetry`+`QUERY_RETRY_SCHEDULE` (plan D-2 / research R2).
  *
- * Error mapping (research R5):
+ * Error mapping (research R5, contract `specs/1038-issue-1038/contracts/gate-query.md`):
  *   - 400 (Bad Request)                     → `QueryInvalidArgsError`
  *   - other 4xx (401/403/404/405/422/…)     → `QueryInternalError`
- *   - 5xx / network / DNS / timeout         → `QueryTransportError`
+ *   - 500 (route-side deterministic fault)  → `QueryInternalError`
+ *   - 502/503/504 / network / DNS / timeout → `QueryTransportError`
  *   - 2xx with non-JSON / missing envelope  → `QueryInternalError`
+ *
+ * The 500-vs-502 split matches the orchestrator route: HTTP 500 is emitted for
+ * `CloudRequestError` (cloud 4xx, non-JSON body, malformed envelope) — a
+ * deterministic cluster/build bug that must NOT be retried. HTTP 502/503/504
+ * is emitted for transient transport failures (cloud 5xx, network, DNS,
+ * timeout) — retryable.
  */
 import type {
   CockpitGateStatusInput,
@@ -174,7 +181,13 @@ async function decodeResponse<T>(
   if (res.status === 400) {
     throw new QueryInvalidArgsError(detail);
   }
-  if (res.status >= 500 && res.status < 600) {
+  if (res.status === 500) {
+    // Deterministic route-side fault (CloudRequestError: cloud 4xx / non-JSON
+    // body / malformed envelope). Not retryable — surfaces as `internal`.
+    throw new QueryInternalError(detail, { httpStatus: res.status });
+  }
+  if (res.status > 500 && res.status < 600) {
+    // 502/503/504 — transient transport (cloud 5xx / network). Retryable.
     throw new QueryTransportError(detail, { httpStatus: res.status });
   }
   // Other 4xx (401/403/404/405/422/429...) — orchestrator/route bug.
