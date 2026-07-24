@@ -41,6 +41,9 @@ import type { TasksToIssuesInput } from '../../../types/index.js';
 
 // Import operation handlers
 import { executeCreateFeature } from './operations/create-feature.js';
+import { resolveIssueBranch } from './lib/issue-branch-resolver.js';
+import { createGitHubClient } from '../../github/client/index.js';
+import { simpleGit } from 'simple-git';
 import { executeGetPaths } from './operations/get-paths.js';
 import { executeCheckPrereqs } from './operations/check-prereqs.js';
 import { executeCopyTemplate } from './operations/copy-template.js';
@@ -257,12 +260,44 @@ export class SpecKitAction extends BaseAction {
     step: StepDefinition,
     context: ActionContext
   ): Promise<Omit<ActionResult, 'duration'>> {
+    const cwd = this.getInput<string>(step, context, 'cwd', context.workdir);
+    const issueNumber = this.getInput<number>(step, context, 'number');
+
+    // #1043: inject a resolver closure so createFeature prefers the canonical
+    // branch (oldest open <N>-* PR, or oldest <N>-* remote branch) over
+    // re-derived slugs. Non-orchestrator callers (ad-hoc MCP tool paths)
+    // leave the callback undefined.
     const input: CreateFeatureInput = {
       description: this.getRequiredInput<string>(step, context, 'description'),
       short_name: this.getInput<string>(step, context, 'short_name'),
-      number: this.getInput<number>(step, context, 'number'),
+      number: issueNumber,
       parent_epic_branch: this.getInput<string>(step, context, 'parent_epic_branch'),
-      cwd: this.getInput<string>(step, context, 'cwd', context.workdir),
+      cwd,
+      resolveExistingBranch:
+        issueNumber !== undefined
+          ? async (n: number) => {
+              try {
+                const github = createGitHubClient(cwd);
+                const repoInfo = await github.getRepoInfo();
+                const git = simpleGit(cwd ?? process.cwd());
+                const resolved = await resolveIssueBranch({
+                  issueNumber: n,
+                  owner: repoInfo.owner,
+                  repo: repoInfo.repo,
+                  github,
+                  git,
+                  logger: context.logger,
+                });
+                return resolved?.branchName ?? null;
+              } catch (err) {
+                context.logger.warn(
+                  '[speckit.create_feature] resolveExistingBranch construction failed; falling back to slug derivation',
+                  err
+                );
+                return null;
+              }
+            }
+          : undefined,
     };
 
     const result = await executeCreateFeature(input, context.logger);

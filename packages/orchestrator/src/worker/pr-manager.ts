@@ -1,4 +1,5 @@
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
+import { resolveIssueBranch, simpleGit } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 
@@ -144,6 +145,57 @@ export class PrManager {
 
     try {
       const branch = await this.github.getCurrentBranch();
+
+      // #1043 defense-in-depth: before opening a new PR, check whether an
+      // `<N>-*` branch/PR already anchors this issue. Prevents pr-manager
+      // from being the sole dedup site when createFeature's resolver
+      // callback is not wired.
+      const canonical = await resolveIssueBranch({
+        issueNumber: this.issueNumber,
+        owner: this.owner,
+        repo: this.repo,
+        github: this.github,
+        git: simpleGit(),
+        logger: this.logger,
+      });
+
+      if (canonical && canonical.branchName !== branch) {
+        const adoptedPr = await this.github.findPRForBranch(
+          this.owner,
+          this.repo,
+          canonical.branchName,
+        );
+        if (adoptedPr) {
+          this.prNumber = adoptedPr.number;
+          this.prUrl = `https://github.com/${this.owner}/${this.repo}/pull/${adoptedPr.number}`;
+          this.logger.info(
+            {
+              event: 'workflow-reentry-branch-mismatch',
+              issueNumber: this.issueNumber,
+              currentBranch: branch,
+              canonicalBranch: canonical.branchName,
+              source: canonical.source,
+              anchoringPrNumber: canonical.anchoringPrNumber,
+              action: 'adopted',
+            },
+            'workflow-reentry-branch-mismatch',
+          );
+          return this.prUrl;
+        }
+        this.logger.warn(
+          {
+            event: 'workflow-reentry-branch-mismatch',
+            issueNumber: this.issueNumber,
+            currentBranch: branch,
+            canonicalBranch: canonical.branchName,
+            source: canonical.source,
+            anchoringPrNumber: canonical.anchoringPrNumber,
+            action: 'no-op',
+          },
+          'workflow-reentry-branch-mismatch',
+        );
+        return undefined;
+      }
 
       // Check if a PR already exists for this branch
       const existingPr = await this.github.findPRForBranch(this.owner, this.repo, branch);

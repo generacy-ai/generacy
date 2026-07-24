@@ -101,7 +101,20 @@ export {
 // Speckit operations (for direct invocation from orchestrator)
 export { executeTasksToIssues } from './actions/builtin/speckit/operations/tasks-to-issues.js';
 export { createFeature } from './actions/builtin/speckit/lib/feature.js';
-export type { CreateFeatureInput, CreateFeatureOutput } from './actions/builtin/speckit/types.js';
+export type {
+  CreateFeatureInput,
+  CreateFeatureOutput,
+  ResolveExistingBranchCallback,
+} from './actions/builtin/speckit/types.js';
+export {
+  resolveIssueBranch,
+  type ResolvedIssueBranch,
+  type ResolveIssueBranchInput,
+} from './actions/builtin/speckit/lib/issue-branch-resolver.js';
+
+// Re-exported so orchestrator callers of resolveIssueBranch don't need to
+// declare `simple-git` as a direct dependency.
+export { simpleGit, type SimpleGit } from 'simple-git';
 
 // Epic utilities (for direct invocation from orchestrator)
 export { findChildIssues, type EpicChildWithPr, type FindChildIssuesOptions } from './actions/epic/find-children.js';

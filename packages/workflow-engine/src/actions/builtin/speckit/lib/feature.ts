@@ -297,10 +297,54 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
     ? String(featureNumInt).padStart(branchConfig.numberPadding, '0')
     : String(featureNumInt);
 
-  // Create branch name using configured pattern
-  const branchName = input.short_name
+  // Prefer canonical branch reported by the caller's resolver (#1043).
+  // When the callback returns a non-null value that passes validation,
+  // skip slug derivation to keep the branch/spec-slug binding stable
+  // across workflow re-entries with different descriptions.
+  let resolvedBranchName: string | null = null;
+  if (input.number !== undefined && input.resolveExistingBranch) {
+    try {
+      const candidate = await input.resolveExistingBranch(input.number);
+      if (candidate !== null && candidate !== undefined) {
+        if (FEATURE_NAME_PATTERN.test(candidate)) {
+          resolvedBranchName = candidate;
+        } else {
+          console.warn(
+            '[createFeature] issue-branch-resolver-invalid-return',
+            {
+              event: 'issue-branch-resolver-invalid-return',
+              returned: candidate,
+              issueNumber: input.number,
+            }
+          );
+        }
+      }
+    } catch (err) {
+      // Callback must be best-effort; slug-derivation is the fallback.
+      console.warn(
+        '[createFeature] issue-branch-resolver callback threw, falling back to slug derivation',
+        err
+      );
+    }
+  }
+
+  // Create branch name using configured pattern (or resolver override / short_name).
+  const derivedBranchName = input.short_name
     ? `${featureNum}-${input.short_name}`
     : buildBranchNameFromPattern(branchConfig, featureNumInt, input.description);
+  const branchName = resolvedBranchName ?? derivedBranchName;
+
+  if (resolvedBranchName && resolvedBranchName !== derivedBranchName) {
+    console.info(
+      '[createFeature] workflow-reentry-branch-reused',
+      {
+        event: 'workflow-reentry-branch-reused',
+        issueNumber: input.number,
+        canonicalBranch: resolvedBranchName,
+        wouldHaveDerived: derivedBranchName,
+      }
+    );
+  }
 
   // Validate branch name
   if (!FEATURE_NAME_PATTERN.test(branchName)) {
