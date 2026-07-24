@@ -53,7 +53,7 @@ Even with a query, the sweep and live paths derive **different** `gateId`s for t
 - [ ] For `implementation-review`, `generation` is derived from the head SHA of the PR under review — never `1`.
 - [ ] A gate re-derived by the startup sweep hashes to the same `gateId` as the live path's original open.
 
-### US3 (P2) — Observable state for the operator
+### US3 (P1) — Observable state for the operator (sweep-critical, per Q4→B)
 
 **As** a cockpit operator investigating a stuck gate,
 **I want** to list all open gates for an issue via MCP,
@@ -67,17 +67,17 @@ Even with a query, the sweep and live paths derive **different** `gateId`s for t
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Expose a read-only query returning `{ gateId, status: 'open' \| 'answered' \| 'absent' }` for a natural gate identity `(issueRef, gateType[, generation])`. | P1 | Whether by `gateId` prefix or `(issueRef, gateType)` composite is a plan-phase decision. |
+| FR-001 | Expose a read-only query returning `{ gateId, status: 'open' \| 'answered' \| 'absent' }` for a natural gate identity `(issueRef, gateType[, generation])`. Status mapping from cloud: `open` = cloud `open`; `answered` = cloud `answered \| delivered \| applied`; `absent` = no matching gate OR terminal-negative (`superseded \| failed \| expired`) — sweep is free to re-draft a dead gate. (Q2→C) | P1 | Whether by `gateId` prefix or `(issueRef, gateType)` composite is a plan-phase decision. |
 | FR-002 | Query MUST NOT require the drafted `title`/`body`/`options` payload. | P1 | The whole point — cheaper than drafting. |
 | FR-003 | Add MCP tool `cockpit_gate_status` (single-gate lookup) registered in `mcp/server.ts`. | P1 | Sibling of `cockpit_gate_open` / `cockpit_gate_ack`. |
-| FR-004 | Add MCP tool `cockpit_gate_list` (all gates for an `issueRef`) registered in `mcp/server.ts`. | P2 | US3. |
+| FR-004 | Add MCP tool `cockpit_gate_list` (all non-terminal gates for an `issueRef`) registered in `mcp/server.ts`. Returns `open \| answered \| delivered` project-wide (across any cluster in the project, so serial-cluster takeover sees the predecessor's gates); terminal statuses (`applied \| superseded \| failed \| expired`) excluded as history. **Sweep primary primitive** — sweeps query by `(issueRef, gateType)` prefix and skip drafting when any matching gate is currently `open`, regardless of `gateId` generation match (Q4→B, Q5→A). | P1 (was P2) | US1 + US3 both depend on it now that Q4→B makes it the sweep primitive. |
 | FR-005 | Add orchestrator route `GET /cockpit/gates` (query params `issueRef`, optional `gateType`, optional `gateId`). | P1 | Sibling of the existing POST at `packages/orchestrator/src/routes/cockpit-gates.ts`. |
 | FR-006 | Source of truth for `status` is cloud (Firestore); orchestrator either proxies via relay (same channel answers ride on) or cloud exposes the query directly. | P1 | Plan-phase decides transport. |
-| FR-007 | Compute a durable, GitHub-state-derived `generation` for `clarification` gates (e.g. content hash of the open-clarification set on the issue). | P1 | Replaces both `1` (sweep) and any live per-session hash. |
+| FR-007 | Compute a durable, GitHub-state-derived `generation` for `clarification` gates. Canonical hash input is the sorted-by-question-number list of `{ questionNumber, questionText }` for every question in the current unanswered batch (question identity only; drafted answers excluded). "Same round of asks → same generation." (Q1→A) | P1 | Replaces both `1` (sweep) and any live per-session hash. `@generacy-ai/cockpit` exports the canonicalization + hash helper so sweep and live paths hash identical bytes. |
 | FR-008 | Compute a durable, GitHub-state-derived `generation` for `implementation-review` gates (e.g. head SHA of the PR under review). | P1 | Load-bearing for the epic's PR review re-hit flow. |
 | FR-009 | `deriveGateId` output MUST be identical for the sweep path and the live path given the same natural gate. | P1 | Regression test asserts hash equality. |
 | FR-010 | Contracts, schema docs (`specs/1022-part-cockpit-remote-gates/contracts/`), and a changeset are updated to reflect the new tool + route + generation rules. | P1 | Per CLAUDE.md gate. |
-| FR-011 | Query failures (relay down, cloud unreachable) return a distinct error class the sweep can distinguish from `absent` — sweep MUST NOT treat "cloud unreachable" as "no gate exists". | P1 | Prevents duplicate-inbox-row regression when cloud is degraded. |
+| FR-011 | Query failures (relay down, cloud unreachable) MUST retry with bounded backoff (~3 attempts / ~5s total) to ride out the startup relay-not-connected race, then throw a distinct fail-loud/fail-closed MCP error (`class: 'query-unreachable'`) on sustained outage. The tool NEVER returns `absent` on transport failure — sweep MUST distinguish "cloud unreachable" from "no gate exists" and abort rather than draft. (Q3→D) | P1 | Prevents duplicate-inbox-row regression when cloud is degraded. |
 
 ## Success Criteria
 
@@ -96,6 +96,7 @@ Even with a query, the sweep and live paths derive **different** `gateId`s for t
 - The wire path for the status query is the **same** relay as `cockpit_gate_open` / answers ride on (single transport, single degraded-mode story).
 - `clarification` generation derived from the current open-clarification-set on the issue is durable enough across restarts for our use case; deeper "round" semantics can iterate later.
 - Auto-mode single-driver claim (#1015) is orthogonal — this issue's stability guarantee is per-natural-gate, not per-driver.
+- **Cutover for pre-existing `generation=1` gates** (Q4→B): no compat shim, no cloud migration. The sweep uses `cockpit_gate_list` by `(issueRef, gateType)` prefix as its primary primitive — any currently-`open` gate for that pair suppresses drafting regardless of `generation` value. Pre-existing `generation=1` gates coexist with new-derivation gates without producing duplicates during cutover, and drain naturally on operator answer.
 
 ## Out of Scope
 
