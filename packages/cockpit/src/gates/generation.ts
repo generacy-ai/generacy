@@ -6,6 +6,11 @@ import type { ArtifactReviewKind } from './types.js';
 export interface ClarificationGenerationInput {
   batchId: string;
 }
+// #1038 — the canonical `batchId` construction path is
+// `computeClarificationAnswerSetHash` in ./clarification-hash.ts. This helper's
+// signature is intentionally unchanged (additive, not breaking); consumers on
+// the sweep and live paths call the hash helper first and pass its 12-hex
+// output as `batchId` to keep sweep-derived and live-derived gateIds coalesced.
 export function deriveClarificationGeneration(input: ClarificationGenerationInput): string {
   return input.batchId;
 }

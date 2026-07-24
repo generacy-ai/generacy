@@ -60,3 +60,58 @@ describe('observer-independence (SC-005)', () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// #1038 SC-005 — read-only gate-query tools must not touch the write path.
+// ---------------------------------------------------------------------------
+
+const GATE_QUERY_TOOL_FILES = [
+  'cockpit_gate_status.ts',
+  'cockpit_gate_list.ts',
+] as const;
+
+/**
+ * Forbidden imports for the read-only gate-query tools. Each pattern is an
+ * anchored path check — the read tools must NOT import from the write-path
+ * HTTP client, the two write-path tool handlers, or anything with `retain`
+ * in the path (defensive per research R12 rule #4).
+ */
+const GATE_QUERY_FORBIDDEN_IMPORT_PATTERNS: Array<{
+  pattern: RegExp;
+  label: string;
+}> = [
+  {
+    pattern: /from\s+['"]\.\.\/gates\/client(?:\.js)?['"]/,
+    label: '../gates/client.js (write-path HTTP client)',
+  },
+  {
+    pattern: /from\s+['"]\.\/cockpit_gate_open(?:\.js)?['"]/,
+    label: './cockpit_gate_open',
+  },
+  {
+    pattern: /from\s+['"]\.\/cockpit_gate_ack(?:\.js)?['"]/,
+    label: './cockpit_gate_ack',
+  },
+  {
+    pattern: /from\s+['"][^'"]*retained-cockpit-events[^'"]*['"]/,
+    label: 'retained-cockpit-events (retain path)',
+  },
+  {
+    pattern: /from\s+['"][^'"]*retain[^'"]*['"]/,
+    label: 'any *retain* path',
+  },
+];
+
+describe('observer-independence #1038 SC-005 — gate-query tools do not import write path', () => {
+  for (const file of GATE_QUERY_TOOL_FILES) {
+    it(`${file} does not import any write-path or retention module`, () => {
+      const source = readFileSync(resolve(TOOLS_DIR, file), 'utf8');
+      for (const { pattern, label } of GATE_QUERY_FORBIDDEN_IMPORT_PATTERNS) {
+        expect(
+          pattern.test(source),
+          `${file} must not import ${label} — regex ${pattern} matched`,
+        ).toBe(false);
+      }
+    });
+  }
+});

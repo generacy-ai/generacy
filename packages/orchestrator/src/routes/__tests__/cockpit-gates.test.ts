@@ -3,6 +3,11 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { setupCockpitGatesRoute } from '../cockpit-gates.js';
 import { createRetainedCockpitEvents } from '../retained-cockpit-events.js';
 import type { ClusterRelayClient } from '../../types/relay.js';
+import {
+  CloudRequestError,
+  CloudTransportError,
+  type CloudGateQueryClient,
+} from '../../services/cloud-gate-query-client.js';
 
 const silentLogger = {
   info: () => {},
@@ -364,6 +369,252 @@ describe('cockpit gates routes', () => {
         payload: { outcome: 'answered' }, // old free-string value, now rejected
       });
       expect(res.statusCode).toBe(400);
+    });
+  });
+
+  // #1038 — read-only query surface. All these branches consume the same
+  // injected `CloudGateQueryClient` and never touch the retainer or relay.
+  describe('GET /cockpit/gates (query)', () => {
+    function makeMockQueryClient(
+      overrides: Partial<CloudGateQueryClient> = {},
+    ): CloudGateQueryClient {
+      return {
+        getGateStatus: vi.fn(),
+        listGates: vi.fn(),
+        ...overrides,
+      };
+    }
+
+    function wire(
+      client: CloudGateQueryClient | null,
+    ) {
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => makeMockClient(),
+        logger: silentLogger,
+        getCloudGateQueryClient: () => client,
+      });
+    }
+
+    // ---- status-mode collapse (SC-002/Q2→C mapping) ---------------------
+
+    it('status: cloud "open" → { gateId, status: "open" }', async () => {
+      const gateId = 'a'.repeat(24);
+      const client = makeMockQueryClient({
+        getGateStatus: vi.fn().mockResolvedValue({ gateId, status: 'open' }),
+      });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification&generation=abc`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ gateId, status: 'open' });
+    });
+
+    it.each([
+      ['answered', 'answered'],
+      ['delivered', 'answered'],
+      ['applied', 'answered'],
+    ] as const)(
+      'status: cloud "%s" → three-state "%s"',
+      async (cloudStatus, expected) => {
+        const gateId = 'b'.repeat(24);
+        const client = makeMockQueryClient({
+          getGateStatus: vi.fn().mockResolvedValue({ gateId, status: cloudStatus }),
+        });
+        wire(client);
+        await server.ready();
+        const res = await server.inject({
+          method: 'GET',
+          url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification&generation=x`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body)).toEqual({ gateId, status: expected });
+      },
+    );
+
+    it.each([
+      ['superseded'],
+      ['failed'],
+      ['expired'],
+      [null],
+    ] as const)(
+      'status: cloud "%s" → { gateId: null, status: "absent" }',
+      async (cloudStatus) => {
+        const client = makeMockQueryClient({
+          getGateStatus: vi
+            .fn()
+            .mockResolvedValue({ gateId: cloudStatus === null ? null : 'c'.repeat(24), status: cloudStatus }),
+        });
+        wire(client);
+        await server.ready();
+        const res = await server.inject({
+          method: 'GET',
+          url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification&generation=x`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body)).toEqual({ gateId: null, status: 'absent' });
+      },
+    );
+
+    // ---- list-mode filter + collapse -----------------------------------
+
+    it('list: filters terminal cloud statuses and collapses delivered → answered', async () => {
+      const client = makeMockQueryClient({
+        listGates: vi.fn().mockResolvedValue({
+          gates: [
+            { gateId: 'a'.repeat(24), gateType: 'clarification', generation: 'g1', status: 'open' },
+            { gateId: 'b'.repeat(24), gateType: 'implementation-review', generation: 'g2', status: 'delivered' },
+            { gateId: 'c'.repeat(24), gateType: 'implementation-review', generation: 'g3', status: 'applied' },
+            { gateId: 'd'.repeat(24), gateType: 'clarification', generation: 'g4', status: 'superseded' },
+          ],
+        }),
+      });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.gates).toHaveLength(2); // open + delivered survive
+      expect(body.gates[0].status).toBe('open');
+      expect(body.gates[1].status).toBe('answered'); // delivered collapsed
+      // truncated omitted (not `false`)
+      expect('truncated' in body).toBe(false);
+    });
+
+    it('list: passes gateType filter through to client', async () => {
+      const listGates = vi.fn().mockResolvedValue({ gates: [] });
+      const client = makeMockQueryClient({ listGates });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(listGates).toHaveBeenCalledWith({
+        issueRef: 'gen/rep#1',
+        gateType: 'clarification',
+      });
+    });
+
+    it('list: truncated:true survives, absent otherwise', async () => {
+      const client = makeMockQueryClient({
+        listGates: vi
+          .fn()
+          .mockResolvedValue({ gates: [], truncated: true }),
+      });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).truncated).toBe(true);
+    });
+
+    // ---- 400 validation branches ---------------------------------------
+
+    it('400 when generation is present without gateType', async () => {
+      wire(makeMockQueryClient());
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&generation=abc`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('VALIDATION');
+    });
+
+    it('400 on missing issueRef', async () => {
+      wire(makeMockQueryClient());
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?gateType=clarification`,
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('400 on unknown gateType', async () => {
+      wire(makeMockQueryClient());
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=not-a-real-type`,
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    // ---- upstream error branches ---------------------------------------
+
+    it('502 when CloudGateQueryClient throws CloudTransportError', async () => {
+      const client = makeMockQueryClient({
+        getGateStatus: vi.fn().mockRejectedValue(new CloudTransportError('boom')),
+      });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification&generation=abc`,
+      });
+      expect(res.statusCode).toBe(502);
+      expect(JSON.parse(res.body).code).toBe('CLOUD_UNREACHABLE');
+    });
+
+    it('500 on CloudRequestError', async () => {
+      const client = makeMockQueryClient({
+        getGateStatus: vi.fn().mockRejectedValue(new CloudRequestError('bad body')),
+      });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification&generation=abc`,
+      });
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body).code).toBe('CLOUD_REQUEST_INVALID');
+    });
+
+    it('503 when no CloudGateQueryClient is configured', async () => {
+      // Use the setup path that omits getCloudGateQueryClient entirely.
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => makeMockClient(),
+        logger: silentLogger,
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&gateType=clarification&generation=abc`,
+      });
+      expect(res.statusCode).toBe(503);
+    });
+
+    // ---- regression: POST handlers untouched ---------------------------
+
+    it('does not affect the POST /cockpit/gates path', async () => {
+      const client = makeMockClient();
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => client,
+        logger: silentLogger,
+        getCloudGateQueryClient: () => makeMockQueryClient(),
+      });
+      await server.ready();
+      const res = await server.inject({
+        method: 'POST',
+        url: '/cockpit/gates',
+        payload: validOpen,
+      });
+      expect(res.statusCode).toBe(202);
+      expect(client.send).toHaveBeenCalled();
     });
   });
 });

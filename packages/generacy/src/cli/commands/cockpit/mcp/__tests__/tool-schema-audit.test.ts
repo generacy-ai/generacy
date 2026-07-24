@@ -54,6 +54,10 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   // #1022 — remote-gate tools. No ref field; see the 'gate' RefKind doc.
   cockpit_gate_open: 'gate',
   cockpit_gate_ack: 'gate',
+  // #1038 — read-only gate-query tools. Same 'gate' kind (no ref field —
+  // input is a query descriptor, not an issue ref).
+  cockpit_gate_status: 'gate',
+  cockpit_gate_list: 'gate',
 };
 
 /**
@@ -108,6 +112,9 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   // would have.
   cockpit_gate_open: null,
   cockpit_gate_ack: null,
+  // #1038 — same invariant-#1 exception (read-only query tools).
+  cockpit_gate_status: null,
+  cockpit_gate_list: null,
 };
 
 const schemasSource = readFileSync(
@@ -146,6 +153,52 @@ describe('#928 Q3 → B tool-schema audit table', () => {
     // Sanity: the two #1022 tools are in the built server.
     expect(registeredNames).toContain('cockpit_gate_open');
     expect(registeredNames).toContain('cockpit_gate_ack');
+    // #1038 — the two read-only query tools must also be in the built server.
+    expect(registeredNames).toContain('cockpit_gate_status');
+    expect(registeredNames).toContain('cockpit_gate_list');
+  });
+
+  // #1038 T053 — read-only query tools reject `{}` (missing required fields)
+  // and accept canonical fixture inputs (see quickstart.md § Usage).
+  describe('#1038 — read-only query tool input schemas', () => {
+    it('cockpit_gate_status rejects {} with missing fields', async () => {
+      const { CockpitGateStatusInputSchema } = await import('../schemas.js');
+      const result = CockpitGateStatusInputSchema.safeParse({});
+      expect(result.success).toBe(false);
+    });
+
+    it('cockpit_gate_status accepts the canonical fixture input', async () => {
+      const { CockpitGateStatusInputSchema } = await import('../schemas.js');
+      const result = CockpitGateStatusInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1038',
+        gateType: 'clarification',
+        generation: 'abc123def456',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('cockpit_gate_list rejects {} with missing fields', async () => {
+      const { CockpitGateListInputSchema } = await import('../schemas.js');
+      const result = CockpitGateListInputSchema.safeParse({});
+      expect(result.success).toBe(false);
+    });
+
+    it('cockpit_gate_list accepts the canonical fixture input', async () => {
+      const { CockpitGateListInputSchema } = await import('../schemas.js');
+      const result = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1038',
+        gateType: 'clarification',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('cockpit_gate_list accepts input without gateType', async () => {
+      const { CockpitGateListInputSchema } = await import('../schemas.js');
+      const result = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1038',
+      });
+      expect(result.success).toBe(true);
+    });
   });
 
   for (const [toolName, kind] of Object.entries(EXPECTED_KIND)) {

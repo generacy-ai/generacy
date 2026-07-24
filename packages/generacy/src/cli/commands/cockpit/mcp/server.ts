@@ -26,6 +26,8 @@ import { cockpitClaim } from './tools/cockpit_claim.js';
 import { cockpitRelease } from './tools/cockpit_release.js';
 import { cockpitGateOpen } from './tools/cockpit_gate_open.js';
 import { cockpitGateAck } from './tools/cockpit_gate_ack.js';
+import { cockpitGateStatus } from './tools/cockpit_gate_status.js';
+import { cockpitGateList } from './tools/cockpit_gate_list.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -40,6 +42,8 @@ import {
   CockpitReleaseInputSchema,
   CockpitGateOpenInputSchema,
   CockpitGateAckInputSchema,
+  CockpitGateStatusInputSchema,
+  CockpitGateListInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
@@ -220,6 +224,36 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
       inputSchema: CockpitGateAckInputSchema,
     },
     async (args) => toCallToolResult(await cockpitGateAck(args, deps)),
+  );
+
+  // #1038 — Design-invariant-#1 exception (mirrors the #1022 comment above):
+  //
+  // `cockpit_gate_status` and `cockpit_gate_list` are read-only query tools
+  // and intentionally do NOT ship `generacy cockpit gate-status | gate-list`
+  // CLI twins. They only make sense inside an active `/cockpit:auto` sweep
+  // step — an operator invoking them by hand has no legitimate use case.
+  // Observer independence (FR-012 / SC-005) is enforced by a static import-
+  // scan test: neither of these files may import `../gates/client.js`,
+  // `./cockpit_gate_open.js`, `./cockpit_gate_ack.js`, or any `retain*`
+  // module. See spec.md § "Clarified decisions" and research.md R12.
+  server.registerTool(
+    'cockpit_gate_status',
+    {
+      description:
+        "Query the cloud for a single gate identified by (issueRef, gateType, generation). Read-only. Returns { gateId, status: 'open' | 'answered' | 'absent' }. Distinct class:'query-unreachable' on sustained cloud outage — MUST NOT be conflated with 'absent'.",
+      inputSchema: CockpitGateStatusInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateStatus(args, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_gate_list',
+    {
+      description:
+        "List non-terminal gates for an issueRef (optional gateType filter). Read-only. Primary sweep primitive for skip-if-any-open — project-wide scope. Distinct class:'query-unreachable' on sustained cloud outage.",
+      inputSchema: CockpitGateListInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateList(args, deps)),
   );
 
   return server;

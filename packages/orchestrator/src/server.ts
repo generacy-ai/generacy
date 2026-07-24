@@ -75,6 +75,11 @@ import { setupInternalRefreshMetadataRoute } from './routes/internal-refresh-met
 import { setupCockpitGatesRoute } from './routes/cockpit-gates.js';
 import { setupCockpitAnswersRoute } from './routes/cockpit-answers.js';
 import {
+  createCloudGateQueryClient,
+  type CloudGateQueryClient,
+} from './services/cloud-gate-query-client.js';
+import { readFileSync } from 'node:fs';
+import {
   createRetainedCockpitEvents,
   type RetainedCockpitEvents,
 } from './routes/retained-cockpit-events.js';
@@ -863,10 +868,48 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       maxBytes: cockpitRetainMaxBytes,
     });
 
+    // #1038 — lazy CloudGateQueryClient for GET /cockpit/gates.
+    //
+    // The client is constructed once from `cluster.json` (which is populated
+    // by activation and may not exist yet in wizard mode). The getter caches
+    // both a "not yet available" and a "constructed" state; the route falls
+    // back to 503 when the getter returns null. The MCP tool retries 502s and
+    // ultimately surfaces `query-unreachable` on exhaustion.
+    let cachedGateQueryClient: CloudGateQueryClient | null = null;
+    let gateQueryClientResolved = false;
+    const clusterJsonPath = config.activation.clusterJsonPath;
+    const getCloudGateQueryClient = (): CloudGateQueryClient | null => {
+      if (gateQueryClientResolved) return cachedGateQueryClient;
+      // First call — try to synchronously read cluster.json; on any failure,
+      // leave `resolved` false so the next call retries after activation
+      // has landed the file.
+      try {
+        const raw = readFileSync(clusterJsonPath, 'utf-8');
+        const parsed = JSON.parse(raw) as { cluster_id?: unknown };
+        const clusterId =
+          typeof parsed.cluster_id === 'string' && parsed.cluster_id.length > 0
+            ? parsed.cluster_id
+            : null;
+        if (clusterId === null) return null;
+        cachedGateQueryClient = createCloudGateQueryClient({
+          clusterId,
+          logger: {
+            info: (obj) => server.log.info(obj, 'cockpit-gate-query'),
+            warn: (obj) => server.log.warn(obj, 'cockpit-gate-query'),
+          },
+        });
+        gateQueryClientResolved = true;
+        return cachedGateQueryClient;
+      } catch {
+        return null;
+      }
+    };
+
     setupCockpitGatesRoute(server, {
       retainer: cockpitRetainer,
       getRelayClient: () => relayClientRef,
       logger: server.log,
+      getCloudGateQueryClient,
     });
     setupCockpitAnswersRoute(server, {
       writer: cockpitWriter,
