@@ -104,6 +104,44 @@ export interface Comment {
 }
 
 /**
+ * GitHub PR review submission state, as reported by
+ * `GET /repos/{owner}/{repo}/pulls/{n}/reviews`. `PENDING` reviews are not
+ * returned by the list endpoint in practice; included for exhaustiveness.
+ * See #1047.
+ */
+export type ReviewSubmissionState =
+  | 'APPROVED'
+  | 'CHANGES_REQUESTED'
+  | 'COMMENTED'
+  | 'DISMISSED'
+  | 'PENDING';
+
+/**
+ * A GitHub PR review submission, as returned by
+ * `GET /repos/{owner}/{repo}/pulls/{n}/reviews`. Represents the top-level
+ * submission with its body — DISTINCT from inline review-thread comments
+ * (see `ReviewThread` for those). Used by the PR-feedback body-consumption
+ * path (#1047).
+ */
+export interface Review {
+  /** Stable GitHub identifier. Used as the acknowledgment key (#1047 FR-008). */
+  id: number;
+  /** Reviewer login. Used for per-author supersession (#1047 Q3). */
+  user: {
+    login: string;
+  };
+  /**
+   * Review body text. Empty string when the reviewer submitted with no
+   * top-level body (e.g. inline-only review). Consumers skip empty bodies.
+   */
+  body: string;
+  /** Submission state. Consumers filter to CHANGES_REQUESTED + COMMENTED. */
+  state: ReviewSubmissionState;
+  /** ISO-8601 timestamp. Used for per-author "newest" tie-breaking. */
+  submittedAt: string;
+}
+
+/**
  * A GitHub PR review thread, as reported by GraphQL
  * `pullRequest.reviewThreads`. Resolution is a property of the thread —
  * NOT of individual comments. Do NOT add a `resolved` field to `Comment`.

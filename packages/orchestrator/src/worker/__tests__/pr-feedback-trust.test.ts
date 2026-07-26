@@ -13,7 +13,11 @@ import type { ChildProcessHandle, Logger } from '../types.js';
 const mockGitHub: Record<string, ReturnType<typeof vi.fn>> = {
   getPullRequest: vi.fn(),
   getPRReviewThreads: vi.fn(),
+  listReviews: vi.fn(),
+  listPrCommentBodies: vi.fn(),
+  postPrComment: vi.fn(),
   getStatus: vi.fn(),
+  getIssue: vi.fn(),
   removeLabels: vi.fn(),
   addLabels: vi.fn(),
   replyToPRComment: vi.fn(),
@@ -106,7 +110,13 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
     mockGitHub.getPullRequest.mockResolvedValue({
       number: 100,
       head: { ref: 'test-branch' },
+      base: { ref: 'develop' },
     });
+    // #1047: handler now fetches review submissions in addition to threads.
+    mockGitHub.listReviews.mockResolvedValue([]);
+    mockGitHub.listPrCommentBodies.mockResolvedValue([]);
+    mockGitHub.postPrComment.mockResolvedValue(undefined);
+    mockGitHub.getIssue.mockResolvedValue({ number: 42, labels: [] });
     // #883: post-CLI batch requires a real diff for the happy path (reply +
     // resolve). No-diff → Disposition B (blocked) and replies are skipped, so
     // trust-filter tests must run under the has-diff branch.

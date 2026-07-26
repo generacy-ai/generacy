@@ -5,7 +5,13 @@ import {
   tryLoadCommentTrustConfig,
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
-import type { Comment, GitHubClient, ReviewThread } from '@generacy-ai/workflow-engine';
+import type { Comment, GitHubClient, Review, ReviewThread } from '@generacy-ai/workflow-engine';
+import {
+  parseAcknowledgedFindings,
+  BODY_FINDINGS_UNADDRESSED_MARKER,
+} from './pr-feedback-ack-parser.js';
+import { parseReviewBody, type ParsedReview } from './pr-feedback-body-parser.js';
+import { evaluateBodyGate, type UnaddressedFinding } from './pr-feedback-body-gate.js';
 import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -19,6 +25,14 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 
 /** Label added by the handler when the fix cycle cannot advance (#883). */
 const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
+
+/**
+ * Label added by Disposition C (#1047) when the fixer completed a cycle
+ * without touching any file named by an unaddressed review-body finding.
+ * The monitor's bare `l.startsWith('blocked:')` skip gate honors this
+ * without any allow-list change (see FR-007 grep verification).
+ */
+const BLOCKED_BODY_FINDING_UNADDRESSED_LABEL = 'blocked:body-finding-unaddressed';
 
 /**
  * `agent:in-progress` label — cleared structurally at the single shared exit
@@ -145,6 +159,8 @@ export class PrFeedbackHandler {
       let unresolvedThreadCount: number;
       let unresolvedComments: Comment[];
       let trustedUnresolvedThreads: ReviewThread[];
+      let parsedReviews: ParsedReview[] = [];
+      let relevantReviews: Review[] = [];
       let untrustedSkips: Array<{
         commentId: number;
         author: string;
@@ -234,6 +250,35 @@ export class PrFeedbackHandler {
         throw new Error(`Failed to fetch review threads for PR #${prNumber}: ${String(error)}`);
       }
 
+      // 3b. #1047: also fetch review submissions so top-level review-body
+      // findings that name files NOT in the diff still reach the fixer prompt
+      // (inline threads only surface findings anchored to a file+line). Failure
+      // is log-and-continue — the thread path is independent and must still run.
+      try {
+        const reviews = await github.listReviews(owner, repo, prNumber);
+        relevantReviews = reviews.filter(
+          (r: Review) =>
+            (r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED') &&
+            r.body.trim().length > 0,
+        );
+        parsedReviews = relevantReviews.map(parseReviewBody);
+        this.logger.info(
+          {
+            prNumber,
+            totalReviews: reviews.length,
+            relevantReviews: relevantReviews.length,
+          },
+          'Fetched PR reviews for body-consumption path (#1047)',
+        );
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), prNumber, owner, repo },
+          'Failed to fetch PR reviews (#1047 body-consumption path) — continuing with thread-only inputs',
+        );
+        parsedReviews = [];
+        relevantReviews = [];
+      }
+
       // 4. Case A (#869): no unresolved threads at all — remove label and
       // clear dedupe key.
       if (unresolvedThreadCount === 0) {
@@ -269,8 +314,21 @@ export class PrFeedbackHandler {
         return;
       }
 
+      // #1047 T011: extend the prompt inputs with each non-empty review body.
+      // buildFeedbackPrompt renders items without path/line as
+      // "general comment" — no renderer change required. Ordering is not
+      // load-bearing (FR-006).
+      const reviewBodyItems: Comment[] = relevantReviews.map(r => ({
+        id: r.id,
+        body: `review body (no file anchor):\n\n${r.body}`,
+        author: r.user.login,
+        created_at: r.submittedAt,
+        updated_at: r.submittedAt,
+      }));
+      const promptInputs: Comment[] = [...unresolvedComments, ...reviewBodyItems];
+
       // 5. Build structured prompt
-      const prompt = this.buildFeedbackPrompt(unresolvedComments, prNumber, issueNumber);
+      const prompt = this.buildFeedbackPrompt(promptInputs, prNumber, issueNumber);
 
       // 6. Spawn Claude CLI to address feedback
       const success = await this.spawnClaudeForFeedback(
@@ -328,6 +386,55 @@ export class PrFeedbackHandler {
 
       // 7b. Happy path — CLI succeeded AND we have a real commit.
       const shortSha = (await this.getHeadShortSha(checkoutPath)) ?? '<unknown>';
+
+      // #1047 T013: per-finding body-gate. Compute the just-pushed touched
+      // file set, parse any prior Disposition-C acknowledgment marker, and
+      // evaluate `evaluateBodyGate`. On unsatisfied: apply Disposition C
+      // (blocked:body-finding-unaddressed + marker comment) and skip the
+      // reply/resolve loop.
+      const commitTouchedFiles = await this.getCommitTouchedFiles(
+        checkoutPath,
+        `origin/${pr.base.ref}`,
+        'HEAD',
+      );
+      let existingCommentBodies: string[] = [];
+      try {
+        existingCommentBodies = await github.listPrCommentBodies(owner, repo, prNumber);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), prNumber, owner, repo },
+          'Failed to list PR comment bodies (#1047 ack parse) — treating ack set as empty',
+        );
+      }
+      const acknowledged = parseAcknowledgedFindings(existingCommentBodies);
+      const gateResult = evaluateBodyGate({
+        parsedReviews,
+        commitTouchedFiles,
+        acknowledged,
+      });
+
+      if (!gateResult.satisfied) {
+        this.logger.warn(
+          {
+            prNumber,
+            issueNumber,
+            unaddressedCount: gateResult.unaddressed.length,
+            unaddressed: gateResult.unaddressed,
+            commitTouchedFileCount: commitTouchedFiles.size,
+          },
+          'body-finding gate unsatisfied — entering Disposition C (#1047)',
+        );
+        await this.applyDispositionC(
+          github,
+          owner,
+          repo,
+          prNumber,
+          issueNumber,
+          gateResult.unaddressed,
+          existingCommentBodies,
+        );
+        return;
+      }
 
       // 8. Interleaved reply→resolve per root thread (#883, Q4-C, FR-005,
       // FR-007). Input-set closure: iterate `trustedUnresolvedThreads`
@@ -719,6 +826,56 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
   }
 
   /**
+   * List the files changed between two git refs. Used by the #1047
+   * per-finding body-gate to decide whether the just-pushed commit(s) touched
+   * any file named by a review-body finding. Follows the shape of
+   * `getHeadShortSha` — returns an empty set on any git failure so the gate
+   * degrades to "nothing touched" (which then flags everything as unaddressed
+   * → Disposition C, the safe direction).
+   *
+   * `<baseRef>..<headRef>` is the natural diff range for a multi-commit
+   * fix cycle (FR-013 partial completion may push more than one commit),
+   * so this deliberately does NOT use `getStatus()` (which is empty after
+   * push).
+   */
+  private async getCommitTouchedFiles(
+    checkoutPath: string,
+    baseRef: string,
+    headRef: string,
+  ): Promise<Set<string>> {
+    try {
+      const result = await executeCommand(
+        'git',
+        ['diff', '--name-only', `${baseRef}..${headRef}`],
+        { cwd: checkoutPath },
+      );
+      if (result.exitCode !== 0) {
+        this.logger.warn(
+          {
+            event: 'get-commit-touched-files-failed',
+            baseRef,
+            headRef,
+            stderr: result.stderr,
+          },
+          'git diff for touched-files enumeration failed — gate will treat cycle as touching nothing',
+        );
+        return new Set();
+      }
+      const files = result.stdout
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
+      return new Set(files);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), baseRef, headRef },
+        'getCommitTouchedFiles threw — gate will treat cycle as touching nothing',
+      );
+      return new Set();
+    }
+  }
+
+  /**
    * Read the short SHA of the just-pushed HEAD commit. Returns null when the
    * git command fails; caller falls back to `<unknown>` in the reply body —
    * the SHA is decoration, not termination logic (#883).
@@ -762,6 +919,93 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
         'Failed to add blocked:stuck-feedback-loop label — non-fatal, waiting-for label persists',
       );
     }
+  }
+
+  /**
+   * Apply Disposition C (#1047): the fixer cycle committed changes but did
+   * not touch any file named by an unaddressed review-body finding. Add the
+   * `blocked:body-finding-unaddressed` label and post a marker-keyed top-level
+   * PR comment enumerating the unaddressed findings for operator triage AND
+   * for the next cycle's acknowledgment set (FR-008). Both operations are
+   * best-effort; failures are logged but not thrown so the shared `finally`
+   * still runs.
+   */
+  private async applyDispositionC(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+    issueNumber: number,
+    unaddressed: UnaddressedFinding[],
+    existingCommentBodies: readonly string[],
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [
+        BLOCKED_BODY_FINDING_UNADDRESSED_LABEL,
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_BODY_FINDING_UNADDRESSED_LABEL },
+        'Failed to add blocked:body-finding-unaddressed label — non-fatal, comment carries the same info',
+      );
+    }
+
+    if (existingCommentBodies.some(b => b.includes(BODY_FINDINGS_UNADDRESSED_MARKER))) {
+      this.logger.debug(
+        { prNumber, issueNumber },
+        'Disposition-C marker comment already present — skipping duplicate post',
+      );
+      return;
+    }
+
+    const body = this.buildDispositionCComment(unaddressed);
+    try {
+      await github.postPrComment(owner, repo, prNumber, body);
+      this.logger.info(
+        { prNumber, issueNumber, unaddressedCount: unaddressed.length },
+        'Posted Disposition-C marker comment (#1047)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), prNumber, issueNumber },
+        'Failed to post Disposition-C marker comment — non-fatal, label alone conveys the pause',
+      );
+    }
+  }
+
+  /**
+   * Build the marker-keyed Disposition-C comment body per
+   * `contracts/body-findings-unaddressed-marker.md` (#1047). Ordering:
+   * findings sorted by (reviewId asc, findingIndex asc) for readability;
+   * ack-parser is order-insensitive.
+   */
+  private buildDispositionCComment(unaddressed: UnaddressedFinding[]): string {
+    const sorted = [...unaddressed].sort((a, b) => {
+      if (a.reviewId !== b.reviewId) return a.reviewId - b.reviewId;
+      return a.findingIndex - b.findingIndex;
+    });
+    const rows = sorted
+      .map(u => {
+        const files = u.namedFiles.map(f => '`' + f + '`').join(', ');
+        return `- \`${u.reviewer}\` review #${u.reviewId} finding ${u.findingIndex} (files: ${files})`;
+      })
+      .join('\n');
+    return `${BODY_FINDINGS_UNADDRESSED_MARKER}
+
+⚠️ **Body findings not yet addressed by the fixer**
+
+The fixer completed this cycle without touching any file named by the
+following review-body findings. To unblock:
+
+- Address the findings manually, OR
+- Remove the \`${BLOCKED_BODY_FINDING_UNADDRESSED_LABEL}\` label to acknowledge —
+  a subsequent NEW review from the same author will re-gate its findings.
+
+### Unaddressed findings
+
+${rows}
+
+_This is an automated notice from the PR-feedback body-consumption path (#1047)._`;
   }
 
   /**

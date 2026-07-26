@@ -20,6 +20,8 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  Review,
+  ReviewSubmissionState,
   ReviewThread,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
@@ -677,6 +679,49 @@ export class GhCliGitHubClient implements GitHubClient {
       });
     }
     return threads;
+  }
+
+  async listReviews(owner: string, repo: string, prNumber: number): Promise<Review[]> {
+    const result = await this.executeGh([
+      'api',
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+      '--paginate',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list reviews for PR #${prNumber}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Array<{
+      id: number;
+      user: { login: string } | null;
+      body: string | null;
+      state: string;
+      submitted_at: string;
+    }> | null;
+
+    if (!data) return [];
+
+    const allowedStates: ReadonlySet<ReviewSubmissionState> = new Set([
+      'APPROVED',
+      'CHANGES_REQUESTED',
+      'COMMENTED',
+      'DISMISSED',
+      'PENDING',
+    ]);
+
+    return data.map(r => {
+      if (!allowedStates.has(r.state as ReviewSubmissionState)) {
+        throw new Error(`Unknown review state "${r.state}" on PR #${prNumber} review ${r.id}`);
+      }
+      return {
+        id: r.id,
+        user: { login: r.user?.login ?? '' },
+        body: r.body ?? '',
+        state: r.state as ReviewSubmissionState,
+        submittedAt: r.submitted_at,
+      };
+    });
   }
 
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {
