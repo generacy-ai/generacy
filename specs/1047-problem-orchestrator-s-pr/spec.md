@@ -51,8 +51,9 @@ Two files named only in bodies stayed **byte-identical to `develop` across all 8
 **So that** a cycle that touches zero files named in the newest review body does not falsely report as complete and hand back to the human as "done".
 
 **Acceptance Criteria**:
-- [ ] A fix cycle that produces zero commits touching any file named by the newest review body does not advance to Disposition A ("complete").
-- [ ] A fix cycle that does touch a file named by the body advances normally.
+- [ ] A fix cycle that produces zero commits touching any file named by a gating review body (per-review-author newest, per FR-003) does not advance to Disposition A ("complete"); it advances to disposition C and applies `blocked:body-finding-unaddressed` (FR-007).
+- [ ] A fix cycle that does touch every gating reviewer's named files advances normally.
+- [ ] A superseding review from the same author (newer submission from that login) supplants the earlier one's file list; a later review from a different author never supplants another author's file list.
 
 ### US3: The `unanchored-findings` marker convention is honored
 
@@ -61,19 +62,21 @@ Two files named only in bodies stayed **byte-identical to `develop` across all 8
 **So that** the file names I've already extracted for the reviewer flow through to the fixer without heuristics.
 
 **Acceptance Criteria**:
-- [ ] When a review body contains the `<!-- generacy-cockpit:unanchored-findings -->` marker, the block underneath is parsed as structured findings and used directly for the "did we touch a named file?" check in US2.
-- [ ] Absence of the marker is not an error — the whole body is included in the prompt as free text.
+- [ ] When a review body contains the `<!-- generacy-cockpit:unanchored-findings -->` marker, each `### Finding <n>` sub-block is parsed and its `**Files:** <comma-separated-paths>` line supplies the named-file list for the FR-003 gate in US2.
+- [ ] Absence of the marker is not an error — the whole body is included in the prompt as free text (FR-002) and no finding gates (FR-005).
+- [ ] Presence of the marker with `### Finding <n>` sub-blocks that lack a `**Files:**` line is also not an error — those findings still reach the prompt but do not gate (FR-005). This is the compatibility path for older `/cockpit:auto` posters and already-open PRs.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Fetch review bodies via `GET /repos/{owner}/{repo}/pulls/{n}/reviews` for reviews newer than the last fix cycle. | P1 | Existing thread fetch stays; this is additive. |
-| FR-002 | Include every non-empty review body in the fixer prompt as a comment-shaped item with no `path` / `line` and a distinguishing author-side label (e.g. `review body (no file anchor)`). | P1 | `buildFeedbackPrompt` already degrades to `'general comment'` when `path`/`line` are absent — render path needs no change. |
-| FR-003 | Do not mark a fix cycle complete while a body finding from the newest review has produced no commit touching any file it names. | P1 | Disposition-decision change. Extends today's thread-resolution-based logic. |
-| FR-004 | When a review body contains the `<!-- generacy-cockpit:unanchored-findings -->` marker, parse the block underneath for named files and use that structured list for FR-003's "touched a named file?" check. | P1 | High-precision signal. Contract defined in `agency/packages/claude-plugin-cockpit/commands/auto.md § D.2` and `specs/422-summary-auto-md-s/contracts/request-changes-post.md § Unanchored-block shape`. |
-| FR-005 | When the marker is absent, fall back to including the whole body in the prompt as free text; do not attempt heuristic file-name extraction for the FR-003 check (bodies without the marker have no reliable file list — the cycle-completion gate simply does not trigger). | P2 | Fail open, not closed — a body without the marker still gets seen by the fixer via FR-002. |
+| FR-001 | Fetch review bodies via `GET /repos/{owner}/{repo}/pulls/{n}/reviews` for reviews newer than the last fix cycle, filtered to `submissionState ∈ {CHANGES_REQUESTED, COMMENTED}` (excludes `APPROVED`, `PENDING`, `DISMISSED`). | P1 | Existing thread fetch stays; this is additive. `COMMENTED` inclusion is load-bearing: `/cockpit:auto` request-changes reviews always land as `event=COMMENT` per `agency/specs/422-summary-auto-md-s/contracts/request-changes-post.md § Field rules` (author cannot REQUEST_CHANGES on own PR under single-credential model), so `CHANGES_REQUESTED`-only would fetch zero of the observed failures. |
+| FR-002 | Include every non-empty review body from the FR-001 result in the fixer prompt as a comment-shaped item with no `path` / `line` and a distinguishing author-side label (e.g. `review body (no file anchor)`). | P1 | `buildFeedbackPrompt` already degrades to `'general comment'` when `path`/`line` are absent — render path needs no change. |
+| FR-003 | Do not mark a fix cycle complete while a body finding from any gating review has produced no commit touching any file it names. "Gating review" = per-review-author newest: for each distinct reviewer login with new reviews since the watermark, only that author's newest submission gates; earlier submissions from the same author are superseded by that author's newer one, but never by another author's. | P1 | Disposition-decision change. Extends today's thread-resolution-based logic. Per-author supersession preserves parallel-review safety: bot and humans post as different logins (`CLUSTER_GITHUB_USERNAME` vs the human), so a human re-review must not silently erase the bot's still-unaddressed body findings. |
+| FR-004 | When a review body contains the `<!-- generacy-cockpit:unanchored-findings -->` marker, parse the block underneath and use each `### Finding <n>`'s `**Files:** <comma-separated-paths>` line as that finding's named-file list for FR-003's "touched a named file?" check. | P1 | High-precision signal. Requires a producer-side render addition in `agency/packages/claude-plugin-cockpit` — the `Finding.file` field already exists in the data model but is currently discarded during `UnanchoredBlock` render (see `agency/specs/422-summary-auto-md-s/data-model.md § Finding, § UnanchoredEntry, § UnanchoredBlock render`). Land the generacy-side parser tolerant of both shapes; the agency-side render change can follow independently. |
+| FR-005 | When the marker is absent — or when the marker is present but a `### Finding <n>` sub-block has no `**Files:**` line — treat that finding as "no named files → does not gate FR-003"; the whole body still reaches the prompt via FR-002. Do not attempt heuristic file-name extraction from prose. | P2 | Fail open, not closed. This is the graceful-degrade path for already-open PRs and older `/cockpit:auto` posters that pre-date the `**Files:**` render addition — they behave as if FR-003's gate were disabled, preserving today's behaviour rather than hard-blocking. |
 | FR-006 | Do not treat body findings as lower priority than inline findings in the prompt — they are typically higher-precision, not lower. | P2 | Label them equivalently; ordering in the prompt is not load-bearing. |
+| FR-007 | When FR-003 blocks the fix cycle from advancing to Disposition A (thread resolves succeeded but no gating-body-finding file was touched), apply the new label `blocked:body-finding-unaddressed` and pause the workflow. This is disposition C — distinct from disposition B (`blocked:stuck-feedback-loop`) so operators can distinguish "fixer looping" from "fixer needs a file outside the diff". | P1 | Free to add: `PrFeedbackMonitorService`'s pre-enqueue skip gate is a bare `l.startsWith('blocked:')` prefix match with no allow-list (`pr-feedback-monitor-service.ts:328-341`), so a new `blocked:` label is honoured with zero monitor-side change. |
 
 ## Success Criteria
 
@@ -82,7 +85,7 @@ Two files named only in bodies stayed **byte-identical to `develop` across all 8
 | SC-001 | Body-only findings addressed in same cycle | 100% | Test: post a review with `--body "update file X"` where X is not in the diff, assert the next commit touches X. |
 | SC-002 | Round-3 regression (inline vs body divergence) | Eliminated | Test: post the same finding text twice, once inline once as body, assert the same edit lands both times. |
 | SC-003 | Cycles falsely marked complete despite unaddressed body findings | 0 | Test: post a body-only finding, run the fixer with a stub that produces no commits, assert cycle does not advance to Disposition A. |
-| SC-004 | `<!-- generacy-cockpit:unanchored-findings -->` markers ignored | 0 | Test: post a body with the marker, assert the file list under it is used for the FR-003 gate. |
+| SC-004 | `<!-- generacy-cockpit:unanchored-findings -->` markers with `**Files:**` lines ignored | 0 | Test: post a body with the marker and a `**Files:** path/to/foo.md` line under `### Finding 1`, assert `path/to/foo.md` is used for the FR-003 gate. Complement: post a body with the marker but no `**Files:**` line, assert the finding does not gate (FR-005 fallback). |
 | SC-005 | Manual-fix commits required per `/cockpit:auto` PR to close body findings | 0 | Observational: monitor the next N `/cockpit:auto` runs post-merge for hand-authored fix commits attributable to dropped body findings. |
 
 ## Assumptions
@@ -90,13 +93,16 @@ Two files named only in bodies stayed **byte-identical to `develop` across all 8
 - The GitHub REST endpoint `GET /repos/{owner}/{repo}/pulls/{n}/reviews` is available to the orchestrator's `GhCliGitHubClient` via `gh api` (no new auth surface).
 - The fixer's existing prompt renderer (`buildFeedbackPrompt` at `pr-feedback-handler.ts:436`) already degrades gracefully when `path`/`line` are missing — no rendering-side change is required, only the input list.
 - "Newer than the last fix cycle" can be determined from existing per-issue state (last-processed review id or timestamp) that the monitor already tracks for the inline-thread path; body-review polling reuses that watermark rather than introducing a second cursor.
-- The `<!-- generacy-cockpit:unanchored-findings -->` marker contract is stable across `/cockpit:auto` and `/cockpit:review` — this fix consumes it but does not define it. If the contract shifts, the parser degrades to FR-005 (marker absent → whole-body-as-text) rather than failing.
+- The `<!-- generacy-cockpit:unanchored-findings -->` marker contract is defined in `agency/packages/claude-plugin-cockpit`; this fix consumes it. The `**Files:**` line under each `### Finding <n>` (required by FR-004 to key the gate) is a *producer-side render addition* — the `Finding.file` field already exists in the data model but is currently discarded during render. Landing this fix does not require the agency-side render change to ship first: the consumer parser degrades gracefully (FR-005) when the line is absent, so already-open PRs and older posters continue working without a hard block. The agency-side render change can land independently.
 - Cycle-completion gating in FR-003 keys off *any* commit touching a named file in the current cycle — it does not attempt to verify that the commit actually addresses the finding's semantics (that remains the reviewer's job on the next round).
+- The "gating review" set for FR-003 is computed per-review-author: for each distinct reviewer login with reviews newer than the watermark, the newest one gates. This assumes reviewer identity is available on the `pulls/{n}/reviews` payload (`review.user.login`) — it is.
+- Disposition C's new label `blocked:body-finding-unaddressed` is honoured by the monitor's existing `blocked:*`-prefix skip gate (`pr-feedback-monitor-service.ts:328-341`); no label-vocabulary registration or allow-list change is required. This is a `workflow-engine` `minor` bump (new label vocabulary) per project changeset rules.
 
 ## Out of Scope
 
 - Rewriting the reply/resolution behaviour to post replies against body findings — GitHub review bodies have no thread to reply to; a `Addressed in <sha>` general comment on the PR is a possible follow-up but not part of this fix.
-- Changing how `/cockpit:auto`'s reviewer *emits* body findings (contract stays as-is; this fix is on the consumer side).
+- Landing the `**Files:** <paths>` render line on the `/cockpit:auto` producer side — that is a coordinated companion change in `agency/packages/claude-plugin-cockpit`, tracked separately. This spec covers the *consumer-side parser* only; the parser is written tolerant of the line's absence (FR-005) so the two changes can land in either order without regression.
+- Changing any other aspect of how `/cockpit:auto`'s reviewer emits body findings (marker shape, `### Finding <n>` sub-block layout, summary/failure-scenario/reason fields — all consumer-observed contract stays as-is).
 - Automatic file-name extraction from arbitrary free-text review bodies without the marker — explicitly deferred (FR-005 fails open).
 - Retroactive processing of body findings from reviews older than the last fix cycle's watermark — the watermark advances normally; historical drift is out of scope.
 - Changes to the test-suite green-path check that let the bug slip undetected — the test suite is not the failure surface here; the fixer is.
