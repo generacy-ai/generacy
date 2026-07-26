@@ -48,12 +48,18 @@ function createMockMonitorService(
 }
 
 /**
- * Create a minimal valid GitHub PR review webhook payload
+ * Create a minimal valid GitHub PR review webhook payload.
+ *
+ * #1049: accepts an optional `merged` field on `pull_request` (default `false`)
+ * so tests can exercise the merged-PR gate.
  */
 function createWebhookPayload(
-  overrides: Partial<GitHubPrReviewWebhookPayload> = {},
+  overrides: Partial<GitHubPrReviewWebhookPayload> & {
+    merged?: boolean;
+  } = {},
 ): GitHubPrReviewWebhookPayload {
-  return {
+  const { merged, ...rest } = overrides;
+  const base: GitHubPrReviewWebhookPayload = {
     action: 'submitted',
     review: {
       id: 12345,
@@ -68,14 +74,16 @@ function createWebhookPayload(
       head: { ref: '100-add-tests', sha: 'abc123' },
       base: { ref: 'main' },
       state: 'open',
+      ...(merged !== undefined ? { merged } : {}),
     },
     repository: {
       owner: { login: 'test-org' },
       name: 'test-repo',
       full_name: 'test-org/test-repo',
     },
-    ...overrides,
+    ...rest,
   };
+  return base;
 }
 
 /**
@@ -713,6 +721,7 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
         prBody: 'Closes #200',
         branchName: '200-feature',
         source: 'webhook',
+        prMerged: false,
       });
     });
 
@@ -1190,6 +1199,74 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
       // Service was still called — route didn't filter
       expect(monitorService.processPrReviewEvent).toHaveBeenCalled();
       expect(res.json().status).toBe('duplicate');
+    });
+  });
+
+  // ==========================================================================
+  // #1049: prMerged propagation from webhook payload → PrReviewEvent
+  // ==========================================================================
+
+  describe('#1049 merged-PR flag propagation', () => {
+    beforeEach(async () => {
+      server = await buildServer({ monitorService });
+    });
+
+    it('SC-006 webhook half: pull_request.merged=true → PrReviewEvent.prMerged=true', async () => {
+      const payload = createWebhookPayload({ merged: true });
+      const rawBody = JSON.stringify(payload);
+
+      await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ prMerged: true }),
+      );
+    });
+
+    it('pull_request.merged=false → PrReviewEvent.prMerged=false', async () => {
+      const payload = createWebhookPayload({ merged: false });
+      const rawBody = JSON.stringify(payload);
+
+      await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ prMerged: false }),
+      );
+    });
+
+    it('boundary-sanitize: merged field omitted → prMerged defaults to false', async () => {
+      // Do not include the merged field at all.
+      const payload = createWebhookPayload();
+      const rawBody = JSON.stringify(payload);
+
+      await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ prMerged: false }),
+      );
     });
   });
 });

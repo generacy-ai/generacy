@@ -2480,6 +2480,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       prBody: 'Closes #4',
       branchName: '4-add-tests',
       source: 'webhook',
+      prMerged: false,
     });
 
     expect(result).toBe(true);

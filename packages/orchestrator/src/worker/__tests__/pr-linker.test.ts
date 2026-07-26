@@ -226,10 +226,13 @@ Fixes #99
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
       expect(result).toEqual({
-        prNumber: 10,
-        issueNumber: 42,
-        linkMethod: 'pr-body',
-        assignees: [],
+        kind: 'ok',
+        link: {
+          prNumber: 10,
+          issueNumber: 42,
+          linkMethod: 'pr-body',
+          assignees: [],
+        },
       });
       expect(github.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
     });
@@ -244,10 +247,13 @@ Fixes #99
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
       expect(result).toEqual({
-        prNumber: 10,
-        issueNumber: 42,
-        linkMethod: 'branch-name',
-        assignees: [],
+        kind: 'ok',
+        link: {
+          prNumber: 10,
+          issueNumber: 42,
+          linkMethod: 'branch-name',
+          assignees: [],
+        },
       });
     });
 
@@ -273,17 +279,20 @@ Fixes #99
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
       expect(result).toEqual({
-        prNumber: 10,
-        issueNumber: 42,
-        linkMethod: 'pr-body',
-        assignees: [],
+        kind: 'ok',
+        link: {
+          prNumber: 10,
+          issueNumber: 42,
+          linkMethod: 'pr-body',
+          assignees: [],
+        },
       });
       // Should fetch issue #42, not #99
       expect(github.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
       expect(github.getIssue).toHaveBeenCalledTimes(1);
     });
 
-    it('should return null when issue does not have an agent:* label', async () => {
+    it('should return not-orchestrated when issue lacks any evidence label', async () => {
       (github.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
         number: 42,
         title: 'Regular Issue',
@@ -303,14 +312,14 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'not-orchestrated', issueNumber: 42 });
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({ prNumber: 10, issueNumber: 42 }),
-        expect.stringContaining('agent:*'),
+        expect.stringContaining('orchestration evidence'),
       );
     });
 
-    it('should return null when issue has no labels at all', async () => {
+    it('should return not-orchestrated when issue has no labels at all', async () => {
       (github.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
         number: 42,
         title: 'Unlabeled Issue',
@@ -330,10 +339,10 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'not-orchestrated', issueNumber: 42 });
     });
 
-    it('should return null when getIssue throws (issue not found)', async () => {
+    it('should return no-issue when getIssue throws (issue not found)', async () => {
       (github.getIssue as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('Not Found'),
       );
@@ -346,14 +355,14 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'no-issue', issueNumber: 42 });
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ prNumber: 10, issueNumber: 42 }),
         expect.stringContaining('Failed to fetch'),
       );
     });
 
-    it('should return null when neither body nor branch have a link', async () => {
+    it('should return no-link when neither body nor branch have a link', async () => {
       const pr = createPrInput({
         number: 10,
         body: 'Just a regular PR',
@@ -362,7 +371,7 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'no-link' });
       expect(github.getIssue).not.toHaveBeenCalled();
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({ prNumber: 10 }),
@@ -370,7 +379,7 @@ Fixes #99
       );
     });
 
-    it('should return null when body is empty and branch has no issue prefix', async () => {
+    it('should return no-link when body is empty and branch has no issue prefix', async () => {
       const pr = createPrInput({
         number: 10,
         body: '',
@@ -379,7 +388,7 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'no-link' });
     });
 
     it('should accept issues with agent:speckit-bugfix label', async () => {
@@ -403,10 +412,13 @@ Fixes #99
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
       expect(result).toEqual({
-        prNumber: 10,
-        issueNumber: 7,
-        linkMethod: 'pr-body',
-        assignees: [],
+        kind: 'ok',
+        link: {
+          prNumber: 10,
+          issueNumber: 7,
+          linkMethod: 'pr-body',
+          assignees: [],
+        },
       });
     });
 
@@ -434,8 +446,8 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).not.toBeNull();
-      expect(result!.issueNumber).toBe(42);
+      expect(result.kind).toBe('ok');
+      expect(result.kind === 'ok' && result.link.issueNumber).toBe(42);
     });
 
     it('should log successful link with method info', async () => {
@@ -487,7 +499,160 @@ Fixes #99
 
       const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
 
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'no-issue', issueNumber: 42 });
+    });
+  });
+
+  // ==========================================================================
+  // #1049: orchestration-guard prefix union (agent:* / workflow:* / completed:*)
+  // ==========================================================================
+
+  describe('#1049 orchestration-guard prefix union', () => {
+    let github: GitHubClient;
+
+    function mockIssueWithLabels(labels: Array<{ name: string }>): void {
+      (github.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test Issue',
+        body: '',
+        state: 'open',
+        labels,
+        assignees: [],
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+      });
+    }
+
+    beforeEach(() => {
+      github = createMockGitHubClient({
+        getIssue: vi.fn(),
+      });
+    });
+
+    // Positive cases: guard returns { kind: 'ok', link: ... }
+    describe('positive cases (returns ok)', () => {
+      const positives: Array<[string, Array<{ name: string }>]> = [
+        ['agent:in-progress alone', [{ name: 'agent:in-progress' }]],
+        ['agent:paused alone', [{ name: 'agent:paused' }]],
+        ['workflow:speckit-feature alone', [{ name: 'workflow:speckit-feature' }]],
+        ['workflow:speckit-bugfix alone', [{ name: 'workflow:speckit-bugfix' }]],
+        ['workflow:custom-workflow (FR-006 workflow-agnostic)', [{ name: 'workflow:custom-workflow' }]],
+        ['completed:specify alone', [{ name: 'completed:specify' }]],
+        ['completed:validate (the reproducer case)', [{ name: 'completed:validate' }]],
+        ['post-requeue shape', [{ name: 'completed:validate' }, { name: 'workflow:speckit-feature' }]],
+        ['phase:* present but workflow:* also present', [{ name: 'workflow:x' }, { name: 'phase:specify' }]],
+      ];
+
+      for (const [label, labels] of positives) {
+        it(`accepts ${label}`, async () => {
+          mockIssueWithLabels(labels);
+          const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+          const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+          expect(result.kind).toBe('ok');
+        });
+      }
+
+      // SC-003 anchor: post-cockpit-advance shape.
+      it('SC-003 regression: post-advance shape (workflow + multiple completed:*)', async () => {
+        mockIssueWithLabels([
+          { name: 'workflow:speckit-feature' },
+          { name: 'completed:validate' },
+          { name: 'completed:implementation-review' },
+        ]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('ok');
+      });
+    });
+
+    // Negative cases: guard returns { kind: 'not-orchestrated', ... }
+    describe('negative cases (returns not-orchestrated)', () => {
+      const negatives: Array<[string, Array<{ name: string }>]> = [
+        ['empty labels', []],
+        ['bug label only', [{ name: 'bug' }]],
+        ['enhancement + good first issue', [{ name: 'enhancement' }, { name: 'good first issue' }]],
+        ['phase:specify alone (Q4=B)', [{ name: 'phase:specify' }]],
+        ['multiple phase:* only', [{ name: 'phase:implement' }, { name: 'phase:validate' }]],
+        ['blocked:* alone is not evidence', [{ name: 'blocked:stuck-feedback-loop' }]],
+        ['prefix match must be exact — agent-based-labeling rejected', [{ name: 'agent-based-labeling' }]],
+        ['no colon on workflow — workflows rejected', [{ name: 'workflows' }]],
+      ];
+
+      for (const [label, labels] of negatives) {
+        it(`rejects ${label}`, async () => {
+          mockIssueWithLabels(labels);
+          const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+          const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+          if (labels.length === 0) {
+            // Empty labels still trigger not-orchestrated (issue exists, no evidence).
+            expect(result).toEqual({ kind: 'not-orchestrated', issueNumber: 42 });
+          } else {
+            expect(result).toEqual({ kind: 'not-orchestrated', issueNumber: 42 });
+          }
+        });
+      }
+    });
+
+    // Boundary behaviour
+    describe('boundary behaviour', () => {
+      it('is case-sensitive: Agent:in-progress does NOT match agent:', async () => {
+        mockIssueWithLabels([{ name: 'Agent:in-progress' }]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('not-orchestrated');
+      });
+
+      it('does not trim: leading whitespace fails', async () => {
+        mockIssueWithLabels([{ name: ' agent:in-progress' }]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('not-orchestrated');
+      });
+    });
+
+    // Invariants I1–I5
+    describe('invariants I1–I5', () => {
+      it('I1: workflow:<name> is durable evidence (never removed) — enough on its own', async () => {
+        mockIssueWithLabels([{ name: 'workflow:speckit-feature' }]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('ok');
+      });
+
+      it('I2: any completed:<phase> is enough on its own (issue passed a phase)', async () => {
+        mockIssueWithLabels([{ name: 'completed:implementation-review' }]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('ok');
+      });
+
+      it('I3: post-advance shape (workflow + multiple completed:*) is accepted', async () => {
+        mockIssueWithLabels([
+          { name: 'workflow:speckit-feature' },
+          { name: 'completed:specify' },
+          { name: 'completed:plan' },
+          { name: 'completed:tasks' },
+          { name: 'completed:implement' },
+          { name: 'completed:validate' },
+        ]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('ok');
+      });
+
+      it('I4: human-authored issue with no speckit labels is not orchestrated', async () => {
+        mockIssueWithLabels([{ name: 'bug' }, { name: 'priority:high' }]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('not-orchestrated');
+      });
+
+      it('I5: phase:* alone is not orchestrated (Q4=B exclusion)', async () => {
+        mockIssueWithLabels([{ name: 'phase:specify' }]);
+        const pr = createPrInput({ number: 10, body: 'Fixes #42', head: { ref: 'x' } });
+        const result = await linker.linkPrToIssue(github, 'owner', 'repo', pr);
+        expect(result.kind).toBe('not-orchestrated');
+      });
     });
   });
 });

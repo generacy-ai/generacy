@@ -397,7 +397,7 @@ export class SmeeWebhookReceiver {
     const monitor = this.prFeedbackMonitor;
     if (!monitor) return;
     const pr = body['pull_request'] as
-      | { number?: number; body?: string | null; head?: { ref?: string } }
+      | { number?: number; body?: string | null; head?: { ref?: string }; merged?: boolean }
       | undefined;
     if (!pr?.number || !pr.head?.ref) {
       this.logger.warn(
@@ -413,6 +413,8 @@ export class SmeeWebhookReceiver {
       prBody: pr.body ?? '',
       branchName: pr.head.ref,
       source: 'webhook',
+      // #1049 (FR-008): boundary-sanitize for backward-compat.
+      prMerged: pr.merged ?? false,
     };
     monitor.processPrReviewEvent(event).catch((error) => {
       this.logger.error(

@@ -113,6 +113,8 @@ export async function setupPrWebhookRoutes(
         prBody: payload.pull_request.body || '',
         branchName: payload.pull_request.head.ref,
         source: 'webhook',
+        // #1049 (FR-008): boundary-sanitize for backward-compat with test doubles.
+        prMerged: payload.pull_request.merged ?? false,
       };
 
       // Record webhook event for adaptive polling health tracking
