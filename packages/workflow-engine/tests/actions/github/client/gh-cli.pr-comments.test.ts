@@ -17,34 +17,48 @@ describe('GhCliGitHubClient.listPrCommentBodies (#869 / FR-004)', () => {
     mockExecuteCommand.mockReset();
   });
 
-  it('splits stdout on newlines and drops empty lines', async () => {
+  it('returns one element per comment, preserving internal newlines (#1047 Finding 1)', async () => {
+    // Real gh output shape: JSON with a `comments` array, each element has
+    // a `body` field. Internal newlines in a body must NOT split into
+    // separate array elements.
     mockExecuteCommand.mockResolvedValue({
       exitCode: 0,
-      stdout: 'first body\nsecond body\n<!-- generacy:pr-feedback-untrusted-notice -->\n',
+      stdout: JSON.stringify({
+        comments: [
+          { body: 'first body' },
+          { body: 'second body' },
+          {
+            body:
+              '<!-- generacy-cockpit:body-findings-unaddressed -->\n\n### Unaddressed findings\n\n- `bot` review #700 finding 1',
+          },
+        ],
+      }),
       stderr: '',
     });
 
     const client = new GhCliGitHubClient('/tmp');
     const bodies = await client.listPrCommentBodies('o', 'r', 42);
 
-    expect(bodies).toEqual([
-      'first body',
-      'second body',
-      '<!-- generacy:pr-feedback-untrusted-notice -->',
-    ]);
+    expect(bodies).toHaveLength(3);
+    expect(bodies[0]).toBe('first body');
+    expect(bodies[1]).toBe('second body');
+    // Third body is multi-line — must remain one array element with its
+    // internal newlines intact so the ack-parser can find both the marker
+    // line AND the enumeration row in the same string.
+    expect(bodies[2]).toContain('<!-- generacy-cockpit:body-findings-unaddressed -->');
+    expect(bodies[2]).toContain('- `bot` review #700 finding 1');
     expect(mockExecuteCommand).toHaveBeenCalledWith(
       'gh',
       [
         'pr', 'view', '42',
         '--repo', 'o/r',
         '--json', 'comments',
-        '--jq', '.comments[].body',
       ],
       expect.objectContaining({ cwd: '/tmp' }),
     );
   });
 
-  it('returns [] when stdout is empty', async () => {
+  it('returns [] when stdout is empty or comments array absent', async () => {
     mockExecuteCommand.mockResolvedValue({
       exitCode: 0,
       stdout: '',
@@ -54,6 +68,25 @@ describe('GhCliGitHubClient.listPrCommentBodies (#869 / FR-004)', () => {
     const client = new GhCliGitHubClient('/tmp');
     const bodies = await client.listPrCommentBodies('o', 'r', 42);
     expect(bodies).toEqual([]);
+  });
+
+  it('drops entries with missing or non-string bodies', async () => {
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        comments: [
+          { body: 'kept' },
+          { body: '' },
+          {},
+          { body: null },
+        ],
+      }),
+      stderr: '',
+    });
+
+    const client = new GhCliGitHubClient('/tmp');
+    const bodies = await client.listPrCommentBodies('o', 'r', 42);
+    expect(bodies).toEqual(['kept']);
   });
 
   it('throws on non-zero exit', async () => {
