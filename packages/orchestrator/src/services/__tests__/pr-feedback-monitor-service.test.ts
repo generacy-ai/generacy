@@ -2228,6 +2228,102 @@ describe('PrFeedbackMonitorService', () => {
     });
 
     // -----------------------------------------------------------------------
+    // Poll-path suppression: probe skipped + drop-log at debug (steady-state cost guard)
+    // -----------------------------------------------------------------------
+    describe('poll-path suppression', () => {
+      it('no-link + source=poll → no probe, debug log with source=poll', async () => {
+        // Even if unresolved threads exist, poll-source MUST NOT probe.
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(710),
+        ]);
+        const event = createPrReviewEvent({
+          prBody: 'No issue reference',
+          branchName: 'feature-no-link',
+          source: 'poll',
+        });
+
+        await service.processPrReviewEvent(event);
+
+        // Probe MUST NOT be called on the poll path.
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        // Debug log fired with the gate and source.
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({ gate: 'no-link', source: 'poll' }),
+          expect.stringContaining('no-link'),
+        );
+        // No info log for this gate on the poll path (steady-state spam guard).
+        const infoWithGate = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => {
+            const obj = c[0] as Record<string, unknown> | undefined;
+            return obj && obj['gate'] === 'no-link';
+          });
+        expect(infoWithGate).toHaveLength(0);
+      });
+
+      it('not-orchestrated + source=poll → no probe, debug log with source=poll', async () => {
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test issue', body: '', state: 'open',
+          labels: [{ name: 'bug' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(711),
+        ]);
+
+        const event = createPrReviewEvent({ source: 'poll' });
+        await service.processPrReviewEvent(event);
+
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'not-orchestrated',
+            source: 'poll',
+            issueNumber: 42,
+          }),
+          expect.stringContaining('not-orchestrated'),
+        );
+        const infoWithGate = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => {
+            const obj = c[0] as Record<string, unknown> | undefined;
+            return obj && obj['gate'] === 'not-orchestrated';
+          });
+        expect(infoWithGate).toHaveLength(0);
+      });
+
+      it('assignees-empty + source=poll → no probe, debug log with source=poll', async () => {
+        const serviceWithUser = new PrFeedbackMonitorService(
+          logger, clientFactory, queueManager, defaultConfig,
+          defaultRepos, 'my-user',
+        );
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test', body: '', state: 'open',
+          labels: [{ name: 'agent:in-progress' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(712),
+        ]);
+
+        const event = createPrReviewEvent({ source: 'poll' });
+        await serviceWithUser.processPrReviewEvent(event);
+
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'assignees-empty',
+            source: 'poll',
+            issueNumber: 42,
+          }),
+          expect.stringContaining('assignees-empty'),
+        );
+
+        serviceWithUser.stopPolling();
+      });
+    });
+
+    // -----------------------------------------------------------------------
     // Probe error path — falls back to debug with probeError field
     // -----------------------------------------------------------------------
     describe('probe error path', () => {

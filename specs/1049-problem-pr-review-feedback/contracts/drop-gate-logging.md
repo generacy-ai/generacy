@@ -94,7 +94,17 @@ async function probeUnresolvedThreads(
 - Reuses existing `client.getPRReviewThreads(owner, repo, prNumber)`.
 - Filters `threads.filter(t => !t.isResolved)`.
 - **Not** invoked for G1 (merged-pr — hardcoded `info`) or G5 (wrong-cluster — hardcoded `debug`).
+- **Not** invoked for the level-lifted gates (G2, G3, G4) when `event.source === 'poll'`. The poll path iterates every open PR in every monitored repo on every cycle; an unconditional GraphQL probe there would amplify to ~60 queries/hour per unlinked/non-orchestrated/unassigned PR against a shared 5 000/hr GitHub budget, and an `info` line per such PR would spam every 60 s indefinitely. Poll-source drops always log at `debug` regardless of thread count.
 - Errors during the probe are non-fatal — the drop log falls back to `debug` with `probeError: <msg>` field. (Rationale: the probe is an observability aid; a failed probe must not itself become an error signal.)
+
+### Poll-path log-line shape
+
+```ts
+this.logger.debug(
+  { owner, repo, prNumber, issueNumber?, gate: '<gate-name>', source: 'poll' },
+  `PR-feedback event dropped by <gate-name> gate (poll path — probe skipped)`,
+);
+```
 
 ## Invariants asserted by tests (SC-004)
 

@@ -460,9 +460,21 @@ export class PrFeedbackMonitorService {
 
   /**
    * Log a drop-gate event with the right level and gate name (FR-004, FR-005).
-   * Probes unresolved-thread count and lifts to `info` when ≥1, else `debug`.
-   * Probe errors fall back to `debug` with `probeError` field — a failed
-   * probe MUST NOT itself become an error signal.
+   *
+   * For `source === 'webhook'` (rare, user-driven), probes unresolved-thread
+   * count and lifts to `info` when ≥1, else `debug`. Probe errors fall back
+   * to `debug` with `probeError` field — a failed probe MUST NOT itself
+   * become an error signal.
+   *
+   * For `source === 'poll'` (steady-state, every ~60s per open PR per repo),
+   * the probe is SKIPPED and the log line drops to `debug`. Rationale: the
+   * poll path iterates every open PR in every monitored repo and reaches
+   * this helper for each unlinked / non-orchestrated / assignees-empty PR
+   * on every cycle. An unconditional GraphQL probe there would amplify to
+   * ~60 queries/hour per PR against a shared 5 000/hr GitHub budget, and an
+   * `info` line per unlinked human/bot PR would spam every 60 s indefinitely.
+   * The lifted-to-`info` diagnostic is preserved for the one-shot webhook
+   * path, which is what operators care about.
    */
   private async dropWithGateLog(
     client: GitHubClient,
@@ -478,6 +490,14 @@ export class PrFeedbackMonitorService {
       result.kind === 'not-orchestrated' ? 'not-orchestrated' :
       'assignees-empty';
     const issueNumber = result.kind === 'no-link' ? undefined : result.issueNumber;
+
+    if (source === 'poll') {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, gate, source },
+        `PR-feedback event dropped by ${gate} gate (poll path — probe skipped)`,
+      );
+      return;
+    }
 
     let unresolvedThreads: number;
     try {

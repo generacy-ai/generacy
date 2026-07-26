@@ -50,15 +50,21 @@ function createMockMonitorService(
 /**
  * Create a minimal valid GitHub PR review webhook payload.
  *
- * #1049: accepts an optional `merged` field on `pull_request` (default `false`)
- * so tests can exercise the merged-PR gate.
+ * #1049: GitHub sends `SimplePullRequest` on `pull_request_review` /
+ * `pull_request_review_comment` events, which omits `merged` but carries
+ * `merged_at` (null on unmerged PRs). Tests accept an optional `merged_at`
+ * to exercise the merged-PR gate against the real wire shape. The optional
+ * `merged` field is retained for a small set of tests that document the
+ * synthetic fallback path.
  */
 function createWebhookPayload(
   overrides: Partial<GitHubPrReviewWebhookPayload> & {
     merged?: boolean;
+    merged_at?: string | null;
+    state?: string;
   } = {},
 ): GitHubPrReviewWebhookPayload {
-  const { merged, ...rest } = overrides;
+  const { merged, merged_at, state, ...rest } = overrides;
   const base: GitHubPrReviewWebhookPayload = {
     action: 'submitted',
     review: {
@@ -73,8 +79,9 @@ function createWebhookPayload(
       body: 'Fixes #100',
       head: { ref: '100-add-tests', sha: 'abc123' },
       base: { ref: 'main' },
-      state: 'open',
+      state: state ?? 'open',
       ...(merged !== undefined ? { merged } : {}),
+      ...(merged_at !== undefined ? { merged_at } : {}),
     },
     repository: {
       owner: { login: 'test-org' },
@@ -1204,6 +1211,14 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
 
   // ==========================================================================
   // #1049: prMerged propagation from webhook payload → PrReviewEvent
+  //
+  // GitHub sends `SimplePullRequest` on pull_request_review and
+  // pull_request_review_comment events. Verified against
+  // @octokit/webhooks-types@7.6.1 and @octokit/openapi-webhooks-types@11.0.0:
+  // `merged` is NOT a field on SimplePullRequest, but `merged_at` and `state`
+  // both ARE. So the production wire shape is (a) merged_at !== null on a
+  // merged PR, (b) merged_at === null on an unmerged PR, and (c) no `merged`
+  // key at all. The realistic-payload cases below drive that shape directly.
   // ==========================================================================
 
   describe('#1049 merged-PR flag propagation', () => {
@@ -1211,8 +1226,11 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
       server = await buildServer({ monitorService });
     });
 
-    it('SC-006 webhook half: pull_request.merged=true → PrReviewEvent.prMerged=true', async () => {
-      const payload = createWebhookPayload({ merged: true });
+    it('SC-006 webhook half: realistic merged PR (merged_at non-null, state=closed, no `merged` key) → prMerged=true', async () => {
+      const payload = createWebhookPayload({
+        merged_at: '2026-07-26T12:34:56Z',
+        state: 'closed',
+      });
       const rawBody = JSON.stringify(payload);
 
       await server.inject({
@@ -1230,8 +1248,11 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
       );
     });
 
-    it('pull_request.merged=false → PrReviewEvent.prMerged=false', async () => {
-      const payload = createWebhookPayload({ merged: false });
+    it('realistic unmerged PR (merged_at=null, state=open, no `merged` key) → prMerged=false', async () => {
+      const payload = createWebhookPayload({
+        merged_at: null,
+        state: 'open',
+      });
       const rawBody = JSON.stringify(payload);
 
       await server.inject({
@@ -1249,8 +1270,8 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
       );
     });
 
-    it('boundary-sanitize: merged field omitted → prMerged defaults to false', async () => {
-      // Do not include the merged field at all.
+    it('both fields absent (defensive) → prMerged=false', async () => {
+      // Neither merged nor merged_at present — should default to false without throwing.
       const payload = createWebhookPayload();
       const rawBody = JSON.stringify(payload);
 
@@ -1266,6 +1287,27 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
 
       expect(monitorService.processPrReviewEvent).toHaveBeenCalledWith(
         expect.objectContaining({ prMerged: false }),
+      );
+    });
+
+    it('synthetic `merged=true` fallback (test-double compatibility) → prMerged=true', async () => {
+      // Defensive fallback path retained for callers/mocks that synthesize
+      // `merged: true` without a corresponding `merged_at`.
+      const payload = createWebhookPayload({ merged: true });
+      const rawBody = JSON.stringify(payload);
+
+      await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ prMerged: true }),
       );
     });
   });

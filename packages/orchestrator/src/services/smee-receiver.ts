@@ -397,7 +397,13 @@ export class SmeeWebhookReceiver {
     const monitor = this.prFeedbackMonitor;
     if (!monitor) return;
     const pr = body['pull_request'] as
-      | { number?: number; body?: string | null; head?: { ref?: string }; merged?: boolean }
+      | {
+          number?: number;
+          body?: string | null;
+          head?: { ref?: string };
+          merged?: boolean;
+          merged_at?: string | null;
+        }
       | undefined;
     if (!pr?.number || !pr.head?.ref) {
       this.logger.warn(
@@ -413,8 +419,10 @@ export class SmeeWebhookReceiver {
       prBody: pr.body ?? '',
       branchName: pr.head.ref,
       source: 'webhook',
-      // #1049 (FR-008): boundary-sanitize for backward-compat.
-      prMerged: pr.merged ?? false,
+      // #1049 (FR-008): GitHub sends `SimplePullRequest` on review-like events,
+      // which omits `merged` but carries `merged_at`. Derive from `merged_at`
+      // first; fall back to `merged` only when `merged_at` is undefined.
+      prMerged: pr.merged_at != null ? true : pr.merged ?? false,
     };
     monitor.processPrReviewEvent(event).catch((error) => {
       this.logger.error(
