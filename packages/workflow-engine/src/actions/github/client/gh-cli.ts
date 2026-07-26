@@ -698,6 +698,7 @@ export class GhCliGitHubClient implements GitHubClient {
       body: string | null;
       state: string;
       submitted_at: string;
+      author_association?: string;
     }> | null;
 
     if (!data) return [];
@@ -710,18 +711,33 @@ export class GhCliGitHubClient implements GitHubClient {
       'PENDING',
     ]);
 
-    return data.map(r => {
+    // #1047 Finding 7: skip individual reviews with unrecognized `state`
+    // rather than throwing for the whole batch. A single future GitHub state
+    // (or casing/shape drift) must not silently disable the entire
+    // #1047 gate — a skip with a debug log preserves every OTHER review's
+    // participation in the gate and keeps the operator informed.
+    const reviews: Review[] = [];
+    for (const r of data) {
       if (!allowedStates.has(r.state as ReviewSubmissionState)) {
-        throw new Error(`Unknown review state "${r.state}" on PR #${prNumber} review ${r.id}`);
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[gh-cli] Skipping review ${r.id} on PR #${prNumber} — unrecognized state "${r.state}"`,
+        );
+        continue;
       }
-      return {
+      const review: Review = {
         id: r.id,
         user: { login: r.user?.login ?? '' },
         body: r.body ?? '',
         state: r.state as ReviewSubmissionState,
         submittedAt: r.submitted_at,
       };
-    });
+      if (typeof r.author_association === 'string' && r.author_association.length > 0) {
+        review.authorAssociation = r.author_association;
+      }
+      reviews.push(review);
+    }
+    return reviews;
   }
 
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {
@@ -838,16 +854,26 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listPrCommentBodies(owner: string, repo: string, prNumber: number): Promise<string[]> {
+    // #1047 Finding 1: bodies may contain internal newlines (Disposition-C
+    // marker + enumeration rows straddle multiple lines). Splitting raw
+    // `--jq '.comments[].body'` stdout on `\n` produced one element per LINE,
+    // not per comment — the marker line ended up alone in the array and the
+    // ack-parser saw zero enumeration rows. Fix: pull the JSON array of
+    // comments directly and extract each `.body` in JS, preserving internal
+    // newlines as-is.
     const result = await this.executeGh([
       'pr', 'view', String(prNumber),
       '--repo', `${owner}/${repo}`,
       '--json', 'comments',
-      '--jq', '.comments[].body',
     ]);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to list PR comments for ${owner}/${repo}#${prNumber}: ${result.stderr}`);
     }
-    return result.stdout.split('\n').filter(l => l.length > 0);
+    const data = parseJSONSafe(result.stdout) as { comments?: Array<{ body?: string }> } | null;
+    if (!data || !Array.isArray(data.comments)) return [];
+    return data.comments
+      .map(c => (typeof c.body === 'string' ? c.body : ''))
+      .filter(b => b.length > 0);
   }
 
   async postPrComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {

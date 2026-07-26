@@ -32,3 +32,11 @@ via `gh api /repos/{owner}/{repo}/pulls/{n}/reviews`. Introduces the new label
 
 No new npm dependencies. No changes to the monitor's blocked-label skip gate —
 `l.startsWith('blocked:')` honors the new label with zero allow-list change.
+
+**Scope limit** — the fixer only reaches the review-body path when a review
+also carries at least one trusted inline thread. `PrFeedbackMonitorService` still
+gates enqueue on `unresolvedThreadIds.length > 0`, so a review submitted with a
+body finding and NO inline comments does not schedule the fixer. Widening the
+monitor's enqueue trigger to reviews-with-body-findings is tracked as a
+follow-up; body-only reviews should currently be paired with at least one inline
+comment (or the operator can add an inline note before submitting).

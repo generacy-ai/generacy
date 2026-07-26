@@ -84,7 +84,7 @@ Two files named only in bodies stayed **byte-identical to `develop` across all 8
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Body-only findings addressed in same cycle | 100% | Test: post a review with `--body "update file X"` where X is not in the diff, assert the next commit touches X. |
+| SC-001 | Body findings addressed in same cycle when paired with at least one trusted inline thread | 100% | Test: post a review with an inline comment PLUS `--body "update file X"` where X is not in the diff, assert the next commit touches X. **Scope limit**: `PrFeedbackMonitorService` only enqueues when `unresolvedThreadIds.length > 0`, so reviews carrying ONLY a body finding and no inline threads do not schedule the fixer at all — the fix here is consumer-side (handler consumes bodies when the monitor enqueues on other grounds). Widening the monitor's enqueue trigger to reviews-with-body-findings is out of scope for this PR and tracked as a follow-up. |
 | SC-002 | Round-3 regression (inline vs body divergence) | Eliminated | Test: post the same finding text twice, once inline once as body, assert the same edit lands both times. |
 | SC-003 | Cycles falsely marked complete despite unaddressed body findings | 0 | Test: post a body-only finding, run the fixer with a stub that produces no commits, assert cycle does not advance to Disposition A. |
 | SC-004 | `<!-- generacy-cockpit:unanchored-findings -->` markers with `**Files:**` lines ignored | 0 | Test: post a body with the marker and a `**Files:** path/to/foo.md` line under `### Finding 1`, assert `path/to/foo.md` is used for the FR-003 gate. Complement: post a body with the marker but no `**Files:**` line, assert the finding does not gate (FR-005 fallback). |

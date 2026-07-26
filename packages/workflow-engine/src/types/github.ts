@@ -139,6 +139,13 @@ export interface Review {
   state: ReviewSubmissionState;
   /** ISO-8601 timestamp. Used for per-author "newest" tie-breaking. */
   submittedAt: string;
+  /**
+   * REST `author_association` tier for the reviewer — e.g. OWNER, MEMBER,
+   * COLLABORATOR, NONE. Consumers pass this through `isTrustedCommentAuthor`
+   * to gate whether the review body may inject fixer content (#1047 Finding 3).
+   * `undefined` if the upstream response omitted it.
+   */
+  authorAssociation?: string;
 }
 
 /**

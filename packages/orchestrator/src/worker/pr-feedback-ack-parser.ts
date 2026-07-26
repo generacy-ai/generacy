@@ -53,3 +53,21 @@ function parseEntries(body: string): AcknowledgmentEntry[] {
   }
   return entries;
 }
+
+/**
+ * Parse a single Disposition-C marker comment body into its enumeration key
+ * set. Returns an empty set when the marker is absent or no rows parse.
+ *
+ * Consumed by `applyDispositionC` (#1047 Finding 4) to decide whether a new
+ * marker comment should be posted — it must be, unless some prior marker
+ * already enumerates the exact same set of unaddressed findings.
+ */
+export function parseSingleMarkerEntries(body: string): AcknowledgedFindings {
+  if (!body.includes(BODY_FINDINGS_UNADDRESSED_MARKER)) return new Set();
+  const entries = parseEntries(body);
+  const keys = new Set<string>();
+  for (const e of entries) {
+    keys.add(`${e.reviewer}:${e.reviewId}:${e.findingIndex}`);
+  }
+  return keys;
+}
