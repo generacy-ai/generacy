@@ -9,6 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { GateAckInputSchema } from '../gates/schemas.js';
 import { cockpitGateAck } from '../tools/cockpit_gate_ack.js';
 
 function jsonResponse(status: number, body: unknown, text?: string): Response {
@@ -235,6 +236,28 @@ describe('cockpit_gate_ack parity — frozen gate-outcome (#1022/#843)', () => {
     expect(result.status).toBe('error');
     if (result.status !== 'error') return;
     expect(result.class).toBe('transport');
+  });
+
+  // #1053 — runId is accepted (`.optional()`) on the ack input for envelope
+  // symmetry with cockpit_gate_open. The ack path ignores it — the outbound
+  // gate-outcome body has no runId field.
+  it('#1053: schema accepts an explicit runId (no invalid-args)', () => {
+    const result = GateAckInputSchema.safeParse({ ...CANONICAL_INPUT, runId: 'RA' });
+    expect(result.success).toBe(true);
+  });
+
+  it('#1053: schema still parses without a runId (back-compat)', () => {
+    const result = GateAckInputSchema.safeParse(CANONICAL_INPUT);
+    expect(result.success).toBe(true);
+  });
+
+  it('#1053: schema rejects an empty-string runId with invalid-args shape', () => {
+    const result = GateAckInputSchema.safeParse({ ...CANONICAL_INPUT, runId: '' });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    // Empty-string is rejected by `z.string().min(1)` — same shape as the
+    // existing invalid-args cases below.
+    expect(result.error.issues.some((i) => i.path.includes('runId'))).toBe(true);
   });
 
   it('timeout → class: transport, detail mentions timeout', async () => {

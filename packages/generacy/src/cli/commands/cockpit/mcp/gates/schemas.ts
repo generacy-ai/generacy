@@ -58,18 +58,24 @@ export type GateOption = z.infer<typeof GateOptionSchema>;
 
 // ---------------------------------------------------------------------------
 // Gate identity derivation (frozen contract).
-//   gateKey = `${issueRef}:${gateType}:${generation}`  (issueRef is owner/repo#N)
+//   gateKey = `${issueRef}:${gateType}:${generation}[:${runId}]`
 //   gateId  = sha256(gateKey) hex, first 24 chars.
 // `generation` is the gateType-specific discriminator (batch id, head SHA,
 // phase number, draft hash, occurrence counter, drain counter, …); coerced to
 // a string so numeric discriminators (phase 2) are stable.
+// `runId` (#1053) is the optional per-run discriminator that guarantees a
+// fresh gateId across independent runs of the same natural gate. When absent
+// the output is byte-for-byte compatible with the pre-#1053 shape. Signature
+// mirrors the canonical `@generacy-ai/cockpit` derivation.
 // ---------------------------------------------------------------------------
 export function deriveGateKey(
   issueRef: string,
   gateType: GateType,
   generation: string | number,
+  runId?: string,
 ): string {
-  return `${issueRef}:${gateType}:${String(generation)}`;
+  const base = `${issueRef}:${gateType}:${String(generation)}`;
+  return runId === undefined ? base : `${base}:${runId}`;
 }
 
 export function deriveGateId(gateKey: string): string {
@@ -102,6 +108,14 @@ export const GateOpenInputSchema = z
     sessionId: z.string().min(1),
     /** ISO-8601; defaulted to now() by the tool when omitted. */
     askedAt: z.string().datetime().optional(),
+    /**
+     * Optional per-run discriminator (#1053). When passed, folded into `gateKey`
+     * as a trailing `:${runId}` segment so re-runs against the same natural
+     * gate produce a fresh `gateId`. When omitted, the tool mints a per-process
+     * fallback from `INSTANCE_NONCE` — never validated as `default(...)` here so
+     * the source of the fallback is observable at the tool boundary.
+     */
+    runId: z.string().min(1).optional(),
   })
   .strict();
 export type GateOpenInput = z.infer<typeof GateOpenInputSchema>;
@@ -147,6 +161,13 @@ export const GateAckInputSchema = z
     outcome: GateOutcomeSchema,
     detail: z.string().optional(),
     at: z.string().datetime().optional(),
+    /**
+     * Optional per-run discriminator (#1053). Accepted-and-ignored on the ack
+     * path — no derivation happens here (the ack targets an existing gateId).
+     * Present so auto-loop callers can pass the same envelope shape to both
+     * `cockpit_gate_open` and `cockpit_gate_ack` without tripping `.strict()`.
+     */
+    runId: z.string().min(1).optional(),
   })
   .strict();
 export type GateAckInput = z.infer<typeof GateAckInputSchema>;

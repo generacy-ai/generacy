@@ -107,18 +107,23 @@ export type GateAnswer = z.infer<typeof GateAnswerSchema>;
 
 // ---------------------------------------------------------------------------
 // Gate identity derivation.
-//   gateKey = "<owner>/<repo>#<issue>:<gateType>:<generation>"
-//           = `${issueRef}:${gateType}:${generation}`  (issueRef is owner/repo#N)
+//   gateKey = "<owner>/<repo>#<issue>:<gateType>:<generation>[:<runId>]"
+//           = `${issueRef}:${gateType}:${generation}[:${runId}]`
 //   gateId  = sha256(gateKey) hex, first 24 chars.
 // `generation` is gateType-specific (batch id, head SHA, phase number, drain
 // counter, …); coerced to string so numeric discriminators (phase 2) are stable.
+// `runId` (#1053) is the optional per-run discriminator that guarantees a
+// fresh gateId across independent runs of the same natural gate. When absent
+// the output is byte-for-byte compatible with the pre-#1053 shape.
 // ---------------------------------------------------------------------------
 export function deriveGateKey(
   issueRef: string,
   gateType: GateType,
   generation: string | number,
+  runId?: string,
 ): string {
-  return `${issueRef}:${gateType}:${String(generation)}`;
+  const base = `${issueRef}:${gateType}:${String(generation)}`;
+  return runId === undefined ? base : `${base}:${runId}`;
 }
 
 export function deriveGateId(gateKey: string): string {

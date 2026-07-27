@@ -39,7 +39,12 @@ const BASE_DEPS = {
 const ISSUE_REF = 'generacy-ai/generacy#1022';
 const GATE_TYPE = 'clarification';
 const GENERATION = 'batch-7f3a2b';
-const EXPECTED_KEY = `${ISSUE_REF}:${GATE_TYPE}:${GENERATION}`;
+// #1053 — pin the derivation against the explicit-runId path so the assertion
+// stays deterministic. The fallback path folds INSTANCE_NONCE (per-process,
+// randomly generated at module load) into gateKey and is exercised in
+// cockpit-gate-open-runid.test.ts.
+const TEST_RUN_ID = 'parity-run-1053';
+const EXPECTED_KEY = `${ISSUE_REF}:${GATE_TYPE}:${GENERATION}:${TEST_RUN_ID}`;
 const EXPECTED_ID = gateIdFor(EXPECTED_KEY);
 
 const CANONICAL_INPUT: Record<string, unknown> = {
@@ -58,6 +63,7 @@ const CANONICAL_INPUT: Record<string, unknown> = {
   allowFreeText: true,
   sessionId: 'sess-abcdef0123456789',
   askedAt: '2026-07-22T12:00:00.000Z',
+  runId: TEST_RUN_ID,
 };
 
 describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
@@ -101,7 +107,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
 
   it('coerces a numeric generation into gateKey (phase-queue on the epic ref)', async () => {
     const epicRef = 'generacy-ai/generacy#1000';
-    const key = `${epicRef}:phase-queue:2`;
+    const key = `${epicRef}:phase-queue:2:${TEST_RUN_ID}`;
     const id = gateIdFor(key);
     const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
@@ -122,7 +128,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   });
 
   it('forwards branch + prNumber when supplied (implementation-review)', async () => {
-    const key = `${ISSUE_REF}:implementation-review:deadbeefcafe`;
+    const key = `${ISSUE_REF}:implementation-review:deadbeefcafe:${TEST_RUN_ID}`;
     const id = gateIdFor(key);
     const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
