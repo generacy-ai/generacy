@@ -205,6 +205,58 @@ describe('evaluatePushGuard — per-lookup failure isolation', () => {
       expect(decision.reason).toBe('pr-lookup-failed');
     }
   });
+
+  it('findPRForBranchAnyState throws SYNCHRONOUSLY → refuse { reason: pr-lookup-failed } (Round 3 Finding 1)', async () => {
+    // Regression guard for PR #1052 Round 3 Finding 1: the split try/catch
+    // introduced in Finding 4 only wrapped the AWAIT, not the CALL. A
+    // GitHubClient implementation that lacks the method (or validates
+    // arguments before returning a promise) throws synchronously, which
+    // escapes the try/catch and crashes the whole phase loop. The fix wraps
+    // each invocation in `Promise.resolve().then(...)` so a synchronous
+    // throw surfaces as a promise rejection the per-lookup try catches.
+    const findPr = vi.fn(() => {
+      // Simulates `TypeError: github.findPRForBranchAnyState is not a function`
+      // which is what a stub missing the method actually throws.
+      throw new TypeError('findPRForBranchAnyState is not a function');
+    });
+    const remoteBranchExists = vi.fn(async () => true);
+    const decision = await evaluatePushGuard({
+      owner: 'o',
+      repo: 'r',
+      branch: 'feature',
+      issueNumber: 100,
+      github: { findPRForBranchAnyState: findPr as never },
+      git: { remoteBranchExists },
+    });
+    expect(decision).toEqual({
+      kind: 'refuse',
+      reason: 'pr-lookup-failed',
+      prNumber: null,
+      branch: 'feature',
+      owner: 'o',
+      repo: 'r',
+      issueNumber: 100,
+    });
+  });
+
+  it('remoteBranchExists throws SYNCHRONOUSLY → treated as branch present (Round 3 Finding 1)', async () => {
+    // Same synchronous-throw shape but on the branch-existence lookup.
+    // ls-remote transient is treated as "branch present" so an open PR does
+    // not falsely refuse.
+    const findPr = vi.fn(async () => makePr({ state: 'open' }));
+    const remoteBranchExists = vi.fn(() => {
+      throw new TypeError('remoteBranchExists is not a function');
+    });
+    const decision = await evaluatePushGuard({
+      owner: 'o',
+      repo: 'r',
+      branch: 'feature',
+      issueNumber: 100,
+      github: { findPRForBranchAnyState: findPr },
+      git: { remoteBranchExists: remoteBranchExists as never },
+    });
+    expect(decision).toEqual({ kind: 'allow' });
+  });
 });
 
 // -------------------------------------------------------------------------

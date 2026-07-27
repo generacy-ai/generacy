@@ -80,9 +80,14 @@ export async function evaluatePushGuard(input: PushGuardInput): Promise<PushGuar
   // PR #1052 review Finding 4: split fail-isolation per lookup so a `gh`
   // failure does not silently reclassify as "no PR". Kick both lookups off
   // in parallel and await individually so one failure does not cancel the
-  // other's result.
-  const prPromise = github.findPRForBranchAnyState(owner, repo, branch);
-  const branchPromise = git.remoteBranchExists(branch);
+  // other's result. PR #1052 review Round 3 Finding 1: wrap each invocation
+  // in `Promise.resolve().then(...)` so a SYNCHRONOUS throw at the call site
+  // (e.g. a `GitHubClient` implementation that lacks the method, or one that
+  // validates arguments before returning a promise) surfaces as a promise
+  // rejection the per-lookup `try` catches — instead of escaping the guard
+  // entirely and crashing the phase loop.
+  const prPromise = Promise.resolve().then(() => github.findPRForBranchAnyState(owner, repo, branch));
+  const branchPromise = Promise.resolve().then(() => git.remoteBranchExists(branch));
 
   let pr: Awaited<typeof prPromise>;
   try {
