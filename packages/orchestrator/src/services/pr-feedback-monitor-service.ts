@@ -14,7 +14,7 @@ import type {
   PrFeedbackMetadata,
 } from '../types/monitor.js';
 import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
-import { PrLinker, type PrLinkInput } from '../worker/pr-linker.js';
+import { PrLinker, type PrLinkInput, type PrLinkResult } from '../worker/pr-linker.js';
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
@@ -138,6 +138,17 @@ export class PrFeedbackMonitorService {
 
     const client = this.createClient(undefined, this.tokenProvider);
 
+    // #1049 (FR-008): merged-PR gate — first check, before PrLinker. Runs
+    // before any checkout/fetch/push code path can run. Poll path always
+    // hardcodes `prMerged: false`, so this gate is webhook-driven.
+    if (event.prMerged) {
+      this.logger.info(
+        { owner, repo, prNumber, gate: 'merged-pr', source },
+        'PR-feedback event dropped by merged-pr gate (PR is merged; reviews on merged PRs are not processed)',
+      );
+      return false;
+    }
+
     // 1. Link PR to orchestrated issue
     const prInput: PrLinkInput = {
       number: prNumber,
@@ -145,30 +156,35 @@ export class PrFeedbackMonitorService {
       head: { ref: branchName },
     };
 
-    const link = await this.prLinker.linkPrToIssue(client, owner, repo, prInput);
-    if (!link) {
-      this.logger.debug(
-        { owner, repo, prNumber },
-        'PR not linked to an orchestrated issue — skipping',
-      );
+    const linkResult = await this.prLinker.linkPrToIssue(client, owner, repo, prInput);
+    if (linkResult.kind !== 'ok') {
+      if (linkResult.kind === 'no-issue') {
+        this.logger.warn(
+          { owner, repo, prNumber, issueNumber: linkResult.issueNumber, gate: 'no-issue', source },
+          'PR-feedback event dropped by no-issue gate (linked issue could not be fetched)',
+        );
+        return false;
+      }
+      await this.dropWithGateLog(client, event, linkResult);
       return false;
     }
 
+    const { link } = linkResult;
     const { issueNumber, linkMethod, assignees } = link;
 
     // 2. Assignee check — skip PR feedback for issues not assigned to this cluster
     //    Uses assignees returned by PrLinker to avoid a duplicate getIssue() call
     if (this.clusterGithubUsername) {
       if (assignees.length === 0) {
-        this.logger.warn(
-          { owner, repo, issueNumber, prNumber },
-          'Skipping PR feedback: linked issue has no assignees',
-        );
+        await this.dropWithGateLog(client, event, {
+          kind: 'assignees-empty',
+          issueNumber,
+        });
         return false;
       }
       if (!assignees.includes(this.clusterGithubUsername)) {
         this.logger.debug(
-          { owner, repo, issueNumber, prNumber, assignees },
+          { owner, repo, issueNumber, prNumber, assignees, gate: 'wrong-cluster', source },
           'Skipping PR feedback: linked issue not assigned to this cluster',
         );
         return false;
@@ -347,6 +363,7 @@ export class PrFeedbackMonitorService {
           blockedLabel,
           unresolvedThreads: unresolvedThreadIds.length,
           reason: 'blocked-label-present',
+          gate: 'blocked-label-present',
         },
         'Skipping PR-feedback enqueue while blocked:* label is present',
       );
@@ -419,6 +436,94 @@ export class PrFeedbackMonitorService {
     );
 
     return true;
+  }
+
+  // ==========================================================================
+  // #1049 / FR-004, FR-005: drop-gate logging
+  // ==========================================================================
+
+  /**
+   * Probe for unresolved review-thread count. Runs the existing GraphQL
+   * `getPRReviewThreads` call and counts unresolved threads. Used only at
+   * drop-time to decide whether to lift a drop-gate log line from `debug`
+   * to `info` (FR-004). Not called for merged-pr / wrong-cluster gates.
+   */
+  private async probeUnresolvedThreads(
+    client: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<number> {
+    const threads = await client.getPRReviewThreads(owner, repo, prNumber);
+    return threads.filter(t => !t.isResolved).length;
+  }
+
+  /**
+   * Log a drop-gate event with the right level and gate name (FR-004, FR-005).
+   *
+   * For `source === 'webhook'` (rare, user-driven), probes unresolved-thread
+   * count and lifts to `info` when ≥1, else `debug`. Probe errors fall back
+   * to `debug` with `probeError` field — a failed probe MUST NOT itself
+   * become an error signal.
+   *
+   * For `source === 'poll'` (steady-state, every ~60s per open PR per repo),
+   * the probe is SKIPPED and the log line drops to `debug`. Rationale: the
+   * poll path iterates every open PR in every monitored repo and reaches
+   * this helper for each unlinked / non-orchestrated / assignees-empty PR
+   * on every cycle. An unconditional GraphQL probe there would amplify to
+   * ~60 queries/hour per PR against a shared 5 000/hr GitHub budget, and an
+   * `info` line per unlinked human/bot PR would spam every 60 s indefinitely.
+   * The lifted-to-`info` diagnostic is preserved for the one-shot webhook
+   * path, which is what operators care about.
+   */
+  private async dropWithGateLog(
+    client: GitHubClient,
+    event: PrReviewEvent,
+    result:
+      | Extract<PrLinkResult, { kind: 'no-link' }>
+      | Extract<PrLinkResult, { kind: 'not-orchestrated' }>
+      | { kind: 'assignees-empty'; issueNumber: number },
+  ): Promise<void> {
+    const { owner, repo, prNumber, source } = event;
+    const gate =
+      result.kind === 'no-link' ? 'no-link' :
+      result.kind === 'not-orchestrated' ? 'not-orchestrated' :
+      'assignees-empty';
+    const issueNumber = result.kind === 'no-link' ? undefined : result.issueNumber;
+
+    if (source === 'poll') {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, gate, source },
+        `PR-feedback event dropped by ${gate} gate (poll path — probe skipped)`,
+      );
+      return;
+    }
+
+    let unresolvedThreads: number;
+    try {
+      unresolvedThreads = await this.probeUnresolvedThreads(client, owner, repo, prNumber);
+    } catch (err) {
+      this.logger.debug(
+        {
+          owner, repo, prNumber, issueNumber, gate, source,
+          probeError: err instanceof Error ? err.message : String(err),
+        },
+        `PR-feedback event dropped by ${gate} gate (probe failed)`,
+      );
+      return;
+    }
+
+    if (unresolvedThreads >= 1) {
+      this.logger.info(
+        { owner, repo, prNumber, issueNumber, gate, source, unresolvedThreads },
+        `PR-feedback event dropped by ${gate} gate (PR has ${unresolvedThreads} unresolved thread(s))`,
+      );
+    } else {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, gate, source, unresolvedThreads: 0 },
+        `PR-feedback event dropped by ${gate} gate (no unresolved threads)`,
+      );
+    }
   }
 
   // ==========================================================================
@@ -627,6 +732,8 @@ export class PrFeedbackMonitorService {
         prBody: pr.body ?? '',
         branchName: pr.head.ref,
         source: 'poll',
+        // #1049 (D5): poll uses listOpenPullRequests → open-only invariant.
+        prMerged: false,
       };
 
       try {

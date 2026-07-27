@@ -86,6 +86,14 @@ export interface PrReviewEvent {
   branchName: string;
   /** How this event was detected */
   source: 'webhook' | 'poll';
+  /**
+   * NEW (#1049): whether the PR is currently merged. Read from
+   * `payload.pull_request.merged` on the webhook path; always `false`
+   * on the poll path (poll lists open PRs only). Used by the merged-PR
+   * gate (FR-008) to reject reviews on merged PRs before any checkout
+   * / fetch / push code path runs — see spec US4.
+   */
+  prMerged: boolean;
 }
 
 /**
@@ -128,6 +136,8 @@ export interface GitHubPrReviewWebhookPayload {
     head: { ref: string; sha: string };
     base: { ref: string };
     state: string;
+    merged?: boolean;             // NEW (#1049)
+    merged_at?: string | null;    // NEW (#1049) — carried for observability; not consumed
   };
   repository: {
     owner: { login: string };

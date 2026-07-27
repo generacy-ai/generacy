@@ -113,6 +113,14 @@ export async function setupPrWebhookRoutes(
         prBody: payload.pull_request.body || '',
         branchName: payload.pull_request.head.ref,
         source: 'webhook',
+        // #1049 (FR-008): GitHub sends `SimplePullRequest` on pull_request_review /
+        // pull_request_review_comment events, which omits `merged` but carries
+        // `merged_at` (null on unmerged PRs). Derive from `merged_at` first;
+        // only fall back to `merged` (rare/synthetic) if `merged_at` is undefined.
+        prMerged:
+          payload.pull_request.merged_at != null
+            ? true
+            : payload.pull_request.merged ?? false,
       };
 
       // Record webhook event for adaptive polling health tracking
