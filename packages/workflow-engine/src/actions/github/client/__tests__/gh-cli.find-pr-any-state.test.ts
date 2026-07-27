@@ -104,11 +104,52 @@ describe('GhCliGitHubClient.findPRForBranchAnyState', () => {
     expect(result!.number).toBe(300);
   });
 
-  it('returns null when gh pr list exits non-zero', async () => {
+  it('throws when gh pr list exits non-zero (PR #1052 review Finding 4)', async () => {
+    // Regression guard: previously returned `null` on non-zero exit, which
+    // let a rate-limited `gh` call silently reclassify as "no PR ever" and
+    // caused the pre-push guard to allow the exact resurrection push it
+    // exists to block. `push-guard.ts` now distinguishes throw (refuse
+    // `pr-lookup-failed`) from `null` (no PR — allow first-push case).
     mockExecuteCommand.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'oops' });
     const client = new GhCliGitHubClient('/tmp');
+    await expect(client.findPRForBranchAnyState('o', 'r', 'feature')).rejects.toThrow(
+      /findPRForBranchAnyState: gh pr list exited 1/,
+    );
+  });
+
+  it('prefers a MERGED PR over a newer CLOSED PR on the same branch (PR #1052 review Finding 7)', async () => {
+    // Live fixture: `gh pr list -R generacy-ai/generacy-cloud
+    // --head 884-problem-refreshaccesstoken --state all` returns the newest
+    // CLOSED PR before the older MERGED one. Historically `--limit 1`
+    // dropped the merged one and the guard emitted `pr-closed` instead of
+    // the more diagnostic `pr-merged`. This test drives the merged-
+    // precedence path by returning both rows and asserting the merged PR
+    // wins.
+    const merged = JSON.parse(prJson({ state: 'MERGED', number: 885 }))[0];
+    const closed = JSON.parse(prJson({ state: 'CLOSED', number: 886 }))[0];
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      // Newest-first is the default gh sort; put CLOSED first to mirror the
+      // observed fixture.
+      stdout: JSON.stringify([closed, merged]),
+      stderr: '',
+    });
+    const client = new GhCliGitHubClient('/tmp');
     const result = await client.findPRForBranchAnyState('o', 'r', 'feature');
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.state).toBe('merged');
+    expect(result!.number).toBe(885);
+  });
+
+  it('raises the --limit ceiling from 1 to allow merged-precedence to work (PR #1052 review Finding 7)', async () => {
+    mockExecuteCommand.mockResolvedValue({ exitCode: 0, stdout: '[]', stderr: '' });
+    const client = new GhCliGitHubClient('/tmp');
+    await client.findPRForBranchAnyState('o', 'r', 'feature');
+    const [, args] = mockExecuteCommand.mock.calls[0]!;
+    const limitIdx = (args as string[]).indexOf('--limit');
+    expect(limitIdx).toBeGreaterThanOrEqual(0);
+    const limit = Number((args as string[])[limitIdx + 1]);
+    expect(limit).toBeGreaterThan(1);
   });
 
   it('passes --state all in the argv to executeGh', async () => {

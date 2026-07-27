@@ -924,17 +924,35 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async findPRForBranchAnyState(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
+    // #1051 PR #1052 review Finding 7: raise the limit and prefer a merged PR
+    // if multiple exist. `--limit 1` returns newest by `created_at DESC`; a
+    // fixture with a MERGED PR older than a CLOSED PR on the same head branch
+    // (verified live against `884-problem-refreshaccesstoken`) would drop the
+    // MERGED and report `reason: 'pr-closed'` at the guard's less-diagnostic
+    // row. Merged-precedence is the intent (see push-guard.ts row 1); raise
+    // to a small ceiling (10) so we can pick a merged PR when both exist.
     const result = await this.executeGh([
       'pr', 'list',
       '-R', `${owner}/${repo}`,
       '--head', branch,
       '--state', 'all',
       '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
-      '--limit', '1',
+      '--limit', '10',
     ]);
 
+    // #1051 PR #1052 review Finding 4: throw on non-zero exit rather than
+    // silently returning null. `findPRForBranch` (open-only) also returns
+    // null on non-zero exit, but that method's callers do not rely on the
+    // absence of a PR to decide safety — they can fall through to
+    // `createPullRequest` which surfaces its own error. `push-guard.ts` DOES
+    // rely on the distinction: a rate-limited `gh` call collapsed to `null`
+    // reclassifies as "no PR ever" → the guard silently allows the exact
+    // resurrection push it exists to block. Throwing lets the guard treat
+    // the two cases differently (see guard's try/catch split).
     if (result.exitCode !== 0) {
-      return null;
+      throw new Error(
+        `findPRForBranchAnyState: gh pr list exited ${result.exitCode} for ${owner}/${repo} head=${branch}: ${result.stderr}`,
+      );
     }
 
     const data = parseJSONSafe(result.stdout) as Array<Record<string, unknown>> | null;
@@ -942,25 +960,32 @@ export class GhCliGitHubClient implements GitHubClient {
       return null;
     }
 
-    const pr = data[0]!;
-    const stateRaw = String(pr['state'] ?? '').toLowerCase();
-    const state: 'open' | 'closed' | 'merged' =
-      stateRaw === 'merged' ? 'merged' : stateRaw === 'closed' ? 'closed' : 'open';
-    return {
-      number: pr['number'] as number,
-      title: pr['title'] as string,
-      body: pr['body'] as string ?? '',
-      state,
-      draft: pr['isDraft'] as boolean ?? false,
-      head: { ref: pr['headRefName'] as string, sha: '', repo: `${owner}/${repo}` },
-      base: { ref: pr['baseRefName'] as string, sha: '', repo: `${owner}/${repo}` },
-      labels: ((pr['labels'] as Array<{ name: string; color: string }>) ?? []).map(l => ({
-        name: l.name,
-        color: l.color,
-      })),
-      created_at: pr['createdAt'] as string,
-      updated_at: pr['updatedAt'] as string,
+    const mapRow = (pr: Record<string, unknown>): PullRequest => {
+      const stateRaw = String(pr['state'] ?? '').toLowerCase();
+      const state: 'open' | 'closed' | 'merged' =
+        stateRaw === 'merged' ? 'merged' : stateRaw === 'closed' ? 'closed' : 'open';
+      return {
+        number: pr['number'] as number,
+        title: pr['title'] as string,
+        body: pr['body'] as string ?? '',
+        state,
+        draft: pr['isDraft'] as boolean ?? false,
+        head: { ref: pr['headRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+        base: { ref: pr['baseRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+        labels: ((pr['labels'] as Array<{ name: string; color: string }>) ?? []).map(l => ({
+          name: l.name,
+          color: l.color,
+        })),
+        created_at: pr['createdAt'] as string,
+        updated_at: pr['updatedAt'] as string,
+      };
     };
+
+    // Merged-precedence: if any row is merged, return that one (most
+    // diagnostic reason at the guard). Otherwise return the newest row
+    // (`gh pr list` sorts by `created_at DESC` by default).
+    const merged = data.find((row) => String(row['state'] ?? '').toLowerCase() === 'merged');
+    return mapRow(merged ?? data[0]!);
   }
 
   // ==========================================================================

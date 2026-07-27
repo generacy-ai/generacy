@@ -1,8 +1,20 @@
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import { resolveIssueBranch, simpleGit } from '@generacy-ai/workflow-engine';
-import type { WorkflowPhase, Logger } from './types.js';
+import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
-import { evaluatePushGuard, defaultRemoteBranchExists } from './push-guard.js';
+import { evaluatePushGuard, defaultRemoteBranchExists, type PushGuardDecision } from './push-guard.js';
+
+/**
+ * Internal discriminated union returned by `commitAndPush`. Loosely mirrors
+ * the wire shape historically returned as a bare `boolean` (true = pushed or
+ * unchanged-no-refusal; false = nothing to commit) with an added `refused`
+ * variant so `commitPushAndEnsurePr` can distinguish "guard refused" from
+ * "nothing to commit". PR #1052 review Findings 2+3.
+ */
+type CommitAndPushOutcome =
+  | { kind: 'pushed' }
+  | { kind: 'no-changes' }
+  | { kind: 'refused'; refusal: Extract<PushGuardDecision, { kind: 'refuse' }> };
 
 /**
  * Manages draft PR creation and git commit/push operations between workflow phases.
@@ -53,13 +65,31 @@ export class PrManager {
    * Safe to call after every phase — handles "nothing to commit" and
    * "PR already exists" gracefully.
    *
-   * @returns An object with the PR URL (if available) and whether changes were produced
-   * (either uncommitted changes we commit, or commits the phase made directly).
+   * PR #1052 review Finding 2: when the pre-push guard refuses (merged/closed
+   * PR, or open PR with a missing branch), this method MUST short-circuit
+   * BEFORE `ensureDraftPr()` — otherwise the guard blocks the push but
+   * `ensureDraftPr` still opens a duplicate `Closes #N` PR against the
+   * merged/deleted branch, defeating the guard entirely. The returned
+   * `CommitResult.pushRefused` field is the signal for the phase loop to
+   * abort the workflow (see Finding 3).
+   *
+   * @returns A `CommitResult` — `pushRefused` is present iff the guard
+   * refused; when absent the phase completed normally.
    */
-  async commitPushAndEnsurePr(phase: WorkflowPhase, options?: { message?: string }): Promise<{ prUrl?: string; hasChanges: boolean }> {
-    const hasChanges = await this.commitAndPush(phase, options?.message);
+  async commitPushAndEnsurePr(phase: WorkflowPhase, options?: { message?: string }): Promise<CommitResult> {
+    const outcome = await this.commitAndPush(phase, options?.message);
+    if (outcome.kind === 'refused') {
+      // Do NOT call ensureDraftPr — otherwise the guard blocks the push but
+      // the very next line opens a duplicate PR that claims `Closes #N`
+      // against a merged/deleted branch (PR #1052 review Finding 2).
+      const { reason, prNumber, branch, owner, repo, issueNumber } = outcome.refusal;
+      return {
+        hasChanges: false,
+        pushRefused: { reason, prNumber, branch, owner, repo, issueNumber },
+      };
+    }
     const prUrl = await this.ensureDraftPr();
-    return { prUrl, hasChanges };
+    return { ...(prUrl !== undefined ? { prUrl } : {}), hasChanges: outcome.kind === 'pushed' };
   }
 
   /**
@@ -68,9 +98,17 @@ export class PrManager {
    * Handles both cases: uncommitted changes (we commit them) and changes the
    * phase already committed directly (detected via unpushed commits).
    *
-   * @returns true if changes were produced (committed or already committed), false otherwise.
+   * PR #1052 review Finding 3: returns a discriminated `CommitAndPushOutcome`
+   * so the caller can distinguish "guard refused" (`refused`) from
+   * "nothing to push" (`no-changes`) and "pushed successfully" (`pushed`).
+   * A bare boolean return would collapse `refused` into `no-changes`, causing
+   * the phase loop to mark the phase complete and advance — with zero commits
+   * having reached origin.
    */
-  private async commitAndPush(phase: WorkflowPhase, customMessage?: string): Promise<boolean> {
+  private async commitAndPush(
+    phase: WorkflowPhase,
+    customMessage?: string,
+  ): Promise<CommitAndPushOutcome> {
     try {
       let committed = false;
 
@@ -107,7 +145,7 @@ export class PrManager {
 
       if (!committed && !hasUnpushed) {
         this.logger.debug({ phase }, 'No changes to commit or push after phase');
-        return false;
+        return { kind: 'no-changes' };
       }
 
       if (hasUnpushed) {
@@ -136,7 +174,10 @@ export class PrManager {
         });
         if (decision.kind === 'refuse') {
           await this.handlePushRefused(decision);
-          return false;
+          // PR #1052 review Finding 3: propagate the refusal so the caller
+          // (`commitPushAndEnsurePr` → phase loop) can distinguish this from
+          // a legitimate "nothing to commit" and abort the workflow.
+          return { kind: 'refused', refusal: decision };
         }
 
         // Push to remote (set upstream on first push)
@@ -147,14 +188,14 @@ export class PrManager {
         );
       }
 
-      return true;
+      return { kind: 'pushed' };
     } catch (error) {
       // Log but don't fail the workflow — commit/push is best-effort between phases
       this.logger.warn(
         { phase, error: String(error) },
         'Failed to commit/push after phase (non-fatal)',
       );
-      return false;
+      return { kind: 'no-changes' };
     }
   }
 

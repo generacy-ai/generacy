@@ -32,12 +32,18 @@ export interface PushGuardInput {
  * - `allow` — proceed with the push.
  * - `refuse` — caller MUST NOT push. `reason` names the diagnostic cause;
  *   `prNumber` is present when a PR was found, `null` for the no-PR case.
+ *
+ * `pr-lookup-failed` (PR #1052 review Finding 4): the PR-state lookup threw
+ * (e.g. `gh` rate limit, network blip, auth expiry). Distinct from
+ * `branch-missing` etc. so operators can tell "safety gate could not
+ * verify" from "safety gate confirmed a resurrection attempt". `prNumber`
+ * is `null` (unknown).
  */
 export type PushGuardDecision =
   | { kind: 'allow' }
   | {
       kind: 'refuse';
-      reason: 'pr-merged' | 'pr-closed' | 'branch-missing';
+      reason: 'pr-merged' | 'pr-closed' | 'branch-missing' | 'pr-lookup-failed';
       prNumber: number | null;
       branch: string;
       owner: string;
@@ -71,9 +77,19 @@ export async function defaultRemoteBranchExists(
  *
  * Runs two lookups in parallel — the PR state across all states and the
  * remote-branch existence check — then applies the decision matrix in
- * `push-guard.md`. If either lookup throws, the guard returns `allow`
- * (fail open — FR-001 and FR-004 are the correctness gates; this guard is
- * the anomaly detector, not the correctness gate).
+ * `push-guard.md`. Per-lookup failure isolation (PR #1052 review Finding 4):
+ *
+ * - `github.findPRForBranchAnyState` throws → refuse with reason
+ *   `'pr-lookup-failed'`. The guard cannot verify PR state, so it MUST NOT
+ *   silently permit the push (a rate-limited `gh` call previously collapsed
+ *   to `null` and reclassified as "no PR ever" → guard allowed a merged-PR
+ *   resurrection push). Refuse-safe, not fail-open. FR-001's `--prune` is a
+ *   defense in depth but does not fire when the branch is retained.
+ * - `git.remoteBranchExists` throws → treated as `true` (present). Ownership
+ *   of the ls-remote error case can only mislead in the resurrection
+ *   direction if PR-state is also missing; PR-state is the load-bearing
+ *   lookup and is now refuse-safe on error. Silent-failure guard for
+ *   local-git transients continues per pre-Finding-4 behavior.
  *
  * The guard emits NO logs on its own. Callers are responsible for the
  * `event: 'push-refused'` warn line so the log is at the site that took
@@ -83,18 +99,40 @@ export async function defaultRemoteBranchExists(
 export async function evaluatePushGuard(input: PushGuardInput): Promise<PushGuardDecision> {
   const { owner, repo, branch, issueNumber, github, git } = input;
 
-  let pr: Awaited<ReturnType<GitHubClient['findPRForBranchAnyState']>>;
+  // PR #1052 review Finding 4: split fail-isolation per lookup so a `gh`
+  // failure does not silently reclassify as "no PR". Kick both lookups off
+  // in parallel and await individually so one failure does not cancel the
+  // other's result.
+  const prPromise = github.findPRForBranchAnyState(owner, repo, branch);
+  const branchPromise = git.remoteBranchExists(branch);
+
+  let pr: Awaited<typeof prPromise>;
+  try {
+    pr = await prPromise;
+  } catch {
+    // Drain the branch-existence promise so it does not raise an unhandled
+    // rejection.
+    await branchPromise.catch(() => undefined);
+    return {
+      kind: 'refuse',
+      reason: 'pr-lookup-failed',
+      prNumber: null,
+      branch,
+      owner,
+      repo,
+      issueNumber,
+    };
+  }
+
   let branchPresent: boolean;
   try {
-    [pr, branchPresent] = await Promise.all([
-      github.findPRForBranchAnyState(owner, repo, branch),
-      git.remoteBranchExists(branch),
-    ]);
+    branchPresent = await branchPromise;
   } catch {
-    // Failure isolation (contract § Failure isolation). A transient `gh` or
-    // `git` failure must not block a legitimate push. Refusal path is the
-    // anomaly detector, not the correctness gate.
-    return { kind: 'allow' };
+    // Fail-open on local-git ls-remote transient — the PR-state lookup
+    // already succeeded, so if the state itself is `merged` / `closed`
+    // rows 1-2 still refuse regardless of the branch-present outcome. Treat
+    // as `true` so row 3 does not incorrectly refuse an open PR.
+    branchPresent = true;
   }
 
   // Row 1: PR merged → refuse. Short-circuits row 3 so a merged PR whose
@@ -124,13 +162,13 @@ export async function evaluatePushGuard(input: PushGuardInput): Promise<PushGuar
     };
   }
 
-  // Row 3 / Row 5: branch missing on remote. Both open-PR and no-PR cases
-  // fall through here.
-  if (!branchPresent) {
+  // Row 3: PR open + branch missing → refuse (branch was deleted while a
+  // legitimate PR is still open — a resurrection push would recreate it).
+  if (pr && pr.state === 'open' && !branchPresent) {
     return {
       kind: 'refuse',
       reason: 'branch-missing',
-      prNumber: pr ? pr.number : null,
+      prNumber: pr.number,
       branch,
       owner,
       repo,
@@ -138,7 +176,9 @@ export async function evaluatePushGuard(input: PushGuardInput): Promise<PushGuar
     };
   }
 
-  // Rows 4 + 6: branch present + (open PR or no PR) → allow. First-push case
-  // (no PR yet) explicitly falls under `allow` per Q2 clarification.
+  // Row 4: PR open + branch present → allow.
+  // Row 5: no PR + branch missing → allow (first-push case, Q2 clarification —
+  //        `createFeature`'s local-only branch has not yet been pushed to origin).
+  // Row 6: no PR + branch present → allow (branch pre-existed but has no PR).
   return { kind: 'allow' };
 }

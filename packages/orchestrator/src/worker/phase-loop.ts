@@ -543,10 +543,17 @@ export class PhaseLoop {
         lastTasksRemaining = tasksRemaining;
 
         // Commit, push, and ensure PR with a WIP message
-        const { prUrl: partialPrUrl } = await prManager.commitPushAndEnsurePr(phase, {
+        const partialOutcome = await prManager.commitPushAndEnsurePr(phase, {
           message: `wip(speckit): implement increment for #${context.item.issueNumber} (${result.implementResult.tasks_completed ?? 0} tasks done, ${tasksRemaining} remaining)`,
         });
-        if (partialPrUrl) context.prUrl = partialPrUrl;
+        if (partialOutcome.pushRefused) {
+          this.logger.warn(
+            { phase, refusal: partialOutcome.pushRefused },
+            'Phase loop aborted at implement increment: pre-push guard refused',
+          );
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
+        if (partialOutcome.prUrl) context.prUrl = partialOutcome.prUrl;
 
         // Clear session for a fresh context window on next increment
         currentSessionId = undefined;
@@ -579,10 +586,17 @@ export class PhaseLoop {
 
         // Implement phase retry: commit partial progress and retry with a fresh session
         if (phase === 'implement') {
-          const { hasChanges } = await prManager.commitPushAndEnsurePr(phase, {
+          const retryOutcome = await prManager.commitPushAndEnsurePr(phase, {
             message: `wip(speckit): partial implement progress for #${context.item.issueNumber} (retry ${implementRetryCount + 1})`,
           });
-          if (hasChanges && implementRetryCount < config.maxImplementRetries) {
+          if (retryOutcome.pushRefused) {
+            this.logger.warn(
+              { phase, refusal: retryOutcome.pushRefused },
+              'Phase loop aborted at implement retry: pre-push guard refused',
+            );
+            return { results, completed: false, lastPhase: phase, gateHit: false };
+          }
+          if (retryOutcome.hasChanges && implementRetryCount < config.maxImplementRetries) {
             implementRetryCount++;
             currentSessionId = undefined;
             this.logger.warn(
@@ -665,9 +679,27 @@ export class PhaseLoop {
       }
 
       // 5. Commit, push, and ensure draft PR exists (before marking complete)
-      const { prUrl, hasChanges } = await prManager.commitPushAndEnsurePr(phase);
+      const commitOutcome = await prManager.commitPushAndEnsurePr(phase);
+      const { prUrl, hasChanges } = commitOutcome;
       if (prUrl) {
         context.prUrl = prUrl;
+      }
+
+      // #1051 PR #1052 review Finding 3: refusal MUST abort the phase loop.
+      // Without this, the guard blocks the push but the loop treats the
+      // returned `hasChanges: false` as a legitimate no-op, calls
+      // `onPhaseComplete` for the current phase, advances to the next, and
+      // eventually flips the PR ready-for-review — with zero commits reaching
+      // origin. Mirrors the loop-ENTRY guard's abort at :237-240.
+      // handlePushRefused inside pr-manager already emitted the FR-003a log
+      // and applied the FR-003b label state, so this branch only owns the
+      // control-flow exit.
+      if (commitOutcome.pushRefused) {
+        this.logger.warn(
+          { phase, refusal: commitOutcome.pushRefused },
+          'Phase loop aborted: pre-push guard refused this cycle — see prior push-refused log for details',
+        );
+        return { results, completed: false, lastPhase: phase, gateHit: false };
       }
 
       // 5b. Fail phases that require product-code changes but produced none.

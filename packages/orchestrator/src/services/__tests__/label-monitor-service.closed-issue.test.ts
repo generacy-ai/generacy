@@ -176,10 +176,16 @@ describe('LabelMonitorService.processLabelEvent — #1051 FR-005 closed-issue ga
     const dropCall = findInfoCall(logger, 'dropped', 'issue-closed');
     expect(dropCall).toBeDefined();
     const payload = dropCall![0] as Record<string, unknown>;
+    // PR #1052 review Finding 10: assert `phase` alongside eventType so a
+    // regression that drops the field for resume events only (e.g. a refactor
+    // that emits `phase: undefined` when the event carries a gate name) cannot
+    // stay green. Resume events synthesize `parsedName` from the waiting-for
+    // label suffix; here that is `'spec-review'`.
     expect(payload).toMatchObject({
       dropped: 'issue-closed',
       issueNumber: 100,
       eventType: 'resume',
+      phase: 'spec-review',
       owner: 'o',
       repo: 'r',
     });

@@ -148,18 +148,12 @@
   - Spy assertions on `queueManager.enqueue`, `phaseTracker.markProcessed`,
     `client.addLabels`, `client.removeLabels` — all called 0 times on drop paths.
 
-## Phase 5: FR-004 — cross-issue contamination regression (independent)
+## Phase 5: FR-004 — RETRACTED (PR #1052 review Finding 5)
 
-- [X] T040 [US3] Create
-  `packages/orchestrator/src/__tests__/repo-checkout-cross-issue.test.ts` per plan
-  §Test strategy SC-003. Seed a reused checkout with issue-B files staged (per
-  quickstart.md troubleshooting: **stage** the files but do not commit — `git reset
-  --hard HEAD` will drop them, exercising the invariant). Then run the phase-commit
-  path for issue A. Assert issue A's HEAD commit contains **only** issue-A-scoped
-  files (path prefix check + `specs/A-*/` directory check). No source changes for
-  FR-004 — the existing `git reset --hard HEAD` + `git clean -fd` inside
-  `switchBranch` (`:106-107`) and `updateRepo` (`:220-221`) already provide the
-  invariant (research R4); this test is the regression guard.
+- [X] T040 — **CANCELLED**. The cross-issue contamination premise was inferred from a
+  misreading of merge-commit diff API output; no such failure mode exists in the observed
+  evidence. Test file `packages/orchestrator/src/__tests__/repo-checkout-cross-issue.test.ts`
+  has been deleted. See research.md § R4 (retraction) and spec.md § Retraction.
 
 ## Phase 6: SC-001 integration test (depends on Phase 2 landing)
 

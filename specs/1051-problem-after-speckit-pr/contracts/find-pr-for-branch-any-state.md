@@ -65,7 +65,9 @@ async findPRForBranchAnyState(owner: string, repo: string, branch: string): Prom
 
 If a private helper `mapState` does not yet exist, inline the mapping — do not extract in this PR.
 
-**Ordering**: `--limit 1` returns the most recent PR by GitHub's default ordering (`created_at DESC`). Rationale: if a repo has multiple historical PRs for the same head branch (rare — usually only after manual branch recreation), the newest is the most diagnostic. Merged/closed PRs are the situation we want to detect; picking the newest merged PR over a stale older one is correct.
+**Ordering / merged-precedence** (PR #1052 review Finding 7): `--limit 10` (raised from `--limit 1`) plus a caller-side scan for the first row with `state === 'merged'` — if any exists, return it. Otherwise return the newest row. Rationale: `gh pr list` sorts by `created_at DESC`; `--limit 1` would drop a MERGED PR that sits behind a newer CLOSED PR on the same branch (verified live against `884-problem-refreshaccesstoken`), causing the guard to emit `reason: 'pr-closed'` at the less-diagnostic row rather than `reason: 'pr-merged'` at row 1. Preserving `--limit 1` was an implementation compromise that defeated the guard's stated intent.
+
+**Failure behavior** (PR #1052 review Finding 4): the method MUST **throw** on non-zero exit rather than returning `null`. `null` is reserved for "no PR exists in any state" (an operationally-meaningful fact). Silent null-on-error is the wrong contract for a safety-gate input: a rate-limited `gh` call reclassified as "no PR ever" would let `push-guard.ts` allow the exact resurrection push it exists to block. The guard's own decision matrix distinguishes throw (refuse `pr-lookup-failed`) from `null` (allow first-push case).
 
 ## Non-goals
 
@@ -81,5 +83,7 @@ Cases the new unit test MUST cover:
 - `gh pr list` returns an `OPEN` PR → object with `state === 'open'`.
 - `gh pr list` returns a `MERGED` PR → object with `state === 'merged'`.
 - `gh pr list` returns a `CLOSED` PR → object with `state === 'closed'`.
-- `executeGh` exits non-zero → `null` (matches `findPRForBranch` failure shape).
+- `gh pr list` returns `[CLOSED_new, MERGED_old]` → object with `state === 'merged'` (Finding 7).
+- `executeGh` exits non-zero → **throws** (Finding 4).
 - `--state all` is present in the argv passed to `executeGh` — static argv assertion.
+- `--limit` value in argv is `> 1` (Finding 7 — enables merged-precedence).

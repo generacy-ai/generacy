@@ -4,7 +4,9 @@
 
 **Decision**: Add `--prune` to both `execFileAsync('git', ['fetch', 'origin'], ...)` invocations in `repo-checkout.ts` — `switchBranch:109` and `updateRepo:224`. Leave `fetchBase:143` untouched (single-ref fetch, `--prune` has no effect).
 
-**Rationale**: The observed field failure was not a git-fetch bug — `fetch origin` correctly does not delete stale remote-tracking refs by default (git manpage: "By default, tags that point at objects that are downloaded from the remote repository are fetched and stored locally. This option disables this automatic tag following."). The failure is in *composition*: the subsequent `git checkout <branch>` at `:112` / `:228` silently succeeds against the stale local ref (because the local branch still exists from the prior run), so the "Local branch not found" fallback at `:114` / `:230` never fires, and `reset --hard origin/<branch>` completes against the still-cached `origin/<branch>` ref. `--prune` deletes the stale `origin/<branch>` tracking ref, which then invalidates the local branch's upstream — the checkout may still succeed but the subsequent `reset --hard origin/<branch>` fails loudly with `ambiguous argument 'origin/<branch>'` (verified locally).
+**Rationale**: The observed field failure was not a git-fetch bug — `fetch origin` correctly does not delete stale remote-tracking refs by default. Per git-fetch(1) manpage on `--prune` / `-p`: *"Before fetching, remove any remote-tracking references that no longer exist on the remote."* Without this flag, a remote-tracking ref for a branch that has been deleted upstream continues to resolve locally. The failure is in *composition*: the subsequent `git checkout <branch>` at `:112` / `:228` silently succeeds against the stale local ref (because the local branch still exists from the prior run), so the "Local branch not found" fallback at `:114` / `:230` never fires, and `reset --hard origin/<branch>` completes against the still-cached `origin/<branch>` ref. `--prune` deletes the stale `origin/<branch>` tracking ref, which then invalidates the local branch's upstream — the checkout may still succeed but the subsequent `reset --hard origin/<branch>` fails loudly with `ambiguous argument 'origin/<branch>'` (verified locally).
+
+_(PR #1052 review Finding 11 correction: the citation previously quoted the `--no-tags` paragraph, not the `--prune` paragraph. Replaced with the actual `--prune` text.)_
 
 **Alternatives considered**:
 
@@ -63,24 +65,11 @@ A `state?: 'open' | 'all' | 'closed' | 'merged'` parameter with a default is tec
 - `phase-loop.ts:180-289` (phase-loop structure: label update → base merge → phase execute → commit/push).
 - `pr-feedback-handler.ts:154` (`switchBranch` invocation in the PR-feedback handler).
 
-## R4 — Why FR-004 uses hard-reset, not per-issue checkout isolation
+## R4 — RETRACTED (PR #1052 review Finding 5)
 
-**Decision**: Rely on the existing `git reset --hard HEAD` + `git clean -fd` already performed inside `switchBranch` (`repo-checkout.ts:106-107`) and `updateRepo` (`:220-221`) to guarantee working-tree scope. Add a SC-003 regression test to prove this holds when a checkout is reused across issues. No new subsystem, no per-worker temp dirs, no new checkout-path strategy.
+**Original decision**: rely on existing `git reset --hard HEAD` + `git clean -fd` for cross-issue working-tree isolation, backed by a regression test.
 
-**Rationale**: The observed contamination is caused by *tracked* files from #880 that remained in the working tree because #880's `createFeature` had cd'd into #880's spec dir and left files scoped to `specs/880-*/`. `git reset --hard HEAD` + `git clean -fd` scrubs both tracked and untracked file state to the current branch's tip. When `switchBranch` runs for issue A, it resets to issue-A's branch tip — which cannot contain issue-B's `specs/B-*` files (they were never on issue A's branch). The gap the field failure exploited was: `switchBranch` correctly cleaned state *before* fetch/checkout, but the fetch failed to prune, so the branch was interpreted as still-live, and the reset resolved to the pre-merge tip (which by coincidence had issue-B's files not yet merged from `develop`). Fixing FR-001 (prune) closes the primary loop; SC-003's regression test verifies the invariant holds under contrived cross-issue re-entry.
-
-**Alternatives considered**:
-
-- *Per-issue checkout dir (`{workspaceDir}/{issueNumber}/{owner}/{repo}`)* — meaningful subsystem change, breaks bootstrapped-repo reuse pattern documented at `repo-checkout.ts:14`. Would triple disk usage per worker. Rejected as out of scope.
-- *Blow away and re-clone on every phase* — 10-30s clone burn per phase; regressive. Rejected.
-- *`git worktree add` per issue* — attractive but new dependency on worktree state; test surface expands significantly. Rejected as out of scope for this bug.
-
-**Reference sources**:
-
-- `repo-checkout.ts:14-19` (bootstrapped-repo reuse pattern — load-bearing for perf).
-- `repo-checkout.ts:106-107` (dirty-state discard already present in switchBranch).
-- `repo-checkout.ts:220-221` (same in updateRepo).
-- FR-004 in spec.md permits either approach; plan chooses the minimal one.
+**Retraction rationale**: The observed contamination premise on `d8e392ca` was inferred from `gh api ... commits/d8e392ca` showing "every file belongs to #880". That output is an artifact of GitHub diffing merge commits against parent 1 only. `d8e392ca` actually has TWO parents (`c3cbe0e4` = pre-merge tip, `5542e900` = squash-merge of PR #881); files coming in via parent 2 render as `added`. It is a routine `develop` base-merge, not a single-parent commit with a contaminated working tree. The prior R4 rationale — *"the reset resolved to the pre-merge tip, which by coincidence had issue-B's files"* — is self-refuting: files already present on the tip cannot render as `added`. Corroborated by generacy-cloud#886 which resurrected `884-problem-refreshaccesstoken` with no foreign files at all. Cross-issue contamination is not a real failure mode in the observed evidence, so FR-004, SC-003, and the corresponding regression test have all been cut.
 
 ## R5 — Why FR-003b splits label state on issue-open state at refusal time
 
@@ -157,8 +146,8 @@ Never add `failed:<phase>`.
 
 The three fixes compose:
 
-1. FR-005 drops the doomed job at dispatch (defense in depth).
-2. If FR-005 misses (issue closes after enqueue), FR-002 catches at phase-start.
+1. FR-005 drops the doomed job at enqueue (defense in depth). (Note: FR-005 gates `processLabelEvent` only; four other enqueue paths are out of scope per PR #1052 review Finding 9.)
+2. If FR-005 misses (issue closes after enqueue, or the enqueue arrives via one of the other four paths), FR-002 catches at phase-start / pre-push.
 3. If FR-002 misses (extraordinary race), FR-001 makes the checkout state visible and `reset --hard origin/<branch>` fails loudly on a pruned branch.
 4. #1043 continues to dedup the branch-selection step for the normal (non-merged) path.
 5. #1049 continues to gate pr-feedback (a different entry path).

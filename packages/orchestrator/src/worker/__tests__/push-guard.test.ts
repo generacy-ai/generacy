@@ -138,18 +138,42 @@ describe('evaluatePushGuard — decision matrix', () => {
     expect(decision).toEqual({ kind: 'allow' });
   });
 
-  it('no PR + branch present → allow (first-push case, Q2 clarification)', async () => {
+  it('no PR + branch present → allow', async () => {
     const { input } = makeInput({ pr: null, branchExists: true });
     const decision = await evaluatePushGuard(input);
     expect(decision).toEqual({ kind: 'allow' });
   });
 
-  it('no PR + branch MISSING → refuse { reason: branch-missing, prNumber: null }', async () => {
+  it('no PR + branch MISSING → allow (first-push case, Q2 clarification — createFeature branch not yet pushed)', async () => {
+    // Regression guard for PR #1052 review Finding 1: brand-new issue's local
+    // branch has no PR AND is not yet on origin. `createFeature` only runs
+    // `git.checkoutLocalBranch`; the first push must be allowed or every new
+    // issue dies at the phase-loop-entry guard before any phase executes.
     const { input } = makeInput({ pr: null, branchExists: false });
+    const decision = await evaluatePushGuard(input);
+    expect(decision).toEqual({ kind: 'allow' });
+  });
+});
+
+// -------------------------------------------------------------------------
+// Failure isolation (per-lookup split — PR #1052 review Finding 4)
+// -------------------------------------------------------------------------
+
+describe('evaluatePushGuard — per-lookup failure isolation', () => {
+  it('findPRForBranchAnyState throws → refuse { reason: pr-lookup-failed } (Finding 4)', async () => {
+    // Regression guard: a rate-limited / auth-expired `gh` call used to
+    // collapse silently to `null` (via `if (exitCode !== 0) return null;`)
+    // and the guard reclassified as "no PR ever" → allow. Fixed by having
+    // `findPRForBranchAnyState` throw on non-zero exit and having the guard
+    // refuse rather than fail-open on that specific lookup.
+    const { input } = makeInput({
+      pr: new Error('gh transient failure'),
+      branchExists: true,
+    });
     const decision = await evaluatePushGuard(input);
     expect(decision).toEqual({
       kind: 'refuse',
-      reason: 'branch-missing',
+      reason: 'pr-lookup-failed',
       prNumber: null,
       branch: 'feature',
       owner: 'o',
@@ -157,23 +181,11 @@ describe('evaluatePushGuard — decision matrix', () => {
       issueNumber: 100,
     });
   });
-});
 
-// -------------------------------------------------------------------------
-// Failure isolation (either lookup throws → allow)
-// -------------------------------------------------------------------------
-
-describe('evaluatePushGuard — failure isolation (fail open)', () => {
-  it('findPRForBranchAnyState throws → allow', async () => {
-    const { input } = makeInput({
-      pr: new Error('gh transient failure'),
-      branchExists: true,
-    });
-    const decision = await evaluatePushGuard(input);
-    expect(decision).toEqual({ kind: 'allow' });
-  });
-
-  it('remoteBranchExists throws → allow', async () => {
+  it('remoteBranchExists throws → treated as branch present → decision derives from PR state (allow for open)', async () => {
+    // The PR-state lookup is the load-bearing one; branch-existence is
+    // secondary. On ls-remote transient, treat branch as present so an
+    // open PR does not falsely refuse.
     const { input } = makeInput({
       pr: makePr({ state: 'open' }),
       branchExists: new Error('git ls-remote transient failure'),
@@ -182,13 +194,16 @@ describe('evaluatePushGuard — failure isolation (fail open)', () => {
     expect(decision).toEqual({ kind: 'allow' });
   });
 
-  it('both lookups throw → allow', async () => {
+  it('both lookups throw → refuse { reason: pr-lookup-failed } (PR lookup dominates)', async () => {
     const { input } = makeInput({
       pr: new Error('gh boom'),
       branchExists: new Error('git boom'),
     });
     const decision = await evaluatePushGuard(input);
-    expect(decision).toEqual({ kind: 'allow' });
+    expect(decision.kind).toBe('refuse');
+    if (decision.kind === 'refuse') {
+      expect(decision.reason).toBe('pr-lookup-failed');
+    }
   });
 });
 

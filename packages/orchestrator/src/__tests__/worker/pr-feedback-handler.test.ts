@@ -70,6 +70,8 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
     replyToPRComment: vi.fn().mockResolvedValue(undefined),
     resolveReviewThread: vi.fn().mockResolvedValue(undefined),
     addLabels: vi.fn().mockResolvedValue(undefined),
+    // #1051 pre-push guard mock — default "no PR" allows push flow.
+    findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
   })),
   // Author-trust helpers (#842). Default stubs pass every comment through.
   isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
