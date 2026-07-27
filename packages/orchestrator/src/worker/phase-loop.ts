@@ -1,7 +1,8 @@
 import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageType, CommandExitEvidence } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
-import { evaluatePushGuard, defaultRemoteBranchExists, type PushGuardDecision } from './push-guard.js';
+import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
+import { defaultRemoteBranchExists } from './repo-checkout.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase } from './config.js';
 import type { LabelManager } from './label-manager.js';

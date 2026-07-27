@@ -1,5 +1,6 @@
 import type { QueueItem } from '../types/index.js';
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
+import type { PushGuardDecision } from './push-guard.js';
 
 /**
  * Workflow phases in execution order
@@ -510,15 +511,13 @@ export interface CommitResult {
    * Present iff the pre-push guard refused this cycle's push. Carries the
    * `reason` enum for downstream inspection; the caller-side warn log has
    * already fired inside `PrManager.handlePushRefused`.
+   *
+   * Shape derives from `PushGuardDecision`'s `refuse` variant (PR #1052 review
+   * Finding 1) so a new reason value added to the guard cannot desynchronize
+   * this declaration — hand-listing the literals is exactly what produced the
+   * TS2322/TS2345 failures the review caught.
    */
-  pushRefused?: {
-    reason: 'pr-merged' | 'pr-closed' | 'branch-missing';
-    prNumber: number | null;
-    branch: string;
-    owner: string;
-    repo: string;
-    issueNumber: number;
-  };
+  pushRefused?: Omit<Extract<PushGuardDecision, { kind: 'refuse' }>, 'kind'>;
 }
 
 /**

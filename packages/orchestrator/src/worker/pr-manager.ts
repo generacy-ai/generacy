@@ -2,7 +2,8 @@ import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import { resolveIssueBranch, simpleGit } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
-import { evaluatePushGuard, defaultRemoteBranchExists, type PushGuardDecision } from './push-guard.js';
+import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
+import { defaultRemoteBranchExists } from './repo-checkout.js';
 
 /**
  * Internal discriminated union returned by `commitAndPush`. Loosely mirrors
@@ -358,15 +359,18 @@ export class PrManager {
    * grep for `event: 'push-refused'` reveals every refusal site (T061). Best-
    * effort label mutation: `agent:in-progress` cleared unconditionally,
    * `agent:error` added only when the linked issue is still open.
+   *
+   * Deliberately typed via `Extract<PushGuardDecision, ...>` (PR #1052 review
+   * Finding 1) so a new refusal reason on the guard cannot desynchronize this
+   * signature. `pr-lookup-failed` is treated the same as the other reasons on
+   * purpose — a safety gate that could not verify state is still a refusal an
+   * operator needs to see (`agent:error` on an open issue), and the reason
+   * literal in the warn log lets triage distinguish "we could not determine
+   * safety" from "we determined it is unsafe".
    */
-  private async handlePushRefused(decision: {
-    reason: 'pr-merged' | 'pr-closed' | 'branch-missing';
-    prNumber: number | null;
-    branch: string;
-    owner: string;
-    repo: string;
-    issueNumber: number;
-  }): Promise<void> {
+  private async handlePushRefused(
+    decision: Extract<PushGuardDecision, { kind: 'refuse' }>,
+  ): Promise<void> {
     const { reason, prNumber, branch, owner, repo, issueNumber } = decision;
     this.logger.warn(
       { event: 'push-refused', reason, prNumber, branch, owner, repo, issueNumber },

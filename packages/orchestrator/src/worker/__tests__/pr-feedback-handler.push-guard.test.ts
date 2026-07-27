@@ -32,7 +32,6 @@ const { mockEvaluatePushGuard, mockDefaultRemoteBranchExists } = vi.hoisted(() =
 
 vi.mock('../push-guard.js', () => ({
   evaluatePushGuard: mockEvaluatePushGuard,
-  defaultRemoteBranchExists: mockDefaultRemoteBranchExists,
 }));
 
 // ---------------------------------------------------------------------------
@@ -79,6 +78,7 @@ vi.mock('../repo-checkout.js', () => ({
   RepoCheckout: vi.fn().mockImplementation(() => ({
     switchBranch: vi.fn().mockResolvedValue(undefined),
   })),
+  defaultRemoteBranchExists: mockDefaultRemoteBranchExists,
 }));
 
 // Import AFTER mocks so the handler sees them.

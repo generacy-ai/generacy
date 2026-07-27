@@ -6,7 +6,8 @@ import {
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
 import type { Comment, GitHubClient, Review, ReviewThread } from '@generacy-ai/workflow-engine';
-import { evaluatePushGuard, defaultRemoteBranchExists, type PushGuardDecision } from './push-guard.js';
+import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
+import { defaultRemoteBranchExists } from './repo-checkout.js';
 import {
   parseAcknowledgedFindings,
   parseSingleMarkerEntries,

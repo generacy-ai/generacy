@@ -1,8 +1,4 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Input for `evaluatePushGuard`.
@@ -12,8 +8,10 @@ const execFileAsync = promisify(execFile);
  * narrower stub in tests.
  *
  * `git.remoteBranchExists` is injected so tests do not have to spawn a real
- * `git ls-remote`. Production callers omit it and get the default helper
- * exported from this module.
+ * `git ls-remote`. Production callers pass `defaultRemoteBranchExists` from
+ * `./repo-checkout.js` — this module deliberately holds no `node:child_process`
+ * import so the pure decision logic stays inside the repo-wide
+ * `no-restricted-imports` ban (#437) without needing an allowlist entry.
  */
 export interface PushGuardInput {
   owner: string;
@@ -50,26 +48,6 @@ export type PushGuardDecision =
       repo: string;
       issueNumber: number;
     };
-
-/**
- * Default `git.remoteBranchExists` helper for production callers.
- *
- * Runs `git ls-remote --heads origin <branch>` in the process's current cwd.
- * Callers that need to run against a specific checkout should inject their
- * own implementation. Uses the same idiom as `GhCliGitHubClient.branchExists(
- * branch, true)` at `gh-cli.ts:1094-1097`.
- */
-export async function defaultRemoteBranchExists(
-  branch: string,
-  cwd?: string,
-): Promise<boolean> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['ls-remote', '--heads', 'origin', branch],
-    cwd ? { cwd, encoding: 'utf-8' } : { encoding: 'utf-8' },
-  );
-  return stdout.trim() !== '';
-}
 
 /**
  * Stateless pre-push guard used by `pr-feedback-handler`, `pr-manager`, and
