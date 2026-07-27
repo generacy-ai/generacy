@@ -923,6 +923,46 @@ export class GhCliGitHubClient implements GitHubClient {
     };
   }
 
+  async findPRForBranchAnyState(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
+    const result = await this.executeGh([
+      'pr', 'list',
+      '-R', `${owner}/${repo}`,
+      '--head', branch,
+      '--state', 'all',
+      '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
+      '--limit', '1',
+    ]);
+
+    if (result.exitCode !== 0) {
+      return null;
+    }
+
+    const data = parseJSONSafe(result.stdout) as Array<Record<string, unknown>> | null;
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    const pr = data[0]!;
+    const stateRaw = String(pr['state'] ?? '').toLowerCase();
+    const state: 'open' | 'closed' | 'merged' =
+      stateRaw === 'merged' ? 'merged' : stateRaw === 'closed' ? 'closed' : 'open';
+    return {
+      number: pr['number'] as number,
+      title: pr['title'] as string,
+      body: pr['body'] as string ?? '',
+      state,
+      draft: pr['isDraft'] as boolean ?? false,
+      head: { ref: pr['headRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+      base: { ref: pr['baseRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+      labels: ((pr['labels'] as Array<{ name: string; color: string }>) ?? []).map(l => ({
+        name: l.name,
+        color: l.color,
+      })),
+      created_at: pr['createdAt'] as string,
+      updated_at: pr['updatedAt'] as string,
+    };
+  }
+
   // ==========================================================================
   // Label Operations
   // ==========================================================================

@@ -106,7 +106,11 @@ export class RepoCheckout {
     await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: checkoutPath });
     await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
 
-    await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
+    // #1051 FR-001: `--prune` removes stale local tracking refs for branches
+    // that were deleted upstream (e.g. after a merged PR with --delete-branch).
+    // Without this, `reset --hard origin/<branch>` at :132 silently succeeds
+    // against the stale ref and resurrects a merged branch's pre-merge tip.
+    await execFileAsync('git', ['fetch', 'origin', '--prune'], { cwd: checkoutPath });
 
     try {
       await execFileAsync('git', ['checkout', branch], { cwd: checkoutPath });
@@ -221,7 +225,10 @@ export class RepoCheckout {
     await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
 
     this.logger.debug({ checkoutPath }, 'Fetching from origin');
-    await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
+    // #1051 FR-001: `--prune` removes stale local tracking refs for branches
+    // that were deleted upstream. Mirrors switchBranch's fetch; both sites MUST
+    // land together (leaving one un-pruned defeats the invariant).
+    await execFileAsync('git', ['fetch', 'origin', '--prune'], { cwd: checkoutPath });
 
     this.logger.debug({ checkoutPath, branch }, 'Checking out branch');
     try {

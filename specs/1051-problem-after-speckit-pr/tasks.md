@@ -10,14 +10,14 @@
 
 ## Phase 1: workflow-engine helper (blocks FR-002)
 
-- [ ] T001 [US2] Add `findPRForBranchAnyState(owner, repo, branch): Promise<PullRequest | null>`
+- [X] T001 [US2] Add `findPRForBranchAnyState(owner, repo, branch): Promise<PullRequest | null>`
   method declaration to `GitHubClient` interface in
   `packages/workflow-engine/src/actions/github/client/interface.ts`.
   Signature verbatim per `contracts/find-pr-for-branch-any-state.md`. Do NOT modify
   `findPRForBranch`'s signature (five other call sites depend on the open-only default —
   Q2 clarification, R2, invariant I-2).
 
-- [ ] T002 [US2] Implement `findPRForBranchAnyState` in
+- [X] T002 [US2] Implement `findPRForBranchAnyState` in
   `packages/workflow-engine/src/actions/github/client/gh-cli.ts` immediately after the
   existing `findPRForBranch` method (currently at `:890-926`). Copy that method's shape
   verbatim except add `--state all` to the `gh pr list` argv. Preserve the existing
@@ -25,34 +25,35 @@
   inline `mapState` if not already private. `--limit 1` is retained (returns newest by
   `created_at DESC`, most diagnostic).
 
-- [ ] T003 [P] [US2] Create `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.find-pr-any-state.test.ts`.
+- [X] T003 [P] [US2] Create `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.find-pr-any-state.test.ts`.
   Mocked-runner unit test covering all six cases in `contracts/find-pr-for-branch-any-state.md § Test surface`:
   empty list → `null`; OPEN / MERGED / CLOSED variants → object with matching `state`;
   non-zero exit → `null`; static argv assertion that `--state all` is present in the
   `executeGh` call.
 
-- [ ] T004 [P] [US2] Regression assertion: add a case to the existing
+- [X] T004 [P] [US2] Regression assertion: add a case to the existing
   `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.test.ts` (or the
   file that already covers `findPRForBranch`) asserting `--state all` is **not** present
   in the argv passed by `findPRForBranch`. Protects invariant I-2 (Q2 clarification).
+  (Landed in gh-cli.find-pr-any-state.test.ts as the invariant I-2 regression guard case.)
 
 ## Phase 2: FR-001 — prune fetch (independent)
 
-- [ ] T010 [US1] Add `--prune` to the multi-ref `git fetch origin` in
+- [X] T010 [US1] Add `--prune` to the multi-ref `git fetch origin` in
   `packages/orchestrator/src/worker/repo-checkout.ts::switchBranch()` (current line ~109):
   `['fetch', 'origin']` → `['fetch', 'origin', '--prune']`. Per
   `contracts/repo-checkout-prune.md`.
 
-- [ ] T011 [US1] Same change in
+- [X] T011 [US1] Same change in
   `packages/orchestrator/src/worker/repo-checkout.ts::updateRepo()` (current line ~224).
   Both sites MUST land in the same commit — one-of-two leaves the other path live
   (spec AC on US1).
 
-- [ ] T012 [US1] Verify `fetchBase()` at `:143` is NOT touched — it is a single-ref
+- [X] T012 [US1] Verify `fetchBase()` at `:143` is NOT touched — it is a single-ref
   `git fetch origin <baseBranch>` and `--prune` there has no effect (research R1,
   invariant I-3).
 
-- [ ] T013 [US1] Extend `packages/orchestrator/src/worker/__tests__/repo-checkout.test.ts`:
+- [X] T013 [US1] Extend `packages/orchestrator/src/worker/__tests__/repo-checkout.test.ts`:
   add SC-005 static assertions using the existing `execFile` mock — invoke `switchBranch`
   and `updateRepo` and assert the argv passed to `git fetch` on both paths includes
   `--prune`. Add a negative assertion that the `fetchBase` argv (single-ref fetch of the
@@ -60,7 +61,7 @@
 
 ## Phase 3: FR-002/003 — pre-push guard (depends on Phase 1)
 
-- [ ] T020 [US2] Create `packages/orchestrator/src/worker/push-guard.ts` implementing the
+- [X] T020 [US2] Create `packages/orchestrator/src/worker/push-guard.ts` implementing the
   exact public surface in `contracts/push-guard.md`: `PushGuardInput`, `PushGuardDecision`
   (discriminated union), `evaluatePushGuard(input): Promise<PushGuardDecision>`.
   - Run `github.findPRForBranchAnyState` and `git.remoteBranchExists` in parallel
@@ -77,13 +78,13 @@
     and return `stdout.trim() !== ''`. Same idiom already used by
     `GhCliGitHubClient.branchExists(branch, true)` at `gh-cli.ts:1094-1097`.
 
-- [ ] T021 [US2] Create `packages/orchestrator/src/worker/__tests__/push-guard.test.ts`
+- [X] T021 [US2] Create `packages/orchestrator/src/worker/__tests__/push-guard.test.ts`
   covering the full SC-002 seven-case decision matrix (contract § Test surface) plus the
   two failure-isolation cases (either lookup throws → allow). Assert the
   `PushGuardDecision` shape field-by-field (`kind`, `reason`, `prNumber`, `branch`, `owner`,
   `repo`, `issueNumber`). No log assertions here — the guard emits none.
 
-- [ ] T022 [US2] Wire the guard into
+- [X] T022 [US2] Wire the guard into
   `packages/orchestrator/src/worker/pr-feedback-handler.ts` immediately before the push
   at `:670`. On `refuse`:
   - Log exactly one line at `warn`: `logger.warn({ event: 'push-refused', reason,
@@ -95,16 +96,16 @@
     Never add `failed:<phase>` (invariant I-6, R5).
   - Exit the handler without calling `commitAndPushChanges`.
 
-- [ ] T023 [US2] Wire the guard into `packages/orchestrator/src/worker/pr-manager.ts`
+- [X] T023 [US2] Wire the guard into `packages/orchestrator/src/worker/pr-manager.ts`
   immediately before `commitAndPush`/`commitPushAndEnsurePr` (current push site ~ `:114`).
   Same log + label semantics as T022.
 
-- [ ] T024 [US2] Wire the guard into `packages/orchestrator/src/worker/phase-loop.ts`
+- [X] T024 [US2] Wire the guard into `packages/orchestrator/src/worker/phase-loop.ts`
   immediately after `switchBranch` and before phase-execute — this is the second
   invocation site per phase that closes the `hasChanges: false` no-op hole
   (research R3, Q5 clarification). Same log + label semantics as T022.
 
-- [ ] T025 [P] [US2] Create
+- [X] T025 [P] [US2] Create
   `packages/orchestrator/src/worker/__tests__/pr-feedback-handler.push-guard.test.ts`.
   Integration test covering the refusal path in `pr-feedback-handler`:
   - guard returns `refuse{pr-merged}` + `issue.state='closed'` → exactly one `warn`
@@ -119,7 +120,7 @@
 
 ## Phase 4: FR-005 — dispatch-time closed-issue gate (independent)
 
-- [ ] T030 [US4] Modify `packages/orchestrator/src/services/label-monitor-service.ts`
+- [X] T030 [US4] Modify `packages/orchestrator/src/services/label-monitor-service.ts`
   per `contracts/closed-issue-dispatch-gate.md`:
   - Insert the gate immediately after `fetchedIssue` is populated (current site
     `:322-333`) and before the queue-item build.
@@ -133,7 +134,7 @@
   - Fallback: if `fetchedIssue === null` (swallowed fetch error), gate does NOT fire —
     event proceeds to enqueue. Documented in contract § Fallback.
 
-- [ ] T031 [P] [US4] Create
+- [X] T031 [P] [US4] Create
   `packages/orchestrator/src/services/__tests__/label-monitor-service.closed-issue.test.ts`
   covering the five cases in `contracts/closed-issue-dispatch-gate.md § Test surface`:
   - `type: 'process'` + closed → drop + log fires with `eventType: 'process'` + zero
@@ -149,7 +150,7 @@
 
 ## Phase 5: FR-004 — cross-issue contamination regression (independent)
 
-- [ ] T040 [US3] Create
+- [X] T040 [US3] Create
   `packages/orchestrator/src/__tests__/repo-checkout-cross-issue.test.ts` per plan
   §Test strategy SC-003. Seed a reused checkout with issue-B files staged (per
   quickstart.md troubleshooting: **stage** the files but do not commit — `git reset
@@ -162,7 +163,7 @@
 
 ## Phase 6: SC-001 integration test (depends on Phase 2 landing)
 
-- [ ] T050 [US1] Create
+- [X] T050 [US1] Create
   `packages/orchestrator/src/__tests__/repo-checkout-branch-resurrection.integration.test.ts`
   per `contracts/repo-checkout-prune.md § Test surface`:
   - Fixture uses a real ephemeral git repo (mktemp): create bare `origin.git`, clone
@@ -179,14 +180,14 @@
 
 ## Phase 7: Changeset + verification
 
-- [ ] T060 [P] Create `.changeset/1051-branch-resurrection-fix.md` per plan Project
+- [X] T060 [P] Create `.changeset/1051-branch-resurrection-fix.md` per plan Project
   Structure: bumps `@generacy-ai/workflow-engine` **patch** (internal `findPRForBranchAnyState`
   method, not re-exported at the public boundary — orchestrator-only wire per CLAUDE.md
   changeset rule "new exports NOT re-exported from the package's public `index.ts` are
   internal surface → `patch`") + `@generacy-ai/orchestrator` **patch** (bug fix, no new
   exports). Single file listing both packages.
 
-- [ ] T061 Run the quickstart.md grep sanity checks:
+- [X] T061 Run the quickstart.md grep sanity checks:
   - `grep -n "fetch.*origin.*--prune\|fetch.*--prune.*origin" packages/orchestrator/src/worker/repo-checkout.ts`
     → expect exactly 2 matches (switchBranch + updateRepo).
   - `grep -rn "event: 'push-refused'" packages/orchestrator/src/worker`
@@ -198,7 +199,7 @@
   - `grep -n "fetch.*origin.*<baseBranch>.*--prune\|fetch.*--prune.*<baseBranch>" packages/orchestrator/src/worker/repo-checkout.ts`
     → expect NO match (invariant I-3 holds — fetchBase untouched).
 
-- [ ] T062 Run the full regression suite per quickstart.md:
+- [X] T062 Run the full regression suite per quickstart.md:
   `pnpm --filter @generacy-ai/orchestrator test` and
   `pnpm --filter @generacy-ai/workflow-engine test`. All pre-existing tests plus the
   new tests must pass. SC-006 explicitly targets speckit-feature and speckit-bugfix

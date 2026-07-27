@@ -1,6 +1,7 @@
 import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageType, CommandExitEvidence } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
+import { evaluatePushGuard, defaultRemoteBranchExists, type PushGuardDecision } from './push-guard.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase } from './config.js';
 import type { LabelManager } from './label-manager.js';
@@ -212,6 +213,32 @@ export class PhaseLoop {
       { startPhase: context.startPhase, startIndex, totalPhases: sequence.length, runId },
       'Starting phase loop',
     );
+
+    // #1051 FR-002/003: phase-start pre-push guard. Closes the "hasChanges:
+    // false no-op hole" (research R3, Q5 clarification) — pr-manager's guard
+    // only fires when there is something to push, so a re-entering worker on
+    // a merged-then-resurrected checkout that produces no diff could still
+    // silently proceed. Running the guard once at loop entry catches that
+    // case with a single `event: 'push-refused'` log line and the FR-003b
+    // label state, matching the pr-feedback-handler / pr-manager semantics.
+    // context.branch is typed optional at the WorkerContext boundary but is
+    // populated by claude-cli-worker before phase-loop is entered. Skip the
+    // guard entirely if it is somehow unset — the pre-push guards in
+    // pr-manager and pr-feedback-handler still fire as backstops.
+    if (context.branch) {
+      const startGuardDecision = await evaluatePushGuard({
+        owner: context.item.owner,
+        repo: context.item.repo,
+        issueNumber: context.item.issueNumber,
+        branch: context.branch,
+        github: context.github,
+        git: { remoteBranchExists: (b) => defaultRemoteBranchExists(b, context.checkoutPath) },
+      });
+      if (startGuardDecision.kind === 'refuse') {
+        await this.handlePhaseLoopPushRefused(context, startGuardDecision);
+        return { results, completed: false, lastPhase: context.startPhase, gateHit: false };
+      }
+    }
 
     // Track actual timestamps per phase
     const phaseTimestamps = new Map<WorkflowPhase, { startedAt: string; completedAt?: string }>();
@@ -902,6 +929,54 @@ export class PhaseLoop {
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
     };
+  }
+
+  /**
+   * #1051 FR-003: react to a `refuse` decision from the phase-loop-entry
+   * push guard. Emits the same warn shape as `PrFeedbackHandler.handlePushRefused`
+   * and `PrManager.handlePushRefused` so a grep for `event: 'push-refused'`
+   * reveals all three refusal sites (T061).
+   */
+  private async handlePhaseLoopPushRefused(
+    context: WorkerContext,
+    decision: Extract<PushGuardDecision, { kind: 'refuse' }>,
+  ): Promise<void> {
+    const { reason, prNumber, branch, owner, repo, issueNumber } = decision;
+    this.logger.warn(
+      { event: 'push-refused', reason, prNumber, branch, owner, repo, issueNumber },
+      'Refusing phase loop entry — PR state or remote branch state indicates a resurrection or duplicate-PR attempt',
+    );
+
+    let issueState: 'open' | 'closed' = 'open';
+    try {
+      const issue = await context.github.getIssue(owner, repo, issueNumber);
+      issueState = issue.state;
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePhaseLoopPushRefused: failed to read issue state — assuming open',
+      );
+    }
+
+    try {
+      await context.github.removeLabels(owner, repo, issueNumber, ['agent:in-progress']);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePhaseLoopPushRefused: failed to remove agent:in-progress — non-fatal',
+      );
+    }
+
+    if (issueState === 'open') {
+      try {
+        await context.github.addLabels(owner, repo, issueNumber, ['agent:error']);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'handlePhaseLoopPushRefused: failed to add agent:error — non-fatal',
+        );
+      }
+    }
   }
 
   /**

@@ -2,6 +2,7 @@ import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import { resolveIssueBranch, simpleGit } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
+import { evaluatePushGuard, defaultRemoteBranchExists } from './push-guard.js';
 
 /**
  * Manages draft PR creation and git commit/push operations between workflow phases.
@@ -23,6 +24,12 @@ export class PrManager {
     private readonly repo: string,
     private readonly issueNumber: number,
     private readonly logger: Logger,
+    /**
+     * #1051 FR-002: cwd for the pre-push guard's `git ls-remote` call.
+     * Optional so existing tests (which construct PrManager without a checkout
+     * path) keep passing — the default helper falls back to the process cwd.
+     */
+    private readonly checkoutPath?: string,
   ) {}
 
   /**
@@ -110,6 +117,28 @@ export class PrManager {
             'Phase committed its own changes — pushing to remote',
           );
         }
+
+        // #1051 FR-002/003: pre-push guard. Refuses the push when the PR has
+        // already merged/closed or the remote branch is missing — prevents a
+        // re-entering worker from resurrecting a deleted branch and opening a
+        // duplicate PR that claims `Closes #<already-closed>`. Applies to both
+        // uncommitted-then-committed changes and phase-committed changes since
+        // both funnel through this push site.
+        const decision = await evaluatePushGuard({
+          owner: this.owner,
+          repo: this.repo,
+          issueNumber: this.issueNumber,
+          branch,
+          github: this.github,
+          git: {
+            remoteBranchExists: (b) => defaultRemoteBranchExists(b, this.checkoutPath),
+          },
+        });
+        if (decision.kind === 'refuse') {
+          await this.handlePushRefused(decision);
+          return false;
+        }
+
         // Push to remote (set upstream on first push)
         const pushResult = await this.github.push('origin', branch, true);
         this.logger.info(
@@ -278,6 +307,60 @@ export class PrManager {
         'Failed to ensure draft PR (non-fatal)',
       );
       return undefined;
+    }
+  }
+
+  /**
+   * #1051 FR-003: react to a `refuse` decision from the pre-push guard.
+   *
+   * Mirrors the same warn shape as `PrFeedbackHandler.handlePushRefused` so a
+   * grep for `event: 'push-refused'` reveals every refusal site (T061). Best-
+   * effort label mutation: `agent:in-progress` cleared unconditionally,
+   * `agent:error` added only when the linked issue is still open.
+   */
+  private async handlePushRefused(decision: {
+    reason: 'pr-merged' | 'pr-closed' | 'branch-missing';
+    prNumber: number | null;
+    branch: string;
+    owner: string;
+    repo: string;
+    issueNumber: number;
+  }): Promise<void> {
+    const { reason, prNumber, branch, owner, repo, issueNumber } = decision;
+    this.logger.warn(
+      { event: 'push-refused', reason, prNumber, branch, owner, repo, issueNumber },
+      'Refusing push — PR state or remote branch state indicates a resurrection or duplicate-PR attempt',
+    );
+
+    let issueState: 'open' | 'closed' = 'open';
+    try {
+      const issue = await this.github.getIssue(owner, repo, issueNumber);
+      issueState = issue.state;
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to read issue state — assuming open',
+      );
+    }
+
+    try {
+      await this.github.removeLabels(owner, repo, issueNumber, ['agent:in-progress']);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to remove agent:in-progress — non-fatal',
+      );
+    }
+
+    if (issueState === 'open') {
+      try {
+        await this.github.addLabels(owner, repo, issueNumber, ['agent:error']);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'handlePushRefused: failed to add agent:error — non-fatal',
+        );
+      }
     }
   }
 

@@ -560,7 +560,9 @@ describe('RepoCheckout', () => {
 
       const resetHeadIdx = callOrder.findIndex((c) => c === 'reset(--hard,HEAD)');
       const cleanIdx = callOrder.findIndex((c) => c === 'clean(-fd)');
-      const fetchIdx = callOrder.findIndex((c) => c === 'fetch(origin)');
+      // #1051 FR-001: fetch call is now `fetch(origin,--prune)`; use startsWith
+      // so this ordering assertion tracks the semantic step rather than the exact argv.
+      const fetchIdx = callOrder.findIndex((c) => c.startsWith('fetch(origin'));
       const checkoutIdx = callOrder.findIndex((c) => c.startsWith('checkout'));
       const resetOriginIdx = callOrder.findIndex((c) => c === 'reset(--hard,origin/develop)');
 
@@ -629,7 +631,9 @@ describe('RepoCheckout', () => {
 
       const resetHeadIdx = callOrder.findIndex((c) => c === 'reset(--hard,HEAD)');
       const cleanIdx = callOrder.findIndex((c) => c === 'clean(-fd)');
-      const fetchIdx = callOrder.findIndex((c) => c === 'fetch(origin)');
+      // #1051 FR-001: fetch call is now `fetch(origin,--prune)`; use startsWith
+      // so this ordering assertion tracks the semantic step rather than the exact argv.
+      const fetchIdx = callOrder.findIndex((c) => c.startsWith('fetch(origin'));
       const checkoutIdx = callOrder.findIndex((c) => c.startsWith('checkout'));
       const resetOriginIdx = callOrder.findIndex((c) => c === 'reset(--hard,origin/my-branch)');
 
@@ -638,6 +642,43 @@ describe('RepoCheckout', () => {
       expect(fetchIdx).toBeGreaterThan(cleanIdx);
       expect(checkoutIdx).toBeGreaterThan(fetchIdx);
       expect(resetOriginIdx).toBeGreaterThan(checkoutIdx);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // #1051 SC-005: --prune present on both fetch sites; absent from fetchBase
+  // -------------------------------------------------------------------------
+  describe('#1051 SC-005: fetch --prune on multi-ref sites', () => {
+    it('switchBranch() passes --prune to git fetch origin', async () => {
+      await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
+
+      const call = findCall('git', ['fetch', 'origin']);
+      expect(call).toBeDefined();
+      expect(call![1]).toEqual(['fetch', 'origin', '--prune']);
+    });
+
+    it('updateRepo() (via ensureCheckout with existing directory) passes --prune to git fetch origin', async () => {
+      mockStat
+        .mockRejectedValueOnce(enoentError())   // no bootstrapped
+        .mockResolvedValue({ isDirectory: () => true });
+
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const call = findCall('git', ['fetch', 'origin']);
+      expect(call).toBeDefined();
+      expect(call![1]).toEqual(['fetch', 'origin', '--prune']);
+    });
+
+    // Invariant I-3: `fetchBase` is a single-ref fetch — --prune has no effect
+    // there and would create ambiguous intent. This negative assertion protects
+    // against a well-meaning edit that mistakenly adds --prune to all three sites.
+    it('fetchBase() does NOT pass --prune (invariant I-3)', async () => {
+      await checkout.fetchBase('/workspace/worker-1/octocat/repo', 'main');
+
+      const fetchCalls = findAllCalls('git', ['fetch']);
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0]![1]).toEqual(['fetch', 'origin', 'main']);
+      expect(fetchCalls[0]![1]).not.toContain('--prune');
     });
   });
 });
