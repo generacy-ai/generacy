@@ -308,10 +308,127 @@ describe('RedisQueueAdapter.enqueueIfAbsent', () => {
 
     expect(second).toBe(false);
     // #879 / FR-009: adapter-level drop signal. Distinct from Redis-error warn.
+    // #1054: shape now carries `ageMs` (may be null when scan mock isn't
+    // wired — that's a fail-safe info per the transition-edge helper).
     expect(logger.info).toHaveBeenCalledWith(
-      { itemKey: 'test-org/test-repo#42', reason: 'in-flight' },
+      expect.objectContaining({ itemKey: 'test-org/test-repo#42', reason: 'in-flight' }),
       'Dropping enqueue (item already in flight)',
     );
+  });
+
+  it('FR-006 / SC-003: drop past maxRunDurationMs emits warn with ageMs > threshold', async () => {
+    const { redis, state } = createMockRedisWithState();
+    const oldEnqueuedAt = new Date(Date.now() - 3_600_000).toISOString(); // 60 min old
+    // Add SCAN/hgetall/exists to the mock for hasInFlightAge.
+    (redis as unknown as Record<string, unknown>).exists = vi.fn(async () => 0);
+    (redis as unknown as Record<string, unknown>).hgetall = vi.fn(async (key: string) => {
+      const workerId = key.replace('orchestrator:queue:claimed:', '');
+      const workerMap = state.claimed.get(workerId);
+      if (!workerMap) return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of workerMap) out[k] = v;
+      return out;
+    });
+    (redis as unknown as Record<string, unknown>).scan = vi.fn(async () => {
+      const keys: string[] = [];
+      for (const workerId of state.claimed.keys()) {
+        keys.push(`orchestrator:queue:claimed:${workerId}`);
+      }
+      return ['0', keys];
+    });
+
+    const adapter = new RedisQueueAdapter(
+      redis as unknown as import('ioredis').Redis,
+      logger,
+      { maxRetries: 3, maxRunDurationMs: 1_800_000 },
+    );
+
+    // Seed a wedged in-flight claim with an old enqueuedAt.
+    state.inFlight.add('test-org/test-repo#42');
+    const workerMap = new Map<string, string>();
+    workerMap.set(
+      'test-org/test-repo#42',
+      JSON.stringify({ ...sampleItem, attemptCount: 0, itemKey: 'test-org/test-repo#42', enqueuedAt: oldEnqueuedAt }),
+    );
+    state.claimed.set('worker-1', workerMap);
+
+    logger.warn.mockClear();
+    const result = await adapter.enqueueIfAbsent(sampleItem);
+
+    expect(result).toBe(false);
+    // The transition-edge fires: severity flips info→warn on this first drop.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemKey: 'test-org/test-repo#42',
+        reason: 'in-flight',
+        ageMs: expect.any(Number),
+      }),
+      'Dropping enqueue (item already in flight)',
+    );
+    const warnCall = logger.warn.mock.calls.find(
+      (c) =>
+        typeof c[0] === 'object' &&
+        (c[0] as Record<string, unknown>).reason === 'in-flight',
+    );
+    expect((warnCall![0] as Record<string, unknown>).ageMs as number).toBeGreaterThan(1_800_000);
+  });
+
+  it('FR-006 transition-edge: subsequent drops for same itemKey (age still > threshold) do NOT re-emit warn', async () => {
+    const { redis, state } = createMockRedisWithState();
+    const oldEnqueuedAt = new Date(Date.now() - 3_600_000).toISOString();
+    (redis as unknown as Record<string, unknown>).exists = vi.fn(async () => 0);
+    (redis as unknown as Record<string, unknown>).hgetall = vi.fn(async (key: string) => {
+      const workerId = key.replace('orchestrator:queue:claimed:', '');
+      const workerMap = state.claimed.get(workerId);
+      if (!workerMap) return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of workerMap) out[k] = v;
+      return out;
+    });
+    (redis as unknown as Record<string, unknown>).scan = vi.fn(async () => {
+      const keys: string[] = [];
+      for (const workerId of state.claimed.keys()) {
+        keys.push(`orchestrator:queue:claimed:${workerId}`);
+      }
+      return ['0', keys];
+    });
+
+    const adapter = new RedisQueueAdapter(
+      redis as unknown as import('ioredis').Redis,
+      logger,
+      { maxRetries: 3, maxRunDurationMs: 1_800_000 },
+    );
+
+    state.inFlight.add('test-org/test-repo#42');
+    const workerMap = new Map<string, string>();
+    workerMap.set(
+      'test-org/test-repo#42',
+      JSON.stringify({ ...sampleItem, attemptCount: 0, itemKey: 'test-org/test-repo#42', enqueuedAt: oldEnqueuedAt }),
+    );
+    state.claimed.set('worker-1', workerMap);
+
+    // First drop: warn transition edge.
+    await adapter.enqueueIfAbsent(sampleItem);
+    logger.warn.mockClear();
+    logger.info.mockClear();
+
+    // Second drop: severity stays warn but isTransitionEdge=false. Per FR-006
+    // anti-spam, emit routes through `logger.info`, NOT `logger.warn`.
+    await adapter.enqueueIfAbsent(sampleItem);
+
+    const warnCalls = logger.warn.mock.calls.filter(
+      (c) =>
+        typeof c[0] === 'object' &&
+        (c[0] as Record<string, unknown>).reason === 'in-flight',
+    );
+    const infoCalls = logger.info.mock.calls.filter(
+      (c) =>
+        typeof c[0] === 'object' &&
+        (c[0] as Record<string, unknown>).reason === 'in-flight',
+    );
+    // Anti-spam: no repeat warn. Emit lands at info instead.
+    expect(warnCalls).toHaveLength(0);
+    expect(infoCalls).toHaveLength(1);
   });
 
   it('hasInFlight returns false and logs warn on Redis error (fail-safe)', async () => {

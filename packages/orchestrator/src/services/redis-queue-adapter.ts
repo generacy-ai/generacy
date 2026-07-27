@@ -1,7 +1,19 @@
 import type { Redis } from 'ioredis';
-import type { QueueItem, QueueItemWithScore, QueueManager, SerializedQueueItem } from '../types/index.js';
+import type {
+  QueueItem,
+  QueueItemWithScore,
+  QueueManager,
+  ReapReport,
+  ReclaimedItem,
+  SerializedQueueItem,
+} from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
 import { getPriorityScore } from './queue-priority.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
 
 const PENDING_KEY = 'orchestrator:queue:pending';
 const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
@@ -51,6 +63,54 @@ redis.call('SET', KEYS[3], '1', 'EX', tonumber(ARGV[1]))
 return member
 `;
 
+/**
+ * #1054 — Reclaim an orphaned claim atomically. Server-side re-check of the
+ * heartbeat key (US2 race safety) and grace-window guard (FR-005) live
+ * inside the script body — the outer-loop `EXISTS` check the caller does
+ * before invoking this script is a fast-path optimization; this script is
+ * the load-bearing guard.
+ *
+ * KEYS[1] = orchestrator:queue:claimed:<workerId>
+ * KEYS[2] = orchestrator:worker:<workerId>:heartbeat
+ * KEYS[3] = orchestrator:queue:in-flight-items
+ * KEYS[4] = orchestrator:queue:pending
+ * ARGV[1] = itemKey
+ * ARGV[2] = ageMs (client-computed: now - Date.parse(claimed.enqueuedAt))
+ * ARGV[3] = graceWindowMs
+ * ARGV[4] = resumePriority (numeric string; "0" for 'resume')
+ * ARGV[5] = pre-serialized reclaim-item JSON (attemptCount++, queueReason='resume')
+ *
+ * Return codes:
+ *   0 = no-op (claim hash field absent; concurrent reclaim already ran)
+ *   1 = reclaimed
+ *   2 = heartbeat re-appeared server-side (US2 abort)
+ *   3 = within grace window (FR-005 abort)
+ */
+const RECLAIM_ORPHAN_SCRIPT = `
+local claimed = redis.call('HGET', KEYS[1], ARGV[1])
+if not claimed then
+  return 0
+end
+
+if redis.call('EXISTS', KEYS[2]) == 1 then
+  return 2
+end
+
+if tonumber(ARGV[2]) < tonumber(ARGV[3]) then
+  return 3
+end
+
+redis.call('HDEL', KEYS[1], ARGV[1])
+if redis.call('HLEN', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[1])
+end
+
+redis.call('SREM', KEYS[3], ARGV[1])
+redis.call('ZADD', KEYS[4], tonumber(ARGV[4]), ARGV[5])
+
+return 1
+`;
+
 interface Logger {
   info(msg: string): void;
   info(obj: Record<string, unknown>, msg: string): void;
@@ -83,13 +143,31 @@ export class RedisQueueAdapter implements QueueManager {
   private readonly redis: Redis;
   private readonly logger: Logger;
   private readonly maxRetries: number;
+  private readonly maxRunDurationMs: number;
+  private readonly heartbeatCheckIntervalMs: number;
   private claimCommandDefined = false;
   private enqueueIfAbsentCommandDefined = false;
+  private reclaimOrphanCommandDefined = false;
+  /**
+   * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
+   * drop-log transition-edge decision. Cleared on `complete()` (R6 mitigation)
+   * and on successful reclaim (via `reapOrphanClaims`) to keep growth bounded.
+   */
+  private readonly dropLogState = new Map<string, DropTransitionState>();
 
-  constructor(redis: Redis, logger: Logger, config?: Pick<DispatchConfig, 'maxRetries'>) {
+  constructor(
+    redis: Redis,
+    logger: Logger,
+    config?: Pick<
+      DispatchConfig,
+      'maxRetries' | 'maxRunDurationMs' | 'heartbeatCheckIntervalMs'
+    >,
+  ) {
     this.redis = redis;
     this.logger = logger;
     this.maxRetries = config?.maxRetries ?? 3;
+    this.maxRunDurationMs = config?.maxRunDurationMs ?? 1_800_000;
+    this.heartbeatCheckIntervalMs = config?.heartbeatCheckIntervalMs ?? 15_000;
   }
 
   private ensureClaimCommand(): void {
@@ -108,6 +186,15 @@ export class RedisQueueAdapter implements QueueManager {
       lua: ENQUEUE_IF_ABSENT_SCRIPT,
     });
     this.enqueueIfAbsentCommandDefined = true;
+  }
+
+  private ensureReclaimOrphanCommand(): void {
+    if (this.reclaimOrphanCommandDefined) return;
+    this.redis.defineCommand('reclaimOrphan', {
+      numberOfKeys: 4,
+      lua: RECLAIM_ORPHAN_SCRIPT,
+    });
+    this.reclaimOrphanCommandDefined = true;
   }
 
   async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
@@ -138,8 +225,21 @@ export class RedisQueueAdapter implements QueueManager {
       } else {
         // #879 / FR-009: structured drop signal for the in-flight-collision path.
         // Distinct from the Redis-error warn path below.
-        this.logger.info(
-          { itemKey, reason: 'in-flight' },
+        // #1054 / FR-006: severity escalates from `info` to `warn` on the
+        // transition edge when the wedged in-flight entry's age crosses
+        // `maxRunDurationMs`. Structured fields preserved verbatim so
+        // downstream log queries and alerts key on unchanged shape.
+        const ageMs = await this.hasInFlightAge(itemKey);
+        const decision = classifyDropSeverity(
+          itemKey,
+          ageMs,
+          this.maxRunDurationMs,
+          this.dropLogState,
+        );
+        emitDropLog(
+          this.logger,
+          decision,
+          { itemKey, reason: 'in-flight', ageMs },
           'Dropping enqueue (item already in flight)',
         );
       }
@@ -161,6 +261,222 @@ export class RedisQueueAdapter implements QueueManager {
       this.logger.warn({ err: error, itemKey }, 'Redis error in hasInFlight');
       return false;
     }
+  }
+
+  /**
+   * #1054 / FR-006 / FR-007 — return the age in ms of the given itemKey's
+   * in-flight claim, or `null` if not in flight or on transport error
+   * (fail-safe per AD-11).
+   *
+   * Complexity: O(N-workers). Acceptable because the drop path is not hot
+   * (fires only on collision) and N (active workers per cluster) is small
+   * — typically 1 per replica.
+   */
+  async hasInFlightAge(itemKey: string): Promise<number | null> {
+    try {
+      let cursor = '0';
+      const now = Date.now();
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          'MATCH',
+          `${CLAIMED_KEY_PREFIX}*`,
+          'COUNT',
+          100,
+        );
+        cursor = nextCursor;
+        for (const key of keys) {
+          const payload = await this.redis.hget(key, itemKey);
+          if (!payload) continue;
+          try {
+            const parsed: SerializedQueueItem = JSON.parse(payload);
+            const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+            if (Number.isNaN(enqueuedAtMs)) return null;
+            return now - enqueuedAtMs;
+          } catch {
+            return null;
+          }
+        }
+      } while (cursor !== '0');
+      return null;
+    } catch (error) {
+      this.logger.warn(
+        { err: error, itemKey },
+        'Redis error in hasInFlightAge',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * #1054 / FR-001 / FR-002 / FR-004 — Redis-side reap sweep. Reclaims
+   * `orchestrator:queue:claimed:*` hashes whose owning worker heartbeat is
+   * absent, re-enqueues with `queueReason: 'resume'` and `attemptCount++`.
+   *
+   * Race safety (US2): the outer-loop `EXISTS` check is an optimization;
+   * the load-bearing guard is the server-side re-check inside the Lua
+   * script. Grace window (FR-005): claims younger than
+   * `2 × heartbeatCheckIntervalMs` are skipped.
+   *
+   * Never throws. On transport error mid-sweep: `warn` + return the
+   * partial report so subsequent cycles retry.
+   */
+  async reapOrphanClaims(now: number = Date.now()): Promise<ReapReport> {
+    this.ensureReclaimOrphanCommand();
+
+    const report: ReapReport = {
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    };
+    const graceWindowMs = 2 * this.heartbeatCheckIntervalMs;
+    const resumePriority = getPriorityScore('resume');
+
+    try {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          'MATCH',
+          `${CLAIMED_KEY_PREFIX}*`,
+          'COUNT',
+          100,
+        );
+        cursor = nextCursor;
+
+        for (const claimedKey of keys) {
+          const workerId = claimedKey.slice(CLAIMED_KEY_PREFIX.length);
+          const heartbeatKey = buildHeartbeatKey(workerId);
+
+          let fields: Record<string, string>;
+          try {
+            fields = await this.redis.hgetall(claimedKey);
+          } catch (error) {
+            this.logger.warn(
+              { err: error, workerId },
+              'Redis error in reapOrphanClaims (HGETALL), continuing sweep',
+            );
+            continue;
+          }
+          if (!fields || Object.keys(fields).length === 0) continue;
+
+          // Fast-path optimization: skip whole worker if heartbeat is alive.
+          try {
+            const alive = await this.redis.exists(heartbeatKey);
+            if (alive === 1) {
+              // scanned counts per-(workerId, itemKey) pair; even though we
+              // fast-skip we still counted them (they existed in the hash).
+              report.scanned += Object.keys(fields).length;
+              continue;
+            }
+          } catch (error) {
+            this.logger.warn(
+              { err: error, workerId },
+              'Redis error in reapOrphanClaims (EXISTS), continuing sweep',
+            );
+            continue;
+          }
+
+          for (const [itemKey, payload] of Object.entries(fields)) {
+            report.scanned += 1;
+
+            let parsed: SerializedQueueItem;
+            try {
+              parsed = JSON.parse(payload);
+            } catch (error) {
+              this.logger.warn(
+                { err: error, workerId, itemKey },
+                'Malformed claim payload in reapOrphanClaims, skipping',
+              );
+              continue;
+            }
+
+            const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+            if (Number.isNaN(enqueuedAtMs)) {
+              this.logger.warn(
+                { workerId, itemKey, enqueuedAt: parsed.enqueuedAt },
+                'Unparseable enqueuedAt in reapOrphanClaims, skipping',
+              );
+              continue;
+            }
+            const ageMs = now - enqueuedAtMs;
+
+            const attemptCountBefore = parsed.attemptCount;
+            const attemptCountAfter = attemptCountBefore + 1;
+            const reclaimItem: SerializedQueueItem = {
+              ...parsed,
+              attemptCount: attemptCountAfter,
+              queueReason: 'resume',
+              priority: resumePriority,
+            };
+            const reclaimItemJSON = JSON.stringify(reclaimItem);
+
+            let result: number;
+            try {
+              result = (await (this.redis as any).reclaimOrphan(
+                claimedKey,
+                heartbeatKey,
+                IN_FLIGHT_KEY,
+                PENDING_KEY,
+                itemKey,
+                String(ageMs),
+                String(graceWindowMs),
+                String(resumePriority),
+                reclaimItemJSON,
+              )) as number;
+            } catch (error) {
+              this.logger.warn(
+                { err: error, workerId, itemKey },
+                'Redis error in reapOrphanClaims (Lua), continuing sweep',
+              );
+              continue;
+            }
+
+            if (result === 1) {
+              const reclaimed: ReclaimedItem = {
+                workerId,
+                itemKey,
+                ageMs,
+                attemptCountBefore,
+                attemptCountAfter,
+              };
+              report.reclaimed.push(reclaimed);
+              // FR-008: per-reclaim `warn` line. Not gated by transition-edge
+              // tracking — the reclaim itself is one-shot. Complements the
+              // in-memory reaper warn in worker-dispatcher.ts so log queries
+              // can differentiate the two paths.
+              this.logger.warn(
+                {
+                  event: 'orphan-claim-reclaimed',
+                  workerId,
+                  itemKey,
+                  ageMs,
+                  attemptCountBefore,
+                  attemptCountAfter,
+                  reason: 'orphaned-claim-no-heartbeat',
+                },
+                'Reclaimed orphaned queue claim (worker heartbeat absent)',
+              );
+              // Bound the transition-edge Map growth (R6).
+              this.dropLogState.delete(itemKey);
+            } else if (result === 2) {
+              report.skippedRaceReappeared += 1;
+            } else if (result === 3) {
+              report.skippedGraceWindow += 1;
+            }
+            // result === 0 → no-op (already reclaimed by another dispatcher)
+          }
+        }
+      } while (cursor !== '0');
+    } catch (error) {
+      this.logger.warn(
+        { err: error },
+        'Redis error in reapOrphanClaims sweep, returning partial report',
+      );
+    }
+
+    return report;
   }
 
   async enqueue(item: QueueItem): Promise<void> {
@@ -261,6 +577,8 @@ export class RedisQueueAdapter implements QueueManager {
           .zadd(DEAD_LETTER_KEY, Date.now(), JSON.stringify(deadLetterItem))
           .srem(IN_FLIGHT_KEY, itemKey)
           .exec();
+        // #1054 / R6: bound the transition-edge Map growth.
+        this.dropLogState.delete(itemKey);
         this.logger.warn(
           { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
           'Item dead-lettered after max retries'
@@ -306,6 +624,8 @@ export class RedisQueueAdapter implements QueueManager {
         .del(heartbeatKey)
         .srem(IN_FLIGHT_KEY, itemKey)
         .exec();
+      // #1054 / R6: bound the transition-edge Map growth.
+      this.dropLogState.delete(itemKey);
       this.logger.info(
         { workerId, itemKey },
         'Item completed and removed from claimed set + in-flight index'

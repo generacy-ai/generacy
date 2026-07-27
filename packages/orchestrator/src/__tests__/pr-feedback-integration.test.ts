@@ -183,6 +183,21 @@ class MockQueueManager implements QueueManager {
   async getQueueItems(): Promise<QueueItemWithScore[]> { return []; }
   async getActiveWorkerCount(): Promise<number> { return 0; }
 
+  // #1054: no-op reap (matches InMemoryQueueAdapter).
+  async reapOrphanClaims(): Promise<import('../types/index.js').ReapReport> {
+    return {
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    };
+  }
+
+  // #1054: observability accessor; returns null when not in flight.
+  async hasInFlightAge(_itemKey: string): Promise<number | null> {
+    return null;
+  }
+
   clear(): void {
     this.enqueuedItems = [];
     this.inFlight.clear();

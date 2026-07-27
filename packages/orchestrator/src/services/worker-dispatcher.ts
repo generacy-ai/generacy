@@ -572,6 +572,33 @@ export class WorkerDispatcher {
       } catch (error) {
         this.logger.error({ err: error }, 'Error during reaper cycle');
       }
+
+      // #1054 / FR-001 / AD-4: sequential Redis-side reap after the in-memory
+      // pass, so the Redis sweep sees a coherent state. Error-tolerant (R2/R3)
+      // — a Redis error must not skip subsequent cycles.
+      const report = await this.queue
+        .reapOrphanClaims()
+        .catch((err) => {
+          this.logger.warn({ err }, 'reapOrphanClaims failed');
+          return null;
+        });
+      if (
+        report &&
+        (report.reclaimed.length > 0 ||
+          report.skippedRaceReappeared > 0 ||
+          report.skippedGraceWindow > 0)
+      ) {
+        this.logger.info(
+          {
+            event: 'reap-orphan-claims',
+            scanned: report.scanned,
+            reclaimed: report.reclaimed.length,
+            skippedRaceReappeared: report.skippedRaceReappeared,
+            skippedGraceWindow: report.skippedGraceWindow,
+          },
+          'Reaper cycle complete (Redis-side)',
+        );
+      }
     }
   }
 

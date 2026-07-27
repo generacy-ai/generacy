@@ -7,9 +7,14 @@ import type {
   PhaseTracker,
   QueueItem,
 } from '../types/index.js';
-import type { RepositoryConfig, MonitorConfig } from '../config/schema.js';
+import type { RepositoryConfig, MonitorConfig, DispatchConfig } from '../config/schema.js';
 import { filterByAssignee } from './identity.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
 
 /**
  * Minimal sink for monitor → health-service callbacks. The real service
@@ -98,6 +103,12 @@ export class LabelMonitorService {
 
   private state: MonitorState;
 
+  // #1054 / FR-006 / FR-007: per-itemKey severity state for the in-flight-drop
+  // transition-edge decision. Instance-scoped per SC-004.
+  private monitorDropState: Map<string, DropTransitionState> = new Map();
+
+  private readonly maxRunDurationMs: number;
+
   constructor(
     logger: Logger,
     createClient: GitHubClientFactory,
@@ -110,6 +121,7 @@ export class LabelMonitorService {
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
     webhooksConfigured: boolean = false,
+    dispatchConfig?: Pick<DispatchConfig, 'maxRunDurationMs'>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -125,6 +137,7 @@ export class LabelMonitorService {
       adaptivePolling: config.adaptivePolling,
       maxConcurrentPolls: config.maxConcurrentPolls,
     };
+    this.maxRunDurationMs = dispatchConfig?.maxRunDurationMs ?? 1_800_000;
 
     this.state = {
       isPolling: false,
@@ -348,15 +361,28 @@ export class LabelMonitorService {
     if (type === 'resume') {
       const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
       if (!enqueued) {
-        this.logger.info(
+        // #1054 / FR-006 / FR-007: transition-edge severity escalation via
+        // shared helper. Context fields (gate/source/etc.) preserved verbatim.
+        const itemKey = `${owner}/${repo}#${issueNumber}`;
+        const ageMs = await this.queueManager.hasInFlightAge(itemKey);
+        const decision = classifyDropSeverity(
+          itemKey,
+          ageMs,
+          this.maxRunDurationMs,
+          this.monitorDropState,
+        );
+        emitDropLog(
+          this.logger,
+          decision,
           {
-            itemKey: `${owner}/${repo}#${issueNumber}`,
+            itemKey,
             gate: parsedName,
             reason: 'in-flight',
             source,
             owner,
             repo,
             issueNumber,
+            ageMs,
           },
           'Dropping resume event (item already in flight)',
         );

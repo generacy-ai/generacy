@@ -174,6 +174,19 @@ export const DispatchConfigSchema = z.object({
   maxRetries: z.number().int().min(1).default(3),
   /** Backstop delay before resuming polling after a lease denial when no slot_available arrives (ms) */
   denialResumeMs: z.number().int().min(5000).default(60000),
+  /**
+   * Maximum plausible run duration for a single claim (ms). Drop-log lines
+   * from `enqueueIfAbsent` (adapter) and the four monitor sites escalate
+   * from `info` to `warn` on the transition edge when a wedged in-flight
+   * entry's age crosses this threshold.
+   *
+   * Default 30 min per #1054 clarifications Q1=A: comfortably above the
+   * 20-min CLI timeout that produced the observed 84-min wedge, so
+   * legitimate post-timeout work (partial push, label updates) does not
+   * emit spurious warns; still fires on the very next monitor cycle for
+   * the pathological case.
+   */
+  maxRunDurationMs: z.number().int().min(60_000).default(1_800_000),
 });
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 

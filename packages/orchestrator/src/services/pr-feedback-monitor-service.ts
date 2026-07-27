@@ -18,6 +18,12 @@ import { PrLinker, type PrLinkInput, type PrLinkResult } from '../worker/pr-link
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
+import type { DispatchConfig } from '../config/index.js';
 
 /**
  * #869 / FR-004 idempotency marker embedded in bot-authored top-level PR
@@ -77,6 +83,13 @@ export class PrFeedbackMonitorService {
   // re-triggers the notice, which is idempotency-safe via the marker grep.
   private lastZeroTrustedState: Map<string, boolean> = new Map();
 
+  // #1054 / FR-006 / FR-007: per-itemKey severity state for the in-flight-drop
+  // transition-edge decision. Keyed by `${owner}/${repo}#${issueNumber}`.
+  // Instance-scoped so state doesn't leak across services (SC-004 divergence).
+  private monitorDropState: Map<string, DropTransitionState> = new Map();
+
+  private readonly maxRunDurationMs: number;
+
   private state: MonitorState;
 
   constructor(
@@ -90,6 +103,7 @@ export class PrFeedbackMonitorService {
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
     webhooksConfigured: boolean = false,
+    dispatchConfig?: Pick<DispatchConfig, 'maxRunDurationMs'>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -104,6 +118,7 @@ export class PrFeedbackMonitorService {
       adaptivePolling: config.adaptivePolling,
       maxConcurrentPolls: config.maxConcurrentPolls,
     };
+    this.maxRunDurationMs = dispatchConfig?.maxRunDurationMs ?? 1_800_000;
     this.prLinker = new PrLinker(logger);
 
     this.state = {
@@ -423,8 +438,19 @@ export class PrFeedbackMonitorService {
     const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
     if (!enqueued) {
       // FR-009: monitor-side context log paired with the adapter-level line.
-      this.logger.info(
-        { itemKey, reason: 'in-flight', prNumber, issueNumber, owner, repo },
+      // #1054 / FR-006 / FR-007: transition-edge severity escalation via the
+      // shared helper. Context fields preserved verbatim (only severity flips).
+      const ageMs = await this.queueManager.hasInFlightAge(itemKey);
+      const decision = classifyDropSeverity(
+        itemKey,
+        ageMs,
+        this.maxRunDurationMs,
+        this.monitorDropState,
+      );
+      emitDropLog(
+        this.logger,
+        decision,
+        { itemKey, reason: 'in-flight', prNumber, issueNumber, owner, repo, ageMs },
         'Dropping PR-feedback enqueue (item already in flight)',
       );
       return false;

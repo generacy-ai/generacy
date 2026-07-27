@@ -297,10 +297,13 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   if (redisClient) {
     queueAdapter = new RedisQueueAdapter(redisClient, server.log, {
       maxRetries: config.dispatch.maxRetries,
+      maxRunDurationMs: config.dispatch.maxRunDurationMs,
+      heartbeatCheckIntervalMs: config.dispatch.heartbeatCheckIntervalMs,
     });
   } else {
     queueAdapter = new InMemoryQueueAdapter(server.log, {
       maxRetries: config.dispatch.maxRetries,
+      maxRunDurationMs: config.dispatch.maxRunDurationMs,
     });
     server.log.info('Using in-memory queue adapter (Redis unavailable)');
   }
@@ -523,6 +526,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       githubAuthHealth ?? undefined,
       githubAppCredentialId,
       config.smee.channelUrl != null, // #953: webhooksConfigured
+      { maxRunDurationMs: config.dispatch.maxRunDurationMs }, // #1054
     );
 
     // #987: construct the three sibling monitors before `startSmeePipeline` so
@@ -543,6 +547,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
         config.smee.channelUrl != null,
+        { maxRunDurationMs: config.dispatch.maxRunDurationMs }, // #1054
       );
 
       mergeConflictMonitorService = new MergeConflictMonitorService(
@@ -556,6 +561,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
         config.smee.channelUrl != null,
+        { maxRunDurationMs: config.dispatch.maxRunDurationMs }, // #1054
       );
 
       clarificationAnswerMonitorService = new ClarificationAnswerMonitorService(
@@ -569,6 +575,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
         config.smee.channelUrl != null,
+        { maxRunDurationMs: config.dispatch.maxRunDurationMs }, // #1054
       );
     }
 

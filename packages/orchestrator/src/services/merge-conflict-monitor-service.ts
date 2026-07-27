@@ -24,6 +24,12 @@ import type { Logger } from '../worker/types.js';
 import { filterByAssignee } from './identity.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
+import type { DispatchConfig } from '../config/index.js';
 
 const WAITING_FOR_MERGE_CONFLICTS_LABEL = 'waiting-for:merge-conflicts';
 const AGENT_PAUSED_LABEL = 'agent:paused';
@@ -80,6 +86,12 @@ export class MergeConflictMonitorService {
   private abortController: AbortController | null = null;
   private state: MonitorState;
 
+  // #1054 / FR-006 / FR-007: per-itemKey severity state for the in-flight-drop
+  // transition-edge decision. Instance-scoped per SC-004.
+  private monitorDropState: Map<string, DropTransitionState> = new Map();
+
+  private readonly maxRunDurationMs: number;
+
   constructor(
     logger: Logger,
     createClient: GitHubClientFactory,
@@ -91,6 +103,7 @@ export class MergeConflictMonitorService {
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
     webhooksConfigured: boolean = false,
+    dispatchConfig?: Pick<DispatchConfig, 'maxRunDurationMs'>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -105,6 +118,7 @@ export class MergeConflictMonitorService {
       adaptivePolling: config.adaptivePolling,
       maxConcurrentPolls: config.maxConcurrentPolls,
     };
+    this.maxRunDurationMs = dispatchConfig?.maxRunDurationMs ?? 1_800_000;
     this.state = {
       isPolling: false,
       webhookHealthy: true,
@@ -181,8 +195,19 @@ export class MergeConflictMonitorService {
     const itemKey = `${owner}/${repo}#${issueNumber}`;
     const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
     if (!enqueued) {
-      this.logger.info(
-        { itemKey, reason: 'in-flight', owner, repo, issueNumber },
+      // #1054 / FR-006 / FR-007: transition-edge severity escalation via
+      // shared helper. Context fields preserved verbatim.
+      const ageMs = await this.queueManager.hasInFlightAge(itemKey);
+      const decision = classifyDropSeverity(
+        itemKey,
+        ageMs,
+        this.maxRunDurationMs,
+        this.monitorDropState,
+      );
+      emitDropLog(
+        this.logger,
+        decision,
+        { itemKey, reason: 'in-flight', owner, repo, issueNumber, ageMs },
         'Dropping merge-conflict enqueue (item already in flight)',
       );
       return false;

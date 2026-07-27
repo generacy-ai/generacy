@@ -290,6 +290,56 @@ export interface QueueManager extends QueueAdapter {
    * Exposed for admin/queue routes and future cockpit views.
    */
   hasInFlight(itemKey: string): Promise<boolean>;
+  /**
+   * #1054 / FR-001 / FR-002 / FR-004: reclaim orphaned claims whose owning
+   * worker's heartbeat is absent. Runs on the dispatcher's reaper cadence.
+   *
+   * Race safety (US2): the outer-loop `EXISTS heartbeat` check is an
+   * optimization; the load-bearing guard is the server-side re-check inside
+   * `RECLAIM_ORPHAN_SCRIPT`. A heartbeat that re-appears between the two
+   * checks aborts the reclaim without mutating state.
+   *
+   * Grace window (FR-005): claims younger than `2 × heartbeatCheckIntervalMs`
+   * are skipped to defend against a hypothetical future refactor that splits
+   * `CLAIM_SCRIPT`'s atomicity.
+   *
+   * @param now epoch-ms; parameterized for testability (default `Date.now()`)
+   */
+  reapOrphanClaims(now?: number): Promise<ReapReport>;
+  /**
+   * #1054 / FR-006 / FR-007: observability accessor — returns the age in ms
+   * of the given itemKey's in-flight entry, or `null` if not in flight OR on
+   * transport error. Called by monitor-side drop sites to compute `ageMs`
+   * for the shared severity dispatcher.
+   */
+  hasInFlightAge(itemKey: string): Promise<number | null>;
+}
+
+/**
+ * #1054 — one entry per reclaimed orphan produced by
+ * `QueueManager.reapOrphanClaims`.
+ */
+export interface ReclaimedItem {
+  workerId: string;
+  itemKey: string;
+  ageMs: number;
+  attemptCountBefore: number;
+  attemptCountAfter: number;
+}
+
+/**
+ * #1054 — aggregate result of one `reapOrphanClaims` sweep. Consumed by
+ * `WorkerDispatcher.reaperLoop`'s per-cycle log line (info when nonzero).
+ */
+export interface ReapReport {
+  /** Number of claim (workerId, itemKey) pairs iterated. */
+  scanned: number;
+  /** Successfully reclaimed items. */
+  reclaimed: ReclaimedItem[];
+  /** Skipped because heartbeat re-appeared server-side (US2 defence). */
+  skippedRaceReappeared: number;
+  /** Skipped because claim was within the grace window (FR-005). */
+  skippedGraceWindow: number;
 }
 
 /**

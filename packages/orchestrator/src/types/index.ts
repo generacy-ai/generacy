@@ -103,6 +103,8 @@ export {
   type PrReviewEvent,
   type PrToIssueLink,
   type GitHubPrReviewWebhookPayload,
+  type ReapReport,
+  type ReclaimedItem,
 } from './monitor.js';
 
 // SSE Types
