@@ -16,7 +16,11 @@ Speckit clarify phase. Answers are consumed by `/plan`, `/tasks`, and `/implemen
 - C: No new knob — derive at read time from `shutdownTimeoutMs × 12` (or similar multiplier) so tuning stays with the existing knob.
 - D: No new knob — hardcode `1_800_000` (30 min) as a `MAX_RUN_DURATION_MS` module constant; make it configurable only if operators later ask.
 
-**Answer**: *Pending*
+**Answer**: A — new `maxRunDurationMs` field on `DispatchConfigSchema`, default `1_800_000` (30 min).
+
+Rejecting B (20 min): that value **is** the CLI timeout, and legitimate post-timeout work runs past it — partial push, label updates, disposition handling. In the observed incident the partial push landed ~3 s after SIGTERM, but nothing guarantees that; a 20 min threshold would emit `warn`s on healthy runs and train operators to ignore them. 30 min still caught the observed 84-minute wedge almost immediately, which is the case that matters.
+
+Rejecting C: a magic multiplier on an unrelated knob (`shutdownTimeoutMs × 12`) is opaque and couples two things that should move independently. Rejecting D: operators with legitimately longer runs need a knob without a redeploy.
 
 ### Q2: Reclaim atomicity primitive
 
@@ -29,7 +33,9 @@ Speckit clarify phase. Answers are consumed by `/plan`, `/tasks`, and `/implemen
 - B: `MULTI`/`EXEC` with `WATCH` on the heartbeat key — if the heartbeat is `SET` between `WATCH` and `EXEC`, the transaction aborts and the reclaim is skipped for that claim. More client round trips; matches the `WATCH` phrasing in FR-004 but not the existing Lua-script pattern.
 - C: Hybrid — Lua script for the write path (A), plus a preceding `WATCH`-based guard for the heartbeat re-appearance check. Redundant with Lua's own atomicity guarantee; adds no value if A is chosen.
 
-**Answer**: *Pending*
+**Answer**: A — new Lua `RECLAIM_ORPHAN_SCRIPT`.
+
+Matches the established pattern (`CLAIM_SCRIPT`, `ENQUEUE_IF_ABSENT_SCRIPT`, `RELEASE_SCRIPT`), single round trip, server-side atomicity guaranteed. The FR-005 grace-window check embeds naturally as a Lua `now`-vs-`enqueuedAt` comparison. C is redundant — Lua execution is already atomic, so a `WATCH` guard in front of it buys nothing.
 
 ### Q3: `attemptCount` handling on reclaim
 
@@ -42,7 +48,15 @@ Speckit clarify phase. Answers are consumed by `/plan`, `/tasks`, and `/implemen
 - B: Preserve `attemptCount` unchanged. Matches `handleLeaseExpired`'s existing behaviour. Simpler; risks infinite reclaim loop for a genuinely pathological item.
 - C: Increment `attemptCount`, but never dead-letter from the reaper path — always re-enqueue regardless of `attemptCount`. Splits the difference: pathological loops are visible via the counter but not gated on it (dead-letter stays a code-path invoked only from `release()`).
 
-**Answer**: *Pending*
+**Answer**: C — increment `attemptCount`, but never dead-letter from the reaper path.
+
+The orphan in the observed incident was not caused by anything about the item. The claim was made at **19:17:18**; the cluster was restarted at **19:22:48**, five minutes later. The restart killed the worker mid-claim. The item was blameless.
+
+Under option A, every routine cluster restart walks whatever items were in flight one step closer to `maxAttempts` and eventual dead-lettering. This cluster restarts often — twice today alone — so A would steadily dead-letter healthy work for infrastructure reasons.
+
+C keeps the counter visible so a genuinely pathological item (e.g. OOM on a giant diff) is diagnosable, without letting infra events condemn innocent items. Dead-lettering stays where it belongs: the `release()` failure path, where the item's own execution actually failed.
+
+Worth logging the reclaim reason alongside the increment so the two causes stay distinguishable after the fact.
 
 ### Q4: Log severity — single-tier or two-tier escalation
 
@@ -55,7 +69,11 @@ Speckit clarify phase. Answers are consumed by `/plan`, `/tasks`, and `/implemen
 - B: Two tiers — `warn` past threshold `T`, `error` past `2 × T`. Applies uniformly to FR-006, FR-007, and FR-008. Two thresholds derived from Q1's answer (T and 2T); no second knob.
 - C: Two tiers with separate signals — FR-006/FR-007 (drop-side, visible on every monitor cycle) stays at `warn` regardless of age; FR-008 (reclaim-side, fires once per orphan) always `warn`. No `error`-level escalation anywhere; keep alerting simple.
 
-**Answer**: *Pending*
+**Answer**: A — single tier, `warn` only.
+
+The drop log fires on every monitor cycle (~5 min), so the observed 84-minute wedge already produces ~17 `warn`s. A second tier at `2 × T` would add ~12 `error`s **for one stuck item** — alarm volume, not signal. More fundamentally: if reclaim works, prolonged staleness should not occur at all. A second severity tier optimises for the case this fix is meant to eliminate.
+
+**Addition (FR-006/FR-007):** log on the **transition edge**, not every cycle. The repetition is itself a defect — 17 identical lines is how this stall stayed invisible. `pr-feedback-monitor-service.ts` already solves this shape via `lastUnresolvedThreadCount` / `isTransition`; reuse that pattern. One line when an entry crosses the threshold, one when it clears.
 
 ### Q5: In-memory adapter behaviour for FR-006/FR-007 log escalation
 
@@ -67,5 +85,9 @@ Speckit clarify phase. Answers are consumed by `/plan`, `/tasks`, and `/implemen
 - A: Yes — `InMemoryQueueAdapter.enqueueIfAbsent` inherits the same age-vs-threshold escalation. Keeps behavioural parity so tests written against either adapter observe the same signal.
 - B: No — in-memory adapter stays `info`-only. The wedge is a Redis-specific liveness hole; the in-memory adapter's process death is total, so no orphan can survive.
 - C: Yes for the log escalation, no for a reclaim sweep — the log line escalates via a shared helper (or copy-pasted rule); no `reapOrphanClaims`-equivalent is added to the in-memory adapter.
+
+**Answer**: C — log-escalation parity, no reclaim sweep.
+
+B is correct that in-memory process death is total, so no orphan can survive — but that argument covers only the **reclaim** half, and FR-011 already permits the reclaim path to be a no-op there. The log-escalation rule is a separate, independently testable behaviour that should be identical on both adapters, so a test written against either observes the same signal. Share it via a helper rather than copy-pasting the comparison.
 
 **Answer**: *Pending*
