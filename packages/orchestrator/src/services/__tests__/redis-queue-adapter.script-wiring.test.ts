@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   RedisQueueAdapter,
   _ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS as ENQUEUE_IF_ABSENT_SCRIPT,
+  _REQUEUE_FOR_RESUME_SCRIPT_FOR_TESTS as REQUEUE_FOR_RESUME_SCRIPT,
+  _RELEASE_SCRIPT_FOR_TESTS as RELEASE_SCRIPT,
 } from '../redis-queue-adapter.js';
 import type { QueueItem } from '../../types/index.js';
 
@@ -154,5 +156,229 @@ describe('RedisQueueAdapter — defineCommand wiring (#1060 script-wiring assert
     await adapter.enqueueIfAbsent(sampleItem);
     expect(enqueueIfAbsent).toHaveBeenCalledOnce();
     expect(enqueueIfAbsent.mock.calls[0]).toHaveLength(5);
+  });
+});
+
+describe('RedisQueueAdapter — REQUEUE_FOR_RESUME_SCRIPT text (#1069 script-wiring assertions)', () => {
+  it('script contains HGET, HDEL, DEL, ZADD in the correct order (single atomic pass)', () => {
+    // Order matters: HGET reads the claim, HDEL clears it, DEL clears
+    // the heartbeat, ZADD extends pending. A transposition would either
+    // orphan the claim (HDEL before HGET) or leak the heartbeat.
+    const src = REQUEUE_FOR_RESUME_SCRIPT;
+    const hgetIdx = src.indexOf('HGET');
+    const hdelIdx = src.indexOf('HDEL');
+    const delIdx = src.indexOf('DEL', hdelIdx + 1); // skip 'HDEL'
+    const zaddIdx = src.indexOf('ZADD');
+    expect(hgetIdx, 'HGET must be present').toBeGreaterThanOrEqual(0);
+    expect(hdelIdx, 'HDEL must be after HGET').toBeGreaterThan(hgetIdx);
+    expect(delIdx, 'DEL heartbeat must be after HDEL').toBeGreaterThan(hdelIdx);
+    expect(zaddIdx, 'ZADD must be after HDEL').toBeGreaterThan(hdelIdx);
+  });
+
+  it('HGET checks KEYS[2] (claimed hash) with the itemKey ARGV[1]', () => {
+    expect(REQUEUE_FOR_RESUME_SCRIPT).toMatch(
+      /HGET'?\s*,\s*KEYS\[2\]\s*,\s*ARGV\[1\]/,
+    );
+  });
+
+  it('HDEL writes to KEYS[2] (claimed hash) with the itemKey ARGV[1]', () => {
+    expect(REQUEUE_FOR_RESUME_SCRIPT).toMatch(
+      /HDEL'?\s*,\s*KEYS\[2\]\s*,\s*ARGV\[1\]/,
+    );
+  });
+
+  it('DEL clears KEYS[3] (heartbeat) on both branches', () => {
+    // The null-guard branch and the happy branch both fire DEL on KEYS[3].
+    const matches = [...REQUEUE_FOR_RESUME_SCRIPT.matchAll(
+      /DEL'?\s*,\s*KEYS\[3\]/g,
+    )];
+    expect(matches.length, 'DEL heartbeat must fire on both branches').toBe(2);
+  });
+
+  it('ZADD writes to KEYS[1] (pending) with resumePriority ARGV[2]', () => {
+    expect(REQUEUE_FOR_RESUME_SCRIPT).toMatch(
+      /ZADD'?\s*,\s*KEYS\[1\]\s*,\s*tonumber\(ARGV\[2\]\)/,
+    );
+  });
+
+  it('returns tuple {0, -1} on the null-guard branch and {1, N} on the happy branch', () => {
+    // FR-005 tuple return shape. The null-guard fires BEFORE the mutation
+    // block, so `{0, -1}` must appear textually before `{1,`.
+    const src = REQUEUE_FOR_RESUME_SCRIPT;
+    const nullGuardIdx = src.indexOf('{0, -1}');
+    const happyIdx = src.search(/\{1,\s*parsed\.attemptCount\}/);
+    expect(nullGuardIdx, '{0, -1} present').toBeGreaterThanOrEqual(0);
+    expect(happyIdx, '{1, parsed.attemptCount} present').toBeGreaterThan(nullGuardIdx);
+  });
+
+  it('preserves parsed.attemptCount verbatim (FR-003 — do NOT increment)', () => {
+    // Load-bearing assertion: any refactor that changes this to
+    // `parsed.attemptCount + 1` would silently condemn blameless items
+    // to dead-letter after N lease-expiry events.
+    expect(REQUEUE_FOR_RESUME_SCRIPT).toMatch(
+      /base\.attemptCount\s*=\s*parsed\.attemptCount(?!\s*\+)/,
+    );
+  });
+
+  it('strips claimedAt (A6) so the next claim stamps a fresh one', () => {
+    expect(REQUEUE_FOR_RESUME_SCRIPT).toMatch(/base\.claimedAt\s*=\s*nil/);
+  });
+});
+
+describe('RedisQueueAdapter — RELEASE_SCRIPT text (#1069 script-wiring assertions)', () => {
+  it('script contains HGET, HDEL, DEL, ZADD, SREM (dead-letter branch)', () => {
+    const src = RELEASE_SCRIPT;
+    expect(src.indexOf('HGET'), 'HGET present').toBeGreaterThanOrEqual(0);
+    expect(src.indexOf('HDEL'), 'HDEL present').toBeGreaterThanOrEqual(0);
+    expect(src.indexOf('DEL'), 'DEL present').toBeGreaterThanOrEqual(0);
+    expect(src.indexOf('ZADD'), 'ZADD present').toBeGreaterThanOrEqual(0);
+    // FR-006 — SREM fires ONLY on the dead-letter branch.
+    expect(src.indexOf('SREM'), 'SREM present (dead-letter branch)').toBeGreaterThanOrEqual(0);
+  });
+
+  it('HGET reads KEYS[2] (claimed hash) with ARGV[1]', () => {
+    expect(RELEASE_SCRIPT).toMatch(/HGET'?\s*,\s*KEYS\[2\]\s*,\s*ARGV\[1\]/);
+  });
+
+  it('retry branch writes to KEYS[1] (pending) with retryPriority ARGV[2]', () => {
+    expect(RELEASE_SCRIPT).toMatch(
+      /ZADD'?\s*,\s*KEYS\[1\]\s*,\s*tonumber\(ARGV\[2\]\)/,
+    );
+  });
+
+  it('dead-letter branch writes to KEYS[4] (dead-letter ZSET) with score ARGV[5]', () => {
+    expect(RELEASE_SCRIPT).toMatch(
+      /ZADD'?\s*,\s*KEYS\[4\]\s*,\s*tonumber\(ARGV\[5\]\)/,
+    );
+  });
+
+  it('SREM removes from KEYS[5] (in-flight SET) — FR-006 dead-letter branch only', () => {
+    expect(RELEASE_SCRIPT).toMatch(
+      /SREM'?\s*,\s*KEYS\[5\]\s*,\s*ARGV\[1\]/,
+    );
+  });
+
+  it('increments attemptCount by exactly one on the retry side (FR-004)', () => {
+    expect(RELEASE_SCRIPT).toMatch(
+      /attemptCount\s*=\s*parsed\.attemptCount\s*\+\s*1/,
+    );
+  });
+
+  it('dispatches on attemptCount >= tonumber(ARGV[4]) (maxRetries threshold)', () => {
+    expect(RELEASE_SCRIPT).toMatch(
+      /attemptCount\s*>=\s*maxRetries/,
+    );
+  });
+
+  it('returns tuple {0, -1} on null-guard, {1, N} on retry, {2, N} on dead-letter', () => {
+    // The three FR-005 return shapes, in the order they appear textually
+    // in the script body: null-guard first, then dead-letter (`if` block),
+    // then retry (fall-through). A regression that swapped {1, N} and
+    // {2, N} would silently retry-after-dead-letter or vice versa.
+    const src = RELEASE_SCRIPT;
+    const nullGuardIdx = src.indexOf('{0, -1}');
+    const deadLetterIdx = src.indexOf('{2,');
+    const retryIdx = src.indexOf('{1,');
+    expect(nullGuardIdx, '{0, -1} present').toBeGreaterThanOrEqual(0);
+    expect(deadLetterIdx, '{2, N} present').toBeGreaterThan(nullGuardIdx);
+    expect(retryIdx, '{1, N} present').toBeGreaterThan(deadLetterIdx);
+  });
+
+  it('strips claimedAt (A6) so the next claim stamps a fresh one', () => {
+    expect(RELEASE_SCRIPT).toMatch(/base\.claimedAt\s*=\s*nil/);
+  });
+});
+
+describe('RedisQueueAdapter — defineCommand wiring for new scripts (#1069)', () => {
+  function createMinimalMockRedisForNewScripts(): {
+    redis: unknown;
+    defineCommand: ReturnType<typeof vi.fn>;
+    requeueForResumeItem: ReturnType<typeof vi.fn>;
+    releaseItem: ReturnType<typeof vi.fn>;
+  } {
+    const defineCommand = vi.fn();
+    // Return the {code, attemptCount} tuple both scripts emit.
+    const requeueForResumeItem = vi.fn().mockResolvedValue([1, 5]);
+    const releaseItem = vi.fn().mockResolvedValue([1, 3]);
+    const redis: Record<string, unknown> = {
+      defineCommand,
+      requeueForResumeItem,
+      releaseItem,
+      hget: vi.fn().mockResolvedValue(null),
+      hdel: vi.fn().mockResolvedValue(1),
+      del: vi.fn().mockResolvedValue(1),
+      zadd: vi.fn().mockResolvedValue(1),
+    };
+    return { redis, defineCommand, requeueForResumeItem, releaseItem };
+  }
+
+  function makeAdapter(redis: unknown) {
+    return new RedisQueueAdapter(redis as import('ioredis').Redis, {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    });
+  }
+
+  const sampleQueueItem: QueueItem = {
+    owner: 'generacy-ai',
+    repo: 'generacy',
+    issueNumber: 1069,
+    workflowName: 'speckit-feature',
+    command: 'process',
+    priority: 1000,
+    enqueuedAt: new Date().toISOString(),
+    queueReason: 'new',
+  };
+
+  it('defineCommand("requeueForResumeItem", { numberOfKeys: 3, lua: REQUEUE_FOR_RESUME_SCRIPT })', async () => {
+    const { redis, defineCommand } = createMinimalMockRedisForNewScripts();
+    const adapter = makeAdapter(redis);
+    await adapter.requeueForResume('worker-1', sampleQueueItem);
+    expect(defineCommand).toHaveBeenCalledWith('requeueForResumeItem', {
+      numberOfKeys: 3,
+      lua: REQUEUE_FOR_RESUME_SCRIPT,
+    });
+  });
+
+  it('defineCommand("releaseItem", { numberOfKeys: 5, lua: RELEASE_SCRIPT })', async () => {
+    const { redis, defineCommand } = createMinimalMockRedisForNewScripts();
+    const adapter = makeAdapter(redis);
+    await adapter.release('worker-1', sampleQueueItem);
+    expect(defineCommand).toHaveBeenCalledWith('releaseItem', {
+      numberOfKeys: 5,
+      lua: RELEASE_SCRIPT,
+    });
+  });
+
+  it('requeueForResume() invokes requeueForResumeItem with 6 args (3 keys + 3 argv)', async () => {
+    const { redis, requeueForResumeItem } = createMinimalMockRedisForNewScripts();
+    const adapter = makeAdapter(redis);
+    await adapter.requeueForResume('worker-1', sampleQueueItem);
+    expect(requeueForResumeItem).toHaveBeenCalledOnce();
+    expect(requeueForResumeItem.mock.calls[0]).toHaveLength(6);
+    // KEYS[1..3]
+    expect(requeueForResumeItem.mock.calls[0][0]).toBe('orchestrator:queue:pending');
+    expect(requeueForResumeItem.mock.calls[0][1]).toBe('orchestrator:queue:claimed:worker-1');
+    expect(requeueForResumeItem.mock.calls[0][2]).toBe('orchestrator:worker:worker-1:heartbeat');
+    // ARGV[1] = itemKey
+    expect(requeueForResumeItem.mock.calls[0][3]).toBe('generacy-ai/generacy#1069');
+  });
+
+  it('release() invokes releaseItem with 10 args (5 keys + 5 argv)', async () => {
+    const { redis, releaseItem } = createMinimalMockRedisForNewScripts();
+    const adapter = makeAdapter(redis);
+    await adapter.release('worker-1', sampleQueueItem);
+    expect(releaseItem).toHaveBeenCalledOnce();
+    expect(releaseItem.mock.calls[0]).toHaveLength(10);
+    // KEYS[1..5]
+    expect(releaseItem.mock.calls[0][0]).toBe('orchestrator:queue:pending');
+    expect(releaseItem.mock.calls[0][1]).toBe('orchestrator:queue:claimed:worker-1');
+    expect(releaseItem.mock.calls[0][2]).toBe('orchestrator:worker:worker-1:heartbeat');
+    expect(releaseItem.mock.calls[0][3]).toBe('orchestrator:queue:dead-letter');
+    expect(releaseItem.mock.calls[0][4]).toBe('orchestrator:queue:in-flight-items');
+    // ARGV[1] = itemKey
+    expect(releaseItem.mock.calls[0][5]).toBe('generacy-ai/generacy#1069');
   });
 });
