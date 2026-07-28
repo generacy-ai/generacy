@@ -7,6 +7,7 @@ import type { RelayMessage } from '../src/messages.js';
 
 // Silence logs during tests
 const silentLogger = {
+  debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -396,6 +397,7 @@ describe('ClusterRelay', () => {
         maxReconnectDelayMs: 200,
       }),
       {
+        debug: vi.fn(),
         info: vi.fn(),
         warn: vi.fn((...args: unknown[]) => {
           if (
@@ -436,7 +438,7 @@ describe('ClusterRelay', () => {
       });
     });
 
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     relay = new ClusterRelay(createConfig(port), logger);
 
     const connectPromise1 = relay.connect();
@@ -505,7 +507,7 @@ describe('ClusterRelay', () => {
   });
 
   it('handler errors are caught and logged', async () => {
-    const errorLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const errorLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
     wss.on('connection', (ws) => {
       ws.on('message', (data) => {
@@ -544,7 +546,7 @@ describe('ClusterRelay', () => {
   });
 
   it('ignores non-JSON messages from the server', async () => {
-    const warnLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const warnLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
     wss.on('connection', (ws) => {
       // Send non-JSON data first
@@ -681,7 +683,7 @@ describe('ClusterRelay', () => {
   });
 
   it('ignores invalid relay messages from the server', async () => {
-    const warnLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const warnLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
     wss.on('connection', (ws) => {
       // Send valid JSON but invalid relay message
@@ -707,5 +709,186 @@ describe('ClusterRelay', () => {
 
     await relay.disconnect();
     await connectPromise;
+  });
+
+  describe('cluster.cockpit.reply router branch (#1063)', () => {
+    it('SC-001: accepted:true frame emits zero warn-or-above lines', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+            setTimeout(() => {
+              ws.send(
+                JSON.stringify({
+                  type: 'cluster.cockpit.reply',
+                  timestamp: '2026-07-28T00:00:00.000Z',
+                  frameId: null,
+                  frameType: 'gate-open',
+                  gateId: 'gate-abc',
+                  accepted: true,
+                  wroteDoc: 'created',
+                }),
+              );
+            }, 20);
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), logger);
+      const connectPromise = relay.connect();
+
+      await waitFor(() => logger.debug.mock.calls.length >= 1, 3000);
+
+      // Only debug — no warn, no error.
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+      // The debug line carries the full parsed message under `message`.
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            type: 'cluster.cockpit.reply',
+            accepted: true,
+            gateId: 'gate-abc',
+          }),
+        }),
+        'cluster.cockpit.reply received',
+      );
+
+      await relay.disconnect();
+      await connectPromise;
+    });
+
+    it('SC-002: accepted:false frame emits one info line with reason/frameType/gateId/priorStatus', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+            setTimeout(() => {
+              ws.send(
+                JSON.stringify({
+                  type: 'cluster.cockpit.reply',
+                  timestamp: '2026-07-28T00:00:00.000Z',
+                  frameId: null,
+                  frameType: 'gate-outcome',
+                  gateId: 'gate-def',
+                  accepted: false,
+                  reason: 'schema-invalid',
+                  priorStatus: 'unknown',
+                }),
+              );
+            }, 20);
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), logger);
+      const connectPromise = relay.connect();
+
+      await waitFor(
+        () =>
+          logger.info.mock.calls.some(
+            (call) => call[1] === 'cluster.cockpit.reply dropped',
+          ),
+        3000,
+      );
+
+      // No warn, no error.
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+      // Exactly one dropped-info line with the enumerated fields.
+      const droppedCalls = logger.info.mock.calls.filter(
+        (call) => call[1] === 'cluster.cockpit.reply dropped',
+      );
+      expect(droppedCalls).toHaveLength(1);
+      expect(droppedCalls[0][0]).toEqual({
+        reason: 'schema-invalid',
+        frameType: 'gate-outcome',
+        gateId: 'gate-def',
+        priorStatus: 'unknown',
+      });
+
+      await relay.disconnect();
+      await connectPromise;
+    });
+
+    it('FR-003 / Q3=A: registered onMessage handler is NOT invoked for cluster.cockpit.reply', async () => {
+      const received: RelayMessage[] = [];
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+            setTimeout(() => {
+              ws.send(
+                JSON.stringify({
+                  type: 'cluster.cockpit.reply',
+                  timestamp: '2026-07-28T00:00:00.000Z',
+                  frameId: null,
+                  frameType: 'gate-open',
+                  gateId: 'gate-1',
+                  accepted: true,
+                }),
+              );
+              ws.send(
+                JSON.stringify({
+                  type: 'cluster.cockpit.reply',
+                  timestamp: '2026-07-28T00:00:00.001Z',
+                  frameId: null,
+                  frameType: 'gate-outcome',
+                  gateId: 'gate-2',
+                  accepted: false,
+                  reason: 'stale',
+                }),
+              );
+              // Send a conversation message so we have a positive signal that
+              // messages ARE reaching handlers (proves the reply exclusion is
+              // targeted, not a broken pipe).
+              ws.send(
+                JSON.stringify({
+                  type: 'conversation',
+                  conversationId: 'conv-canary',
+                  data: { action: 'message', content: 'canary' },
+                }),
+              );
+            }, 20);
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), silentLogger);
+      relay.onMessage((msg) => {
+        received.push(msg);
+      });
+      const connectPromise = relay.connect();
+
+      await waitFor(() =>
+        received.some(
+          (m) => m.type === 'conversation' && (m as { conversationId: string }).conversationId === 'conv-canary',
+        ),
+      );
+
+      // Handler must NOT see either reply variant — short-circuit is structural.
+      expect(received.filter((m) => m.type === 'cluster.cockpit.reply')).toHaveLength(0);
+
+      await relay.disconnect();
+      await connectPromise;
+    });
   });
 });

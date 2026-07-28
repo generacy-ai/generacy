@@ -167,16 +167,17 @@ describe('messages', () => {
   });
 
   describe('RelayMessageSchema', () => {
-    it('validates all 18 message types', () => {
+    it('validates all 19 message types', () => {
       const types = [
         'api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error',
         'lease_request', 'lease_release', 'lease_heartbeat', 'lease_response', 'slot_available',
         'cluster_rejected', 'tier_info',
         'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close',
+        'cluster.cockpit.reply',
       ];
-      expect(types).toHaveLength(18);
+      expect(types).toHaveLength(19);
       // Confirm schema accepts these types by checking discriminator key
-      expect(RelayMessageSchema.options).toHaveLength(18);
+      expect(RelayMessageSchema.options).toHaveLength(19);
     });
   });
 
@@ -531,6 +532,111 @@ describe('messages', () => {
         status: 'pending',
       });
       expect(result).toBeNull();
+    });
+  });
+
+  describe('cluster.cockpit.reply (#1063)', () => {
+    it('parses a valid accepted:true reply with wroteDoc:created', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+        wroteDoc: 'created',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid accepted:false reply with reason:invalid-payload', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-outcome',
+        gateId: 'gate-abc',
+        accepted: false,
+        reason: 'invalid-payload',
+        priorStatus: 'unknown',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('preserves unknown top-level fields via .passthrough() (SC-003)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+        futureField: 'x',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).not.toBeNull();
+      expect((result as unknown as Record<string, unknown>).futureField).toBe('x');
+    });
+
+    it('accepts unrecognised reason / frameType / wroteDoc values (Q2=A open enums)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-xyz',
+        frameType: 'some-new-frame-type-we-do-not-know',
+        gateId: 'gate-abc',
+        accepted: false,
+        reason: 'brand-new-drop-class',
+        wroteDoc: 'freshly-invented-verb',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('accepts a non-null frameId (correlation id for #1059 steps 4-7)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-42',
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+        gateKey: 'run-42/open-abc',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('returns null when required gateId is missing (FR-008)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-open',
+        accepted: true,
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toBeNull();
+    });
+
+    // Cloud's unknown-subtype reply (generacy-cloud message-handler.ts) sends
+    // gateId: '' when the incoming frame carried none. This reply is the
+    // rollout-window observability path — dropping it defeats the purpose of
+    // the schema loosening in #1063.
+    it('accepts an empty-string gateId (unknown-subtype reply)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-xyz',
+        frameType: 'unknown',
+        gateId: '',
+        accepted: false,
+        reason: 'unknown-subtype',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
     });
   });
 });
