@@ -25,6 +25,10 @@ const mockGitHub: Record<string, ReturnType<typeof vi.fn>> = {
   stageAll: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
+  // #1051 pre-push guard mock — defaults to "no PR in any state" so the
+  // guard falls through to the branch-existence check → allow. Required for
+  // `pr-feedback-handler.ts:427` `evaluatePushGuard` to not refuse.
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
 };
 
 // #861: wrap comments as ReviewThread[] (each comment becomes its own thread).

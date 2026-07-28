@@ -6,6 +6,8 @@ import {
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
 import type { Comment, GitHubClient, Review, ReviewThread } from '@generacy-ai/workflow-engine';
+import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
+import { defaultRemoteBranchExists } from './repo-checkout.js';
 import {
   parseAcknowledgedFindings,
   parseSingleMarkerEntries,
@@ -417,6 +419,24 @@ export class PrFeedbackHandler {
 
       // 7. Commit and push changes (even on timeout — partial completion strategy)
       // FR-013: Push partial changes on timeout to preserve work and enable retry
+      //
+      // #1051 FR-002/003: pre-push guard — refuse the push if the PR has already
+      // merged/closed or the remote branch is missing. Prevents a re-entering
+      // worker from resurrecting a deleted branch and opening a duplicate PR
+      // that claims to close the already-closed issue (generacy-cloud#883).
+      const guardDecision = await evaluatePushGuard({
+        owner,
+        repo,
+        issueNumber,
+        branch: branchName,
+        github,
+        git: { remoteBranchExists: (b) => defaultRemoteBranchExists(b, checkoutPath) },
+      });
+      if (guardDecision.kind === 'refuse') {
+        await this.handlePushRefused(github, guardDecision);
+        return;
+      }
+
       let hasChanges = false;
       try {
         hasChanges = await this.commitAndPushChanges(
@@ -1181,6 +1201,68 @@ _This is an automated notice from the PR-feedback body-consumption path (#1047).
         { error: String(error), issueNumber },
         'Failed to remove agent:in-progress label — non-fatal',
       );
+    }
+  }
+
+  /**
+   * #1051 FR-003: react to a `refuse` decision from the pre-push guard.
+   *
+   * - Emit exactly one warn log with `event: 'push-refused'` and the fields
+   *   named in FR-003a — reason, prNumber, branch, owner, repo, issueNumber.
+   * - Apply FR-003b label state: clear `agent:in-progress` unconditionally;
+   *   also add `agent:error` when the linked issue is still `open` (an open
+   *   issue + merged/missing branch is a genuine anomaly worth surfacing).
+   *   Never add `failed:<phase>` — that would invite `/cockpit:resume` to
+   *   re-attempt the refused push and turn the fix into a loop (invariant I-6).
+   *
+   * Best-effort throughout: label failures are non-fatal so the caller's
+   * shared `finally` still runs.
+   */
+  private async handlePushRefused(
+    github: GitHubClient,
+    decision: Extract<PushGuardDecision, { kind: 'refuse' }>,
+  ): Promise<void> {
+    const { reason, prNumber, branch, owner, repo, issueNumber } = decision;
+
+    this.logger.warn(
+      { event: 'push-refused', reason, prNumber, branch, owner, repo, issueNumber },
+      'Refusing push — PR state or remote branch state indicates a resurrection or duplicate-PR attempt',
+    );
+
+    // Read issue.state so FR-003b can decide whether to add `agent:error`.
+    // Best-effort: on read failure, treat as `open` (safer to surface than to
+    // silently swallow — a stale-cache issue can be dismissed by the operator).
+    let issueState: 'open' | 'closed' = 'open';
+    try {
+      const issue = await github.getIssue(owner, repo, issueNumber);
+      issueState = issue.state;
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to read issue state — assuming open',
+      );
+    }
+
+    // Always clear agent:in-progress. The shared `finally` will also try, but
+    // clearing here first bounds the window an observer sees the label pinned.
+    try {
+      await github.removeLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to remove agent:in-progress — non-fatal (finally will retry)',
+      );
+    }
+
+    if (issueState === 'open') {
+      try {
+        await github.addLabels(owner, repo, issueNumber, ['agent:error']);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'handlePushRefused: failed to add agent:error — non-fatal',
+        );
+      }
     }
   }
 
