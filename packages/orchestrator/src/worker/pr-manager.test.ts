@@ -35,6 +35,9 @@ function createMockGitHubClient(
     markPRReady: vi.fn().mockResolvedValue(undefined),
     getCommitsBetween: vi.fn().mockResolvedValue([]),
     branchExists: vi.fn().mockResolvedValue(true),
+    // #1051 pre-push guard mock — defaults to "no PR in any state" so the
+    // guard falls through to the branch-existence check → allow.
+    findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
 
     // Other GitHubClient methods (not used by PrManager but required by interface)
     clone: vi.fn().mockResolvedValue(undefined),

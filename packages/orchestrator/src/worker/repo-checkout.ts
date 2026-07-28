@@ -7,6 +7,31 @@ import type { Logger } from './types.js';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Default `git.remoteBranchExists` helper for the pre-push guard's production
+ * callers (#1051 FR-002; see `push-guard.ts`).
+ *
+ * Runs `git ls-remote --heads origin <branch>` in the given cwd (or the process
+ * cwd when omitted). Callers that need a different implementation (e.g. tests)
+ * inject their own via `PushGuardInput.git.remoteBranchExists`.
+ *
+ * Lives here rather than in `push-guard.ts` because `push-guard.ts` is
+ * deliberately kept free of `node:child_process` imports (repo-wide
+ * `no-restricted-imports` ban; #437). `repo-checkout.ts` is already on the
+ * allowlist and already owns every other `git` invocation in the worker.
+ */
+export async function defaultRemoteBranchExists(
+  branch: string,
+  cwd?: string,
+): Promise<boolean> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['ls-remote', '--heads', 'origin', branch],
+    cwd ? { cwd, encoding: 'utf-8' } : { encoding: 'utf-8' },
+  );
+  return stdout.trim() !== '';
+}
+
+/**
  * Manages git repository checkouts for workers.
  *
  * Supports two modes:
@@ -106,7 +131,11 @@ export class RepoCheckout {
     await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: checkoutPath });
     await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
 
-    await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
+    // #1051 FR-001: `--prune` removes stale local tracking refs for branches
+    // that were deleted upstream (e.g. after a merged PR with --delete-branch).
+    // Without this, `reset --hard origin/<branch>` at :132 silently succeeds
+    // against the stale ref and resurrects a merged branch's pre-merge tip.
+    await execFileAsync('git', ['fetch', 'origin', '--prune'], { cwd: checkoutPath });
 
     try {
       await execFileAsync('git', ['checkout', branch], { cwd: checkoutPath });
@@ -221,7 +250,10 @@ export class RepoCheckout {
     await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
 
     this.logger.debug({ checkoutPath }, 'Fetching from origin');
-    await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
+    // #1051 FR-001: `--prune` removes stale local tracking refs for branches
+    // that were deleted upstream. Mirrors switchBranch's fetch; both sites MUST
+    // land together (leaving one un-pruned defeats the invariant).
+    await execFileAsync('git', ['fetch', 'origin', '--prune'], { cwd: checkoutPath });
 
     this.logger.debug({ checkoutPath, branch }, 'Checking out branch');
     try {

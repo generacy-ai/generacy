@@ -1,6 +1,17 @@
-import type { QueueItem, QueueItemWithScore, QueueManager, SerializedQueueItem } from '../types/index.js';
+import type {
+  QueueItem,
+  QueueItemWithScore,
+  QueueManager,
+  ReapReport,
+  SerializedQueueItem,
+} from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
 import { getPriorityScore } from './queue-priority.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
 
 interface Logger {
   info(msg: string): void;
@@ -22,6 +33,7 @@ function buildItemKey(item: QueueItem): string {
 export class InMemoryQueueAdapter implements QueueManager {
   private readonly logger: Logger;
   private readonly maxRetries: number;
+  private readonly maxRunDurationMs: number;
 
   /** Pending items sorted by priority (lower = higher priority), then FIFO by enqueuedAt */
   private readonly pending: SerializedQueueItem[] = [];
@@ -33,10 +45,20 @@ export class InMemoryQueueAdapter implements QueueManager {
   private readonly attemptCounts = new Map<string, number>();
   /** In-flight index: itemKeys currently pending or claimed */
   private readonly inFlightSet = new Set<string>();
+  /**
+   * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
+   * drop-log transition-edge decision. Cleared on `complete()` and
+   * dead-letter (R6 mitigation).
+   */
+  private readonly dropLogState = new Map<string, DropTransitionState>();
 
-  constructor(logger: Logger, config?: Pick<DispatchConfig, 'maxRetries'>) {
+  constructor(
+    logger: Logger,
+    config?: Pick<DispatchConfig, 'maxRetries' | 'maxRunDurationMs'>,
+  ) {
     this.logger = logger;
     this.maxRetries = config?.maxRetries ?? 3;
+    this.maxRunDurationMs = config?.maxRunDurationMs ?? 1_800_000;
   }
 
   async enqueue(item: QueueItem): Promise<void> {
@@ -84,8 +106,20 @@ export class InMemoryQueueAdapter implements QueueManager {
 
     if (this.inFlightSet.has(itemKey)) {
       // #879 / FR-009: structured drop signal for the in-flight-collision path.
-      this.logger.info(
-        { itemKey, reason: 'in-flight' },
+      // #1054 / FR-006: severity escalates from `info` to `warn` on the
+      // transition edge when the wedged in-flight entry's age crosses
+      // `maxRunDurationMs`. Structured fields preserved verbatim.
+      const ageMs = await this.hasInFlightAge(itemKey);
+      const decision = classifyDropSeverity(
+        itemKey,
+        ageMs,
+        this.maxRunDurationMs,
+        this.dropLogState,
+      );
+      emitDropLog(
+        this.logger,
+        decision,
+        { itemKey, reason: 'in-flight', ageMs },
         'Dropping enqueue (item already in flight)',
       );
       return false;
@@ -111,6 +145,44 @@ export class InMemoryQueueAdapter implements QueueManager {
 
   async hasInFlight(itemKey: string): Promise<boolean> {
     return this.inFlightSet.has(itemKey);
+  }
+
+  /**
+   * #1054 / FR-006 / FR-007 — return the age in ms of the given itemKey's
+   * in-flight entry (claimed or pending), or `null` if not in flight.
+   */
+  async hasInFlightAge(itemKey: string): Promise<number | null> {
+    const now = Date.now();
+    for (const workerItems of this.claimed.values()) {
+      const entry = workerItems.get(itemKey);
+      if (entry) {
+        const ms = Date.parse(entry.enqueuedAt);
+        if (Number.isNaN(ms)) return null;
+        return now - ms;
+      }
+    }
+    for (const pendingItem of this.pending) {
+      if (pendingItem.itemKey === itemKey) {
+        const ms = Date.parse(pendingItem.enqueuedAt);
+        if (Number.isNaN(ms)) return null;
+        return now - ms;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * #1054 / FR-011 — no-op for the in-memory adapter (in-memory process
+   * death is total; no orphaned claim can survive). Returns an empty
+   * report so `WorkerDispatcher.reaperLoop` can call this unconditionally.
+   */
+  async reapOrphanClaims(_now?: number): Promise<ReapReport> {
+    return {
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    };
   }
 
   async claim(workerId: string): Promise<QueueItem | null> {
@@ -175,6 +247,8 @@ export class InMemoryQueueAdapter implements QueueManager {
       };
       this.deadLetter.push(deadLetterItem);
       this.inFlightSet.delete(itemKey);
+      // #1054 / R6: bound the transition-edge Map growth.
+      this.dropLogState.delete(itemKey);
       this.logger.warn(
         { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
         'Item dead-lettered after max retries'
@@ -211,6 +285,8 @@ export class InMemoryQueueAdapter implements QueueManager {
     // Clean up attempt tracking and in-flight index
     this.attemptCounts.delete(itemKey);
     this.inFlightSet.delete(itemKey);
+    // #1054 / R6: bound the transition-edge Map growth.
+    this.dropLogState.delete(itemKey);
 
     this.logger.info(
       { workerId, itemKey },

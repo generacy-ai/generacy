@@ -32,6 +32,13 @@ function createMockQueueAdapter(overrides: Partial<QueueManager> = {}): QueueMan
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),
     getActiveWorkerCount: vi.fn().mockResolvedValue(0),
+    reapOrphanClaims: vi.fn().mockResolvedValue({
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    }),
+    hasInFlightAge: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
 }

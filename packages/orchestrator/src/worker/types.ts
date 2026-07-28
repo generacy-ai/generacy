@@ -1,5 +1,6 @@
 import type { QueueItem } from '../types/index.js';
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
+import type { PushGuardDecision } from './push-guard.js';
 
 /**
  * Workflow phases in execution order
@@ -491,12 +492,32 @@ export interface ProcessFactory {
  */
 /**
  * Result from commitPushAndEnsurePr() — whether the phase produced changes and the PR URL.
+ *
+ * `pushRefused` (#1051 PR #1052 review Findings 2+3): distinguishes the
+ * pre-push guard's refusal from the pre-existing "nothing to commit" case
+ * (both share `hasChanges: false`). Callers that must abort the phase loop
+ * on refusal (per FR-003) MUST check `pushRefused` before treating
+ * `hasChanges: false` as a legitimate no-op. When absent, the phase completed
+ * normally (either with or without changes). When present, no push occurred
+ * and `ensureDraftPr` was NOT called — the caller must not run any
+ * `onPhaseComplete` labelling or advance to the next phase.
  */
 export interface CommitResult {
   /** PR URL if one was created or already exists */
   prUrl?: string;
   /** Whether the phase produced any git changes */
   hasChanges: boolean;
+  /**
+   * Present iff the pre-push guard refused this cycle's push. Carries the
+   * `reason` enum for downstream inspection; the caller-side warn log has
+   * already fired inside `PrManager.handlePushRefused`.
+   *
+   * Shape derives from `PushGuardDecision`'s `refuse` variant (PR #1052 review
+   * Finding 1) so a new reason value added to the guard cannot desynchronize
+   * this declaration — hand-listing the literals is exactly what produced the
+   * TS2322/TS2345 failures the review caught.
+   */
+  pushRefused?: Omit<Extract<PushGuardDecision, { kind: 'refuse' }>, 'kind'>;
 }
 
 /**
