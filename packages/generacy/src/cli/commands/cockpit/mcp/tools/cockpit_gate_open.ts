@@ -16,7 +16,6 @@
  */
 import { getLogger } from '../../../../utils/logger.js';
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
-import { INSTANCE_NONCE } from '../event-bus.js';
 import { CockpitGateOpenInputSchema } from '../schemas.js';
 import { invokeGate } from '../gates/client.js';
 import { resolveGateOptions } from '../gates/options.js';
@@ -68,13 +67,19 @@ export function cockpitGateOpen(
 
     const s = parsed.data;
     // #1053 — Fold the per-run discriminator into the `gateKey` pre-image.
-    // Explicit runId wins; missing runId falls back to the per-process
-    // INSTANCE_NONCE so non-auto callers get within-caller stability without
-    // silently regressing to the pre-#1053 colliding behaviour.
-    const effectiveRunId = s.runId ?? INSTANCE_NONCE;
-    const runIdSource: 'explicit' | 'fallback-instance-nonce' =
-      s.runId !== undefined ? 'explicit' : 'fallback-instance-nonce';
-    const gateKey = deriveGateKey(s.issueRef, s.gateType, s.generation, effectiveRunId);
+    // Explicit runId wins and is appended as a 4th `gateKey` segment; when the
+    // caller omits it the tool derives with the pre-#1053 3-tuple shape
+    // (byte-for-byte back-compat). A process-scoped fallback (INSTANCE_NONCE)
+    // was rejected on review: it re-introduced the same cross-run collision
+    // #1053 exists to close (two `/cockpit:auto` runs in one MCP-server process
+    // share a nonce) AND desynced against the cloud's positional-3-tuple
+    // `generationFromGateKey` parser on the read side. The real fix therefore
+    // ships as a compatible schema surface (`runId` accepted on input); the
+    // per-run discriminator is a no-op until callers thread `runId` through
+    // (agency-side `/cockpit:auto` companion PR — spec FR-006).
+    const runIdSource: 'explicit' | 'unset' =
+      s.runId !== undefined ? 'explicit' : 'unset';
+    const gateKey = deriveGateKey(s.issueRef, s.gateType, s.generation, s.runId);
     const gateId = deriveGateId(gateKey);
 
     // Make the source of the runId observable at the tool boundary. `runId`
