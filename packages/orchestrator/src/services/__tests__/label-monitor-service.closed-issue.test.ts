@@ -44,8 +44,9 @@ function createPhaseTracker(): PhaseTracker {
 
 function createQueueManager(): QueueManager {
   return {
-    enqueue: vi.fn().mockResolvedValue(undefined),
+    enqueue: vi.fn().mockResolvedValue(true),
     enqueueIfAbsent: vi.fn().mockResolvedValue(true),
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     dequeue: vi.fn().mockResolvedValue(null),
     size: vi.fn().mockResolvedValue(0),
     clear: vi.fn().mockResolvedValue(undefined),

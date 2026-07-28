@@ -9,9 +9,16 @@ import type { QueueItem, SerializedQueueItem } from '../../types/index.js';
  * string, not by itemKey — mirrors real Redis semantics so the double-enqueue
  * hazard is not structurally hidden).
  *
- * The new `enqueueItem` Lua script (`ENQUEUE_SCRIPT`) is byte-identical to
- * `ENQUEUE_IF_ABSENT_SCRIPT`, so the mock stub for both simulates the same
- * atomic `SISMEMBER` → conditional `SADD` + `ZADD`.
+ * PR #1065 review finding 6: `enqueue()` and `enqueueIfAbsent()` share a
+ * single `enqueueIfAbsent` command / script (byte-identical bodies — one
+ * registration, not two). The mock stubs `enqueueIfAbsent` accordingly.
+ *
+ * NOTE on mock-vs-Redis: this harness re-implements the Lua semantics in
+ * TypeScript. The byte-exact contract that the actual Lua script issues
+ * SISMEMBER → SADD → ZADD in that order (and not e.g. a stray SREM) is
+ * pinned by the static assertions in `redis-queue-adapter.script-wiring.test.ts`.
+ * That's the SC-002-equivalent split: dynamic-mock covers the state
+ * invariant, static-text asserts pins the command shape.
  */
 
 interface MockState {
@@ -142,22 +149,9 @@ function createMockRedisWithState() {
     }),
     defineCommand: vi.fn(),
 
-    // Mock ENQUEUE_SCRIPT — byte-identical to ENQUEUE_IF_ABSENT_SCRIPT.
-    enqueueItem: vi.fn(async (
-      _pendingKey: string,
-      _inFlightKey: string,
-      _dedupKey: string,
-      itemKey: string,
-      priority: string,
-      payload: string,
-    ) => {
-      if (state.inFlight.has(itemKey)) return 0;
-      state.inFlight.add(itemKey);
-      state.pending.set(payload, { score: Number(priority), member: payload });
-      return 1;
-    }),
-
-    // Mock ENQUEUE_IF_ABSENT_SCRIPT — same atomic semantics.
+    // Mock the single shared ENQUEUE_IF_ABSENT_SCRIPT (PR #1065 review
+    // finding 6 — `enqueue()` and `enqueueIfAbsent()` both route through
+    // this one command).
     enqueueIfAbsent: vi.fn(async (
       _pendingKey: string,
       _inFlightKey: string,
@@ -474,6 +468,82 @@ describe('RedisQueueAdapter.enqueue — #1060 in-flight-SET invariant', () => {
       expect(processLabel).toBe(false);
       expect(state.pending.size).toBe(1);
       expect(pendingByItemKey(state, itemKey)).toHaveLength(1);
+    });
+
+    it('PR #1065 finding 1 wedge: reaper reclaims first, then release() runs — must NOT create a second pending member', async () => {
+      // Concrete sequence from review finding 1:
+      //   1. enqueue #N → in-flight SET has itemKey, pending has payload_A
+      //   2. worker-A claims → HSET claimed with payload_A, ZPOPMIN pending
+      //   3. worker-A dies (heartbeat gone)
+      //   4. reaper's RECLAIM_ORPHAN_SCRIPT: HDEL claimed + ZADD pending
+      //      with a distinct payload_B. Pending now has 1 member.
+      //   5. lease-expiry independently fires handleLeaseExpired for the
+      //      same worker. Previously this called release(), which read
+      //      hget → null, fell into the else-branch, and ZADD'd payload_C
+      //      to pending. Two distinct members → two claims → wedge.
+      //   Now: null-guard returns before the ZADD. ZCARD pending === 1.
+      const { redis, state } = createMockRedisWithState();
+      const adapter = makeAdapter(redis, logger);
+      const itemKey = 'generacy-ai/generacy#1053';
+
+      await adapter.enqueue(makeItem({ issueNumber: 1053, queueReason: 'new' }));
+      const claimed = await adapter.claim('worker-A');
+      expect(claimed).not.toBeNull();
+
+      // Simulate reaper HDEL + ZADD (with a distinct payload — the
+      // reclaim payload flips queueReason to 'resume' and bumps
+      // reclaimCount, so its member-string bytes differ from any
+      // subsequent release() re-pend).
+      state.claimed.get('worker-A')!.delete(itemKey);
+      const reclaimPayload = JSON.stringify({
+        ...claimed,
+        priority: 0.1,
+        queueReason: 'resume',
+        attemptCount: 0,
+        itemKey,
+        reclaimCount: 1,
+      });
+      state.pending.set(reclaimPayload, { score: 0.1, member: reclaimPayload });
+      expect(pendingByItemKey(state, itemKey)).toHaveLength(1);
+
+      // Lease-expiry fires release() (this test pins the null-guard on
+      // release() directly; requeueForResume() carries the same guard).
+      await adapter.release('worker-A', claimed!);
+
+      // Regression check: exactly ONE pending member for this itemKey.
+      // Without the null-guard, release()'s retry branch would ZADD a
+      // second distinct member and this assertion would fail.
+      expect(pendingByItemKey(state, itemKey)).toHaveLength(1);
+      expect(state.pending.size).toBe(1);
+      // in-flight-SET membership preserved.
+      expect(state.inFlight.has(itemKey)).toBe(true);
+    });
+
+    it('PR #1065 finding 2: three lease-expiry cycles via requeueForResume do NOT dead-letter (attemptCount preserved)', async () => {
+      // Three unrelated infrastructure interruptions (relay disconnect
+      // / cluster restart / worker OOM) must not accumulate into the
+      // dead-letter branch. After 3 requeueForResume cycles, the item
+      // is still in pending and its attemptCount is unchanged.
+      const { redis, state } = createMockRedisWithState();
+      const adapter = makeAdapter(redis, logger);
+      const itemKey = 'generacy-ai/generacy#1060';
+
+      await adapter.enqueue(makeItem({ issueNumber: 1060, queueReason: 'new' }));
+
+      for (let i = 0; i < 3; i++) {
+        const claimedI = await adapter.claim(`worker-${i}`);
+        expect(claimedI, `cycle ${i}: claim`).not.toBeNull();
+        await adapter.requeueForResume(`worker-${i}`, claimedI!);
+      }
+
+      // Item is still in pending — not dead-lettered.
+      expect(pendingByItemKey(state, itemKey)).toHaveLength(1);
+      // Payload preserves attemptCount = 0 (lease expiry didn't count
+      // as a work failure).
+      const [entry] = pendingByItemKey(state, itemKey);
+      const payload: SerializedQueueItem = JSON.parse(entry.member);
+      expect(payload.attemptCount).toBe(0);
+      expect(payload.queueReason).toBe('resume');
     });
   });
 });

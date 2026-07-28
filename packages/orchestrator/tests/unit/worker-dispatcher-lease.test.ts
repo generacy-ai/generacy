@@ -25,6 +25,9 @@ function createMockQueueManager(
     enqueue: vi.fn().mockResolvedValue(undefined),
     claim: vi.fn().mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    // #1060 PR #1065 review finding 2 — lease-expiry routes through
+    // requeueForResume(), which preserves attemptCount.
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),
@@ -273,10 +276,12 @@ describe('WorkerDispatcher lease integration', () => {
       // Worker should have been removed
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
 
-      // #1060: item is re-pended via release() (not enqueue). release()
-      // atomically HDELs the claim and ZADDs to pending while preserving
-      // in-flight-SET membership — a naked enqueue() would be dropped.
-      expect(queue.release).toHaveBeenCalledWith(
+      // #1060 PR #1065 finding 2: item is re-pended via requeueForResume()
+      // (not release() — release() would consume a retry attempt and
+      // dead-letter after 3 lease expiries; not enqueue() — that would be
+      // dropped by the in-flight-SET dedupe since CLAIM preserves in-flight
+      // membership).
+      expect(queue.requeueForResume).toHaveBeenCalledWith(
         workerId,
         expect.objectContaining({
           owner: sampleItem.owner,
@@ -285,6 +290,7 @@ describe('WorkerDispatcher lease integration', () => {
         }),
       );
       expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(queue.release).not.toHaveBeenCalled();
 
       // Log message about lease expiry
       expect(logger.warn).toHaveBeenCalledWith(
@@ -301,7 +307,7 @@ describe('WorkerDispatcher lease integration', () => {
       await startPromise;
     });
 
-    it('should call release() unconditionally on lease expiry (no duplicate check — release is atomic) (#1060)', async () => {
+    it('should call requeueForResume() unconditionally on lease expiry (#1060, PR #1065 finding 2)', async () => {
       let resolveHandler!: () => void;
       handler.mockImplementation(
         () => new Promise<{ status: 'completed' }>((resolve) => {
@@ -316,9 +322,10 @@ describe('WorkerDispatcher lease integration', () => {
       (leaseManager.requestLease as ReturnType<typeof vi.fn>)
         .mockResolvedValue({ status: 'granted', leaseId: 'lease-dup-test' });
 
-      // Even with an apparent "duplicate" in the queue, release() is called;
-      // the old getQueueItems duplicate-check is removed in favor of release()'s
-      // atomic HDEL+ZADD sequence.
+      // Even with an apparent "duplicate" in the queue,
+      // requeueForResume() is called; the old getQueueItems duplicate-check
+      // is removed in favor of the atomic HDEL+ZADD sequence with a
+      // reaper-race null-guard.
       (queue.getQueueItems as ReturnType<typeof vi.fn>).mockResolvedValue([
         { item: { ...sampleItem }, score: 1000 },
       ]);
@@ -339,16 +346,18 @@ describe('WorkerDispatcher lease integration', () => {
 
       await tick();
 
-      // release() called unconditionally. enqueue() must NOT be called.
-      expect(queue.release).toHaveBeenCalledWith(
+      // requeueForResume() called unconditionally. Neither enqueue() nor
+      // release() must be called.
+      expect(queue.requeueForResume).toHaveBeenCalledWith(
         workerId,
         expect.objectContaining({ issueNumber: 42 }),
       );
       expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(queue.release).not.toHaveBeenCalled();
 
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ itemKey: 'test-org/test-repo#42' }),
-        'Re-enqueued via release() after lease expiry',
+        'Re-enqueued via requeueForResume() after lease expiry (attemptCount preserved)',
       );
 
       resolveHandler();

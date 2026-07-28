@@ -257,19 +257,28 @@ export class WorkerDispatcher {
     this.workerLeases.delete(targetWorkerId);
     this.activeWorkers.delete(targetWorkerId);
 
-    // #1060 / FR-003 (clarifications Q2=A): call `release()` first — it
-    // moves the item from the claimed hash back to pending while preserving
-    // its in-flight-SET membership (via `HDEL claimed` / `DEL heartbeat` /
-    // `ZADD pending` with no `SREM`). After the invariant fix, the itemKey
-    // is still in the in-flight SET after CLAIM, so a naked `enqueue()`
-    // here would be dropped by the new dedupe and leave the item
-    // orphan-claimed. Priority-tier divergence (release re-pends at `retry`,
-    // not `resume`): acceptable per research.md § Decision 3 Option R1.
+    // #1060 PR #1065 review findings 1+2 — use `requeueForResume()`, not
+    // `release()`:
+    //   - Finding 2: `release()` increments `attemptCount` and dead-letters
+    //     at `maxRetries` (default 3). Lease expiry is an infrastructure
+    //     event (relay disconnect, cluster restart, worker OOM-kill) and
+    //     MUST NOT consume a retry attempt — otherwise three unrelated
+    //     restarts would silently dead-letter a blameless issue.
+    //   - Finding 1: both `release()` and `requeueForResume()` now
+    //     null-guard the claim-hash read to avoid a duplicate pending
+    //     member when the reaper HDEL'd the claim first (the reaper's
+    //     re-pend uses a DIFFERENT payload string, so a raw `ZADD` here
+    //     would create a second distinct ZSET member for the same
+    //     itemKey → two concurrent workers on one issue).
+    //   - Priority: `requeueForResume` re-pends at `resume` priority
+    //     (the correct tier for an infrastructure interruption); the
+    //     `release()` retry-branch used `retry` priority, which was the
+    //     wrong tier for this path.
     const itemKey = `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}`;
-    await this.queue.release(targetWorkerId, worker.item);
+    await this.queue.requeueForResume(targetWorkerId, worker.item);
     this.logger.info(
       { itemKey, workerId: targetWorkerId },
-      'Re-enqueued via release() after lease expiry',
+      'Re-enqueued via requeueForResume() after lease expiry (attemptCount preserved)',
     );
   }
 

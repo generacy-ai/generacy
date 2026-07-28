@@ -20,10 +20,15 @@ const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
 const HEARTBEAT_KEY_PREFIX = 'orchestrator:worker:';
 const DEAD_LETTER_KEY = 'orchestrator:queue:dead-letter';
 const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
-const DEDUP_KEY_PREFIX = 'orchestrator:queue:_dedup:';
 
 /**
  * Lua script for atomic in-flight-checked enqueue.
+ *
+ * #1060 — `enqueue()` and `enqueueIfAbsent()` both call this script (via
+ * the single `enqueueIfAbsent` command registration). Their at-Redis-layer
+ * behavior is identical; the two public methods differ only in how they
+ * translate the boolean return (see PR #1065 review findings 5 + 6).
+ *
  * KEYS[1] = pending sorted set
  * KEYS[2] = in-flight SET
  * ARGV[1] = itemKey
@@ -31,6 +36,17 @@ const DEDUP_KEY_PREFIX = 'orchestrator:queue:_dedup:';
  * ARGV[3] = serialized item JSON
  *
  * Returns 1 if enqueued, 0 if already in flight.
+ *
+ * Contains, in strict order (single-source-of-truth for the
+ * `redis-queue-adapter.script-wiring.test.ts` static assertion):
+ *   1. SISMEMBER KEYS[2] ARGV[1]
+ *   2. SADD KEYS[2] ARGV[1]        (guarded by the SISMEMBER result)
+ *   3. ZADD KEYS[1] ARGV[2] ARGV[3]
+ *
+ * If a future dedupe upgrade needs a per-itemKey hash (D6-a from #1060's
+ * plan), add KEYS[3] here and bump `numberOfKeys` to 3. Under Redis
+ * Cluster all declared keys must hash to the same slot, so the current
+ * two-key registration is CROSSSLOT-safe by construction.
  */
 const ENQUEUE_IF_ABSENT_SCRIPT = `
 local exists = redis.call('SISMEMBER', KEYS[2], ARGV[1])
@@ -43,36 +59,12 @@ return 1
 `;
 
 /**
- * #1060 — Lua script for atomic in-flight-checked enqueue on the
- * `enqueue()` path. Byte-identical to `ENQUEUE_IF_ABSENT_SCRIPT`; the two
- * verbs share the same atomic dedupe-and-add sequence and differ only in
- * how the caller reads the boolean return.
- *
- * Restores the `in-flight = pending ∪ claimed` invariant on the
- * `process:<workflow>` intake path — before this script existed, `enqueue()`
- * ran a plain `ZADD pending` with no in-flight SET add and no dedupe, so a
- * subsequent monitor `enqueueIfAbsent` for the same itemKey passed its
- * SISMEMBER guard and produced a second distinct pending member.
- *
- * KEYS[1] = pending sorted set
- * KEYS[2] = in-flight SET
- * KEYS[3] = `_dedup:<itemKey>` hash (reserved for future D6-a upgrade;
- *           the D6-b body below does not touch it)
- * ARGV[1] = itemKey
- * ARGV[2] = priority (numeric string)
- * ARGV[3] = serialized item JSON
- *
- * Returns 1 if enqueued, 0 if already in flight.
+ * Exported for the script-wiring static-assertion tests only
+ * (`__tests__/redis-queue-adapter.script-wiring.test.ts`). Not part of
+ * the runtime API.
+ * @internal
  */
-const ENQUEUE_SCRIPT = `
-local exists = redis.call('SISMEMBER', KEYS[2], ARGV[1])
-if exists == 1 then
-  return 0
-end
-redis.call('SADD', KEYS[2], ARGV[1])
-redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), ARGV[3])
-return 1
-`;
+export const _ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS = ENQUEUE_IF_ABSENT_SCRIPT;
 
 /**
  * Lua script for atomic claim: ZPOPMIN + HSET claimed + SET heartbeat.
@@ -197,7 +189,6 @@ export class RedisQueueAdapter implements QueueManager {
   private readonly heartbeatCheckIntervalMs: number;
   private claimCommandDefined = false;
   private enqueueIfAbsentCommandDefined = false;
-  private enqueueCommandDefined = false;
   private reclaimOrphanCommandDefined = false;
   /**
    * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
@@ -247,15 +238,6 @@ export class RedisQueueAdapter implements QueueManager {
       lua: ENQUEUE_IF_ABSENT_SCRIPT,
     });
     this.enqueueIfAbsentCommandDefined = true;
-  }
-
-  private ensureEnqueueCommand(): void {
-    if (this.enqueueCommandDefined) return;
-    this.redis.defineCommand('enqueueItem', {
-      numberOfKeys: 3,
-      lua: ENQUEUE_SCRIPT,
-    });
-    this.enqueueCommandDefined = true;
   }
 
   private ensureReclaimOrphanCommand(): void {
@@ -619,8 +601,25 @@ export class RedisQueueAdapter implements QueueManager {
     return report;
   }
 
+  /**
+   * #1060 — Atomic in-flight-checked enqueue. Shares its Lua script and
+   * `defineCommand` registration with `enqueueIfAbsent` (PR #1065 review
+   * findings 5+6: two identical scripts is drift-prone; two registrations
+   * of the same body with different `numberOfKeys` is asymmetric-noise).
+   *
+   * Semantics differ from `enqueueIfAbsent` only in the ERROR contract
+   * (PR #1065 review finding 4): this method **throws** on Redis transport
+   * error rather than swallowing it. Callers on this path need to
+   * distinguish "already in flight" (safe to `markProcessed` for dedup)
+   * from "Redis blip" (must NOT `markProcessed` — the next poll must
+   * retry). Conflating the two into `boolean` false silently drops issues.
+   *
+   * @returns true if enqueued, false if dropped because the itemKey is
+   *          already in flight.
+   * @throws  the underlying Redis error on transport failure.
+   */
   async enqueue(item: QueueItem): Promise<boolean> {
-    this.ensureEnqueueCommand();
+    this.ensureEnqueueIfAbsentCommand();
     const itemKey = buildItemKey(item);
     const priority = getPriorityScore(item.queueReason);
     const serialized: SerializedQueueItem = {
@@ -630,52 +629,46 @@ export class RedisQueueAdapter implements QueueManager {
       itemKey,
     };
 
-    try {
-      const result = await (this.redis as any).enqueueItem(
-        PENDING_KEY,
-        IN_FLIGHT_KEY,
-        `${DEDUP_KEY_PREFIX}${itemKey}`,
-        itemKey,
-        String(priority),
-        JSON.stringify(serialized),
-      );
-      const enqueued = result === 1;
-      if (enqueued) {
-        // #1054 finding 7 — seed the enqueuedAt cache so subsequent drop-path
-        // reads don't fan out into an O(workers) SCAN.
-        const enqueuedAtMs = Date.parse(item.enqueuedAt);
-        if (!Number.isNaN(enqueuedAtMs)) {
-          this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
-        }
-        this.logger.info(
-          { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
-          'Item enqueued to Redis sorted set (in-flight-checked)',
-        );
-        return true;
+    // NOTE: intentionally no outer try/catch — see docstring. A Redis error
+    // MUST propagate so the caller can leave dedup state unmarked and let
+    // the next poll cycle retry.
+    const result = await (this.redis as any).enqueueIfAbsent(
+      PENDING_KEY,
+      IN_FLIGHT_KEY,
+      itemKey,
+      String(priority),
+      JSON.stringify(serialized),
+    );
+    const enqueued = result === 1;
+    if (enqueued) {
+      // #1054 finding 7 — seed the enqueuedAt cache so subsequent drop-path
+      // reads don't fan out into an O(workers) SCAN.
+      const enqueuedAtMs = Date.parse(item.enqueuedAt);
+      if (!Number.isNaN(enqueuedAtMs)) {
+        this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
       }
-      // #1060 / FR-005: in-flight-collision drop, mirrors enqueueIfAbsent's
-      // transition-edge log path so both verbs emit the same shape.
-      const ageMs = await this.hasInFlightAge(itemKey);
-      const decision = classifyDropSeverity(
-        itemKey,
-        ageMs,
-        this.maxRunDurationMs,
-        this.dropLogState,
+      this.logger.info(
+        { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
+        'Item enqueued to Redis sorted set (in-flight-checked)',
       );
-      emitDropLog(
-        this.logger,
-        decision,
-        { itemKey, source: 'enqueue', reason: 'in-flight', ageMs },
-        'Dropping enqueue (item already in flight)',
-      );
-      return false;
-    } catch (error) {
-      this.logger.warn(
-        { err: error, itemKey },
-        'Redis error in enqueue, item not added to queue',
-      );
-      return false;
+      return true;
     }
+    // #1060 / FR-005: in-flight-collision drop, mirrors enqueueIfAbsent's
+    // transition-edge log path so both verbs emit the same shape.
+    const ageMs = await this.hasInFlightAge(itemKey);
+    const decision = classifyDropSeverity(
+      itemKey,
+      ageMs,
+      this.maxRunDurationMs,
+      this.dropLogState,
+    );
+    emitDropLog(
+      this.logger,
+      decision,
+      { itemKey, source: 'enqueue', reason: 'in-flight', ageMs },
+      'Dropping enqueue (item already in flight)',
+    );
+    return false;
   }
 
   async claim(workerId: string): Promise<QueueItem | null> {
@@ -736,11 +729,36 @@ export class RedisQueueAdapter implements QueueManager {
     try {
       // Get the claimed item to check attempt count
       const claimedRaw = await this.redis.hget(claimedKey, itemKey);
-      let attemptCount = 0;
-      if (claimedRaw) {
-        const parsed: SerializedQueueItem = JSON.parse(claimedRaw);
-        attemptCount = parsed.attemptCount + 1;
+
+      // #1060 PR #1065 review finding 1 — null-guard the retry branch.
+      // If the claim hash entry is gone, another actor (typically the
+      // orphan reaper's `RECLAIM_ORPHAN_SCRIPT`) has already re-pended
+      // this itemKey via its own `HDEL claimed` + `ZADD pending`. Doing
+      // another `ZADD pending` here would create a SECOND distinct
+      // pending member for the same itemKey (Redis ZSETs key on the full
+      // member string, and the reclaim payload differs in
+      // `queueReason` / `priority` / `attemptCount` / `enqueuedAt`).
+      // Two pending members → two `CLAIM_SCRIPT` pops → two concurrent
+      // workers on one issue → the exact failure sequence #1060 exists
+      // to prevent, arriving via `release()` instead of `enqueue()`.
+      //
+      // The heartbeat may still exist (independent of the claim hash),
+      // so best-effort DEL it before returning to avoid a stale key.
+      if (!claimedRaw) {
+        try {
+          await this.redis.del(heartbeatKey);
+        } catch {
+          /* best-effort */
+        }
+        this.logger.info(
+          { workerId, itemKey },
+          'release() called on already-cleared claim (reaper race) — skipping re-pend to avoid duplicate pending member',
+        );
+        return;
       }
+
+      const parsed: SerializedQueueItem = JSON.parse(claimedRaw);
+      const attemptCount = parsed.attemptCount + 1;
 
       if (attemptCount >= this.maxRetries) {
         // Dead-letter: too many retries. Co-atomically remove from in-flight SET.
@@ -790,6 +808,87 @@ export class RedisQueueAdapter implements QueueManager {
       this.logger.warn(
         { err: error, workerId, itemKey },
         'Redis error in release'
+      );
+    }
+  }
+
+  /**
+   * #1060 PR #1065 review finding 2 — re-pend an item after a lease-expiry
+   * event WITHOUT consuming a retry attempt.
+   *
+   * Lease expiry is an INFRASTRUCTURE event (relay disconnect, cluster
+   * restart, worker OOM-kill). It says nothing about whether the work
+   * itself is failing. Routing it through `release()` (which increments
+   * `attemptCount` and dead-letters at `maxRetries`) would condemn an
+   * issue to `orchestrator:queue:dead-letter` after 3 lease expiries —
+   * even if none of the underlying handler runs failed.
+   *
+   * Semantics (mirrors `release()`'s retry branch minus the attempt bump):
+   *   - Best-effort `HDEL claimed` + `DEL heartbeat` (idempotent on null).
+   *   - If the claim hash entry is already gone (reaper race — same
+   *     scenario as `release()`'s null-guard), skip `ZADD pending` to
+   *     avoid a duplicate pending member.
+   *   - Otherwise `ZADD pending` at `resume` priority, preserving the
+   *     original `attemptCount` verbatim.
+   *   - `IN_FLIGHT_KEY` membership is preserved throughout (`SREM` is
+   *     never issued) — the item was and remains in flight.
+   *
+   * Never throws; on Redis error logs `warn` and returns (matches the
+   * `release()` / `complete()` error contract).
+   */
+  async requeueForResume(workerId: string, item: QueueItem): Promise<void> {
+    const itemKey = buildItemKey(item);
+    const claimedKey = buildClaimedKey(workerId);
+    const heartbeatKey = buildHeartbeatKey(workerId);
+
+    try {
+      const claimedRaw = await this.redis.hget(claimedKey, itemKey);
+      if (!claimedRaw) {
+        // Reaper (or another lease-expiry firing) already re-pended it.
+        try {
+          await this.redis.del(heartbeatKey);
+        } catch {
+          /* best-effort */
+        }
+        this.logger.info(
+          { workerId, itemKey },
+          'requeueForResume() called on already-cleared claim (reaper race) — skipping re-pend',
+        );
+        return;
+      }
+
+      const parsed: SerializedQueueItem = JSON.parse(claimedRaw);
+      const resumePriority = getPriorityScore('resume');
+      // Preserve attemptCount verbatim — lease expiry does NOT count as
+      // a work failure.
+      const requeueItem: SerializedQueueItem = {
+        ...item,
+        queueReason: 'resume',
+        priority: resumePriority,
+        attemptCount: parsed.attemptCount,
+        itemKey,
+        // Strip claim-lifecycle field so next claim stamps a fresh one.
+        claimedAt: undefined,
+      };
+      await this.redis
+        .multi()
+        .hdel(claimedKey, itemKey)
+        .del(heartbeatKey)
+        .zadd(PENDING_KEY, resumePriority, JSON.stringify(requeueItem))
+        .exec();
+      this.logger.info(
+        {
+          workerId,
+          itemKey,
+          attemptCount: parsed.attemptCount,
+          reason: 'lease-expiry',
+        },
+        'Item re-pended at resume priority (attemptCount preserved)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { err: error, workerId, itemKey },
+        'Redis error in requeueForResume',
       );
     }
   }

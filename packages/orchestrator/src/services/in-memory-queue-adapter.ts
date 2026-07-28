@@ -225,17 +225,25 @@ export class InMemoryQueueAdapter implements QueueManager {
   async release(workerId: string, item: QueueItem): Promise<void> {
     const itemKey = buildItemKey(item);
     const workerClaimed = this.claimed.get(workerId);
+    const claimed = workerClaimed?.get(itemKey);
 
-    let attemptCount = 0;
-    if (workerClaimed) {
-      const claimed = workerClaimed.get(itemKey);
-      if (claimed) {
-        attemptCount = claimed.attemptCount + 1;
-      }
-      workerClaimed.delete(itemKey);
-      if (workerClaimed.size === 0) {
-        this.claimed.delete(workerId);
-      }
+    // #1060 PR #1065 review finding 1 — parity with Redis adapter's
+    // null-guard. If the claim entry for this (worker, itemKey) is
+    // absent, another actor already re-pended it; skipping the re-queue
+    // avoids a duplicate pending entry for the same itemKey (in-memory
+    // parity for the ZSET double-member hazard on Redis).
+    if (!claimed) {
+      this.logger.info(
+        { workerId, itemKey },
+        'release() called on already-cleared claim — skipping re-pend to avoid duplicate pending entry',
+      );
+      return;
+    }
+
+    const attemptCount = claimed.attemptCount + 1;
+    workerClaimed!.delete(itemKey);
+    if (workerClaimed!.size === 0) {
+      this.claimed.delete(workerId);
     }
 
     // Track attempt count for future enqueues
@@ -272,6 +280,51 @@ export class InMemoryQueueAdapter implements QueueManager {
         'Item released back to pending queue'
       );
     }
+  }
+
+  /**
+   * #1060 PR #1065 review finding 2 — re-pend after a lease-expiry event
+   * WITHOUT consuming a retry attempt. See `QueueManager.requeueForResume`
+   * for full semantics.
+   */
+  async requeueForResume(workerId: string, item: QueueItem): Promise<void> {
+    const itemKey = buildItemKey(item);
+    const workerClaimed = this.claimed.get(workerId);
+    const claimed = workerClaimed?.get(itemKey);
+
+    if (!claimed) {
+      // Reaper (or another lease-expiry firing) already re-pended it.
+      this.logger.info(
+        { workerId, itemKey },
+        'requeueForResume() called on already-cleared claim — skipping re-pend',
+      );
+      return;
+    }
+
+    workerClaimed!.delete(itemKey);
+    if (workerClaimed!.size === 0) {
+      this.claimed.delete(workerId);
+    }
+
+    // Preserve attemptCount verbatim — lease expiry is not a work failure.
+    const resumePriority = getPriorityScore('resume');
+    const requeueItem: SerializedQueueItem = {
+      ...item,
+      queueReason: 'resume',
+      priority: resumePriority,
+      attemptCount: claimed.attemptCount,
+      itemKey,
+    };
+    this.insertSorted(requeueItem);
+    this.logger.info(
+      {
+        workerId,
+        itemKey,
+        attemptCount: claimed.attemptCount,
+        reason: 'lease-expiry',
+      },
+      'Item re-pended at resume priority (attemptCount preserved)',
+    );
   }
 
   async complete(workerId: string, item: QueueItem): Promise<void> {

@@ -84,19 +84,10 @@ function createMockRedisWithState() {
     }),
     scan: vi.fn(async () => ['0', []]),
     defineCommand: vi.fn(),
-    enqueueItem: vi.fn(async (
-      _pending: string,
-      _inFlight: string,
-      _dedup: string,
-      itemKey: string,
-      priority: string,
-      payload: string,
-    ) => {
-      if (state.inFlight.has(itemKey)) return 0;
-      state.inFlight.add(itemKey);
-      state.pending.set(payload, { score: Number(priority), member: payload });
-      return 1;
-    }),
+    // #1060 PR #1065 review findings 5+6 — `enqueue()` and
+    // `enqueueIfAbsent()` share the single `enqueueIfAbsent` Lua
+    // command. Byte-shape asserted separately in
+    // `redis-queue-adapter.script-wiring.test.ts`.
     enqueueIfAbsent: vi.fn(async (
       _pending: string,
       _inFlight: string,

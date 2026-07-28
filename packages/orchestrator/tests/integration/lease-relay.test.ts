@@ -38,6 +38,9 @@ function createMockQueueManager(
     enqueue: vi.fn().mockResolvedValue(undefined),
     claim: vi.fn().mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    // #1060 PR #1065 review finding 2 — lease-expiry routes through
+    // requeueForResume(), which preserves attemptCount.
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),
@@ -407,10 +410,10 @@ describe('Lease + Relay integration', () => {
       // Worker should have been removed after lease expiry
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
 
-      // #1060: item is re-pended via release() (not enqueue). release()
-      // atomically HDELs the claim and ZADDs to pending while preserving
-      // in-flight-SET membership.
-      expect(queue.release).toHaveBeenCalledWith(
+      // #1060 PR #1065 finding 2: item is re-pended via requeueForResume()
+      // (not release() — release() would consume a retry attempt and
+      // dead-letter after 3 lease expiries).
+      expect(queue.requeueForResume).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
           owner: sampleItem.owner,
@@ -419,6 +422,7 @@ describe('Lease + Relay integration', () => {
         }),
       );
       expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(queue.release).not.toHaveBeenCalled();
 
       // Resolve handler to clean up
       resolveHandler();

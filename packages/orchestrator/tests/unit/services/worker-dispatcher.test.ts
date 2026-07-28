@@ -23,6 +23,9 @@ function createMockQueueManager(
     enqueue: vi.fn().mockResolvedValue(undefined),
     claim: vi.fn().mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    // #1060 PR #1065 review finding 2 — lease-expiry-safe re-pend that
+    // preserves attemptCount.
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),

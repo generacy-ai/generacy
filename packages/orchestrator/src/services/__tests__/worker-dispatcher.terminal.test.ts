@@ -49,6 +49,7 @@ function createQueue() {
   return {
     claim: vi.fn().mockResolvedValueOnce(item).mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     enqueue: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
