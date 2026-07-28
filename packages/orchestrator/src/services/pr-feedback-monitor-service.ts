@@ -403,7 +403,21 @@ export class PrFeedbackMonitorService {
     // short-circuit. Preserves Assumption 5 — any UNRECOGNIZED blocked:*
     // label still pauses the monitor; only the specific `blocked:fixer-timeout`
     // (retry-eligible) is carved out here.
-    if (issueLabels.includes('blocked:fixer-timeout')) {
+    //
+    // PR #1072 review — order-of-operations fix: check for any OTHER blocked:*
+    // label FIRST, before touching the counter or removing the label. Multiple
+    // handlers (`pr-feedback-handler`, `merge-conflict-handler`,
+    // `validate-fix-handler`) all write `blocked:*` labels to the same issue
+    // and do not coordinate, so two coexisting blocked labels is a normal
+    // state. If we consume the retry budget + remove the timeout signal and
+    // THEN discover another blocked label is present, we silently destroy the
+    // timeout signal (label gone from the issue) and burn a retry on a
+    // dispatch that never happens. The invariant is: do not mutate remote
+    // state or consume budget until the dispatch is committed.
+    const otherBlocked = issueLabels.find(
+      l => l.startsWith('blocked:') && l !== 'blocked:fixer-timeout',
+    );
+    if (!otherBlocked && issueLabels.includes('blocked:fixer-timeout')) {
       const priorRetries = this.fixerTimeoutRetryCount.get(stateKey) ?? 0;
       if (priorRetries < 2) {
         // Budget remaining — remove the retry-eligible label and continue to

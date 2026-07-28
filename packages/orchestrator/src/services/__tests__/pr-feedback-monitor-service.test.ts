@@ -2164,6 +2164,45 @@ describe('PrFeedbackMonitorService', () => {
       );
       expect(warnCall).toBeDefined();
     });
+
+    // PR #1072 review regression: guard-before-mutation.
+    //
+    // When a second blocked:* label from another handler (e.g.
+    // blocked:stuck-merge-conflicts) coexists with blocked:fixer-timeout, the
+    // retry-eligible branch must NOT consume the retry budget or remove the
+    // timeout signal. The generic blocked:* skip must fire on the coexisting
+    // label so the timeout label survives and no retry is spent.
+    it('regression: coexisting other blocked:* label → counter unchanged, blocked:fixer-timeout NOT removed', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+        'blocked:stuck-merge-conflicts',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      // Counter untouched — no retry burned by the guard-before-mutation fix.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // blocked:fixer-timeout signal preserved — the label is NOT removed
+      // because dispatch never committed. The operator can still see it.
+      expect(mockClient.removeLabels).not.toHaveBeenCalled();
+      // No dispatch.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      // Retry-dispatch info log NOT emitted.
+      const retryDispatchLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-retry-dispatch',
+      );
+      expect(retryDispatchLog).toBeUndefined();
+      // Generic blocked:* skip fires. Either coexisting label is a valid
+      // report — the load-bearing signal is that the skip happened and
+      // nothing mutated.
+      const skipLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-label-present',
+      );
+      expect(skipLog).toBeDefined();
+      expect((skipLog![0] as { blockedLabel?: string }).blockedLabel).toMatch(/^blocked:/);
+    });
   });
 
   // ==========================================================================
