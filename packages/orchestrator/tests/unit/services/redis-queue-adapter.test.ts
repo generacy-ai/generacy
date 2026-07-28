@@ -31,6 +31,14 @@ function createMockRedis(overrides: Record<string, unknown> = {}) {
     // registration). The previously-separate `enqueueItem` command was
     // deleted; regressing would require re-adding it.
     enqueueIfAbsent: vi.fn().mockResolvedValue(1),
+    // #1069 — release() and requeueForResume() moved read-then-mutate
+    // sequences into Lua scripts registered via defineCommand. Both return
+    // Lua array tuples [code, attemptCount]. Default returns model the
+    // retry-branch happy path so unrelated call sites don't have to know
+    // about them; tests that need dead-letter (code=2) or reaper-race
+    // (code=0) override.
+    releaseItem: vi.fn().mockResolvedValue([1, 1]),
+    requeueForResumeItem: vi.fn().mockResolvedValue([1, 0]),
     ...overrides,
   };
   // Chainable multi() that forwards to the underlying fns and returns [null, res] tuples on exec.
@@ -159,21 +167,24 @@ describe('RedisQueueAdapter', () => {
 
   describe('release — reaper-race null-guard (#1060 PR #1065 review finding 1)', () => {
     it('should NOT re-pend to ZSET when claim hash is already gone (reaper HDEL raced)', async () => {
-      // Simulate the exact sequence from the review comment: reaper's
-      // RECLAIM_ORPHAN_SCRIPT already HDEL'd the claim + re-pended it;
-      // lease-expiry (via handleLeaseExpired → release()) fires second.
-      // The old code would ZADD a SECOND distinct pending member.
+      // #1069 — the read-then-mutate sequence moved into Lua. The reaper
+      // race is now signalled by RELEASE_SCRIPT returning tuple {0, -1}
+      // instead of the pre-#1069 `HGET → null` path. The invariant is
+      // identical: on the reaper-race branch, no pending member is added
+      // (script bails before its ZADD). Structured info log fires with the
+      // race-path message. This hermetic mirror complements the real-Redis
+      // suite (redis-queue-adapter.release-atomic.test.ts) which exercises
+      // the actual script body.
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(null),
+        releaseItem: vi.fn().mockResolvedValue([0, -1]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.release('worker-1', sampleItem);
 
-      // Zero ZADDs — the null-guard bails before the retry branch runs.
+      // Zero ZADDs from the JS surface — dead-letter/pending writes now
+      // happen INSIDE Lua on codes 1/2. Code 0 does neither by design.
       expect(redis.zadd).not.toHaveBeenCalled();
-      // Heartbeat is still best-effort cleared (independent lifetime).
-      expect(redis.del).toHaveBeenCalledWith('orchestrator:worker:worker-1:heartbeat');
       // Structured log line for the race path (SC-002 observability).
       expect(logger.info).toHaveBeenCalledWith(
         { workerId: 'worker-1', itemKey: 'test-org/test-repo#42' },
@@ -183,75 +194,122 @@ describe('RedisQueueAdapter', () => {
   });
 
   describe('requeueForResume (#1060 PR #1065 review finding 2)', () => {
-    it('should re-pend at resume priority WITHOUT bumping attemptCount', async () => {
-      // Preserve attemptCount verbatim: lease expiry is an infrastructure
-      // event and MUST NOT count toward dead-letter (default maxRetries=3).
-      const serialized = buildSerializedItem(sampleItem, 2);
+    // #1069 — the read-then-mutate sequence moved into REQUEUE_FOR_RESUME_SCRIPT.
+    // Return contract: [code, attemptCount]. Code 0 = reaper-race no-op;
+    // code 1 = re-pended at resume priority; there is NO code 2 for this
+    // script (FR-003: lease expiry never dead-letters). Behaviour that the
+    // pre-#1069 code covered via JS-side hget+multi assertions is now
+    // covered by direct assertion on the command's ARGV and by the log
+    // lines the adapter emits based on the returned code. The real script
+    // body's ZADD-not-SREM invariants and dead-letter-vs-retry contract
+    // are pinned by the real-Redis suite in
+    // src/services/__tests__/redis-queue-adapter.requeueForResume-atomic.test.ts
+    // and by the script-text assertions in redis-queue-adapter.script-wiring.test.ts.
+    // These hermetic doubles guard the JS-side dispatch on those tuple codes.
+
+    it('should invoke requeueForResumeItem with 3 keys + itemKey + resumePriority + serialized item', async () => {
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        requeueForResumeItem: vi.fn().mockResolvedValue([1, 2]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.requeueForResume('worker-1', sampleItem);
 
-      // ZADD to PENDING (not dead-letter) even though attemptCount=2 was
-      // the last-execution attempt count and would-be-3-after-release
-      // would have dead-lettered.
-      expect(redis.zadd).toHaveBeenCalledWith(
+      // KEYS[1]=pending, KEYS[2]=claimed:<worker>, KEYS[3]=heartbeat:<worker>.
+      // ARGV[1]=itemKey, ARGV[2]=resumePriority (stringified), ARGV[3]=JSON item.
+      // Resume priority is the 0.x tier so the script body ZADDs a fresh
+      // pending member at the highest-priority score.
+      expect(redis.requeueForResumeItem).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        expect.any(Number),
+        'orchestrator:queue:claimed:worker-1',
+        'orchestrator:worker:worker-1:heartbeat',
+        'test-org/test-repo#42',
+        expect.any(String),
         expect.any(String),
       );
-      const requeuedPayload = JSON.parse(
-        (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][2] as string,
-      ) as SerializedQueueItem;
-      // attemptCount preserved verbatim (2, not incremented to 3).
-      expect(requeuedPayload.attemptCount).toBe(2);
-      expect(requeuedPayload.queueReason).toBe('resume');
+      const resumePriorityArg = Number(
+        (redis.requeueForResumeItem as ReturnType<typeof vi.fn>).mock.calls[0][4] as string,
+      );
+      expect(resumePriorityArg).toBeGreaterThan(0);
+      expect(resumePriorityArg).toBeLessThan(1);
+    });
 
-      // Resume priority is 0.x (highest priority tier).
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
-      expect(score).toBeGreaterThan(0);
-      expect(score).toBeLessThan(1);
+    it('should log info with preserved attemptCount and reason=lease-expiry on the re-pend branch (code 1)', async () => {
+      // Preserve attemptCount verbatim: lease expiry is an infrastructure
+      // event and MUST NOT count toward dead-letter (default maxRetries=3).
+      // Script returned attemptCount=2 (unmodified from the claim payload)
+      // and adapter surfaces it in the info line.
+      const redis = createMockRedis({
+        requeueForResumeItem: vi.fn().mockResolvedValue([1, 2]),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.requeueForResume('worker-1', sampleItem);
+
+      expect(logger.info).toHaveBeenCalledWith(
+        {
+          workerId: 'worker-1',
+          itemKey: 'test-org/test-repo#42',
+          attemptCount: 2,
+          reason: 'lease-expiry',
+        },
+        'Item re-pended at resume priority (attemptCount preserved)',
+      );
     });
 
     it('should NEVER dead-letter, even at attemptCount that would normally dead-letter via release()', async () => {
-      // Contract enforcement: three lease expiries on the same item must
-      // not accumulate into dead-letter. Sim attemptCount=99 to make the
-      // point unmissable.
-      const serialized = buildSerializedItem(sampleItem, 99);
+      // Contract enforcement (hermetic mirror of the real-Redis assertion
+      // in redis-queue-adapter.requeueForResume-atomic.test.ts): three
+      // lease expiries on the same item must not accumulate into
+      // dead-letter. `requeueForResumeItem` has no dead-letter branch by
+      // construction — it returns tuple codes {0, 1} only, never 2. This
+      // test locks that dispatch surface: no code path in the adapter
+      // maps a requeueForResume outcome to dead-letter, so even a return
+      // of [1, 99] logs the info line and never mutates dead-letter.
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        requeueForResumeItem: vi.fn().mockResolvedValue([1, 99]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.requeueForResume('worker-1', sampleItem);
 
-      const zaddCalls = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls;
-      // Exactly one ZADD, to pending — no dead-letter ZADD.
-      expect(zaddCalls).toHaveLength(1);
-      expect(zaddCalls[0][0]).toBe('orchestrator:queue:pending');
-    });
-
-    it('should null-guard the claim-hash read (same reaper race as release())', async () => {
-      const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(null),
-      });
-      const adapter = new RedisQueueAdapter(redis, logger);
-
-      await adapter.requeueForResume('worker-1', sampleItem);
-
-      // No ZADD — reaper already re-pended it, no duplicate member created.
+      // No JS-surface ZADD to dead-letter — the adapter cannot even
+      // route to that branch on a requeueForResume outcome.
       expect(redis.zadd).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      // Info line still surfaces the (unmodified) attemptCount.
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ attemptCount: 99, reason: 'lease-expiry' }),
+        'Item re-pended at resume priority (attemptCount preserved)',
+      );
     });
 
-    it('should preserve in-flight-SET membership (never SREM)', async () => {
+    it('should log the reaper-race info line when script returns code 0 (same reaper race as release())', async () => {
+      const redis = createMockRedis({
+        requeueForResumeItem: vi.fn().mockResolvedValue([0, -1]),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.requeueForResume('worker-1', sampleItem);
+
+      // No dispatch-side mutation on the race path.
+      expect(redis.zadd).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        { workerId: 'worker-1', itemKey: 'test-org/test-repo#42' },
+        'requeueForResume() called on already-cleared claim (reaper race) — skipping re-pend',
+      );
+    });
+
+    it('should preserve in-flight-SET membership at the dispatch layer (never SREM from JS)', async () => {
       // The item was and remains in flight (only its claim moves back to
       // pending). SREM would break the in-flight = pending ∪ claimed
-      // invariant that #1060 exists to enforce.
-      const serialized = buildSerializedItem(sampleItem, 0);
+      // invariant that #1060 exists to enforce. #1069 moved all mutation
+      // into Lua; the script never SREMs on the requeueForResume path,
+      // and the JS dispatch layer has no SREM call at all. This assertion
+      // guards the dispatch layer; the real-Redis suite guards the script
+      // body's actual set contents.
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        requeueForResumeItem: vi.fn().mockResolvedValue([1, 0]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
@@ -384,118 +442,63 @@ describe('RedisQueueAdapter', () => {
   });
 
   describe('release', () => {
-    it('should increment attemptCount and re-queue item', async () => {
-      const serialized = buildSerializedItem(sampleItem, 0);
+    // #1069 — the read-then-mutate (HGET + client-side MULTI: HDEL/DEL/ZADD)
+    // moved into RELEASE_SCRIPT registered via defineCommand as `releaseItem`.
+    // Return contract: [code, attemptCount] tuple. code 0 = reaper-race
+    // no-op ({0, -1}); code 1 = retry re-pended with attemptCount = parsed
+    // + 1; code 2 = dead-lettered with attemptCount = parsed + 1. The JS
+    // dispatch layer switches on code and emits the pre-existing log-line
+    // shapes verbatim (FR-005 / SC-007). Behaviour previously covered via
+    // JS-side ZADD-target assertions is now covered by:
+    //   - direct assertion on `releaseItem`'s KEYS + ARGV here (script
+    //     receives the right inputs)
+    //   - assertion on the log-line the adapter emits per returned code
+    //     (dispatch layer routes correctly)
+    // The real script body's HDEL/DEL/ZADD/SREM sequencing is pinned by
+    // the real-Redis suite in
+    // src/services/__tests__/redis-queue-adapter.release-atomic.test.ts
+    // and by the script-text assertions in redis-queue-adapter.script-wiring.test.ts.
+
+    it('should invoke releaseItem with 5 keys + itemKey + retryPriority + item + maxRetries + deadLetterScore', async () => {
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        releaseItem: vi.fn().mockResolvedValue([1, 1]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.release('worker-1', sampleItem);
 
-      // Should clean up claimed hash and heartbeat
-      expect(redis.hdel).toHaveBeenCalledWith(
-        'orchestrator:queue:claimed:worker-1',
-        'test-org/test-repo#42'
-      );
-      expect(redis.del).toHaveBeenCalledWith(
-        'orchestrator:worker:worker-1:heartbeat'
-      );
-
-      // Should re-queue with retry priority
-      expect(redis.zadd).toHaveBeenCalledWith(
+      // KEYS[1]=pending, KEYS[2]=claimed:<worker>, KEYS[3]=heartbeat:<worker>,
+      // KEYS[4]=dead-letter, KEYS[5]=in-flight-items. ARGV[1]=itemKey,
+      // ARGV[2]=retryPriority (stringified), ARGV[3]=JSON item,
+      // ARGV[4]=maxRetries (stringified), ARGV[5]=dead-letter score
+      // (Date.now(), stringified). Any drift here — a key reorder, a
+      // dropped argv — would fail the real-Redis script call too, but
+      // this hermetic check is cheap and gives a clean diff on regression.
+      expect(redis.releaseItem).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        expect.any(Number),
-        expect.any(String)
+        'orchestrator:queue:claimed:worker-1',
+        'orchestrator:worker:worker-1:heartbeat',
+        'orchestrator:queue:dead-letter',
+        'orchestrator:queue:in-flight-items',
+        'test-org/test-repo#42',
+        expect.any(String),
+        expect.any(String),
+        '3',
+        expect.any(String),
       );
-
-      const requeuedPayload = JSON.parse(
-        (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][2] as string
-      ) as SerializedQueueItem;
-      expect(requeuedPayload.attemptCount).toBe(1);
-      expect(requeuedPayload.itemKey).toBe('test-org/test-repo#42');
-      expect(requeuedPayload.queueReason).toBe('retry');
-    });
-
-    it('should NOT re-queue when no claimed data exists (PR #1065 review finding 1 — reaper-race null-guard)', async () => {
-      const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(null),
-      });
-      const adapter = new RedisQueueAdapter(redis, logger);
-
-      await adapter.release('worker-1', sampleItem);
-
-      // Contract change: previously re-queued with attemptCount 0.
-      // Now bails to prevent duplicate pending member — the null return
-      // means another actor (reaper's RECLAIM_ORPHAN_SCRIPT) already
-      // re-pended it, and a naked ZADD here would create a SECOND
-      // distinct pending member for the same itemKey.
-      expect(redis.zadd).not.toHaveBeenCalled();
-    });
-
-    it('should move to dead-letter set after maxRetries exceeded', async () => {
-      // Default maxRetries is 3, so attemptCount >= 3 should dead-letter
-      const serialized = buildSerializedItem(sampleItem, 2); // will become 3 after increment
-      const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
-      });
-      const adapter = new RedisQueueAdapter(redis, logger);
-
-      await adapter.release('worker-1', sampleItem);
-
-      // Should NOT re-queue to pending
-      const zaddCalls = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls;
-      expect(zaddCalls).toHaveLength(1);
-      expect(zaddCalls[0][0]).toBe('orchestrator:queue:dead-letter');
-
-      // Verify dead-letter payload
-      const deadLetterPayload = JSON.parse(zaddCalls[0][2] as string) as SerializedQueueItem;
-      expect(deadLetterPayload.attemptCount).toBe(3);
-      expect(deadLetterPayload.itemKey).toBe('test-org/test-repo#42');
-
-      // Score should be Date.now() (timestamp)
-      expect(typeof zaddCalls[0][1]).toBe('number');
-    });
-
-    it('should dead-letter when attemptCount exceeds custom maxRetries', async () => {
-      const serialized = buildSerializedItem(sampleItem, 0); // will become 1 after increment
-      const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
-      });
-      const adapter = new RedisQueueAdapter(redis, logger, { maxRetries: 1 });
-
-      await adapter.release('worker-1', sampleItem);
-
-      // With maxRetries=1 and attemptCount becoming 1, item should be dead-lettered
-      const zaddCalls = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls;
-      expect(zaddCalls).toHaveLength(1);
-      expect(zaddCalls[0][0]).toBe('orchestrator:queue:dead-letter');
-    });
-
-    it('should log warning when dead-lettering', async () => {
-      const serialized = buildSerializedItem(sampleItem, 2);
-      const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
-      });
-      const adapter = new RedisQueueAdapter(redis, logger);
-
-      await adapter.release('worker-1', sampleItem);
-
-      expect(logger.warn).toHaveBeenCalledWith(
-        {
-          workerId: 'worker-1',
-          itemKey: 'test-org/test-repo#42',
-          attemptCount: 3,
-          maxRetries: 3,
-        },
-        'Item dead-lettered after max retries'
+      // Retry priority is the 1.x tier.
+      const retryPriorityArg = Number(
+        (redis.releaseItem as ReturnType<typeof vi.fn>).mock.calls[0][6] as string,
       );
+      expect(retryPriorityArg).toBeGreaterThan(1);
+      expect(retryPriorityArg).toBeLessThan(2);
     });
 
-    it('should log info when re-queuing', async () => {
-      const serialized = buildSerializedItem(sampleItem, 0);
+    it('should log info with incremented attemptCount on the retry branch (code 1)', async () => {
+      // Script returned attemptCount=1 (parsed + 1 where parsed=0). Adapter
+      // surfaces it verbatim in the info line — same shape as pre-#1069.
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        releaseItem: vi.fn().mockResolvedValue([1, 1]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
@@ -503,13 +506,72 @@ describe('RedisQueueAdapter', () => {
 
       expect(logger.info).toHaveBeenCalledWith(
         { workerId: 'worker-1', itemKey: 'test-org/test-repo#42', attemptCount: 1 },
-        'Item released back to pending queue'
+        'Item released back to pending queue',
       );
+    });
+
+    it('should NOT re-queue when script signals reaper-race no-op (code 0)', async () => {
+      // Pre-#1069: adapter did an HGET, saw null, bailed. Now RELEASE_SCRIPT
+      // does the HGET inside Lua, returns {0, -1}, and the adapter's
+      // dispatch layer routes to the race-path info log. The invariant
+      // (no duplicate pending member) is proven end-to-end in the
+      // real-Redis suite; this test locks that the dispatch does not
+      // emit a spurious dead-letter warn on code 0.
+      const redis = createMockRedis({
+        releaseItem: vi.fn().mockResolvedValue([0, -1]),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.release('worker-1', sampleItem);
+
+      expect(redis.zadd).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('should log dead-letter warn on code 2, at attemptCount surfaced by script', async () => {
+      // Default maxRetries is 3. The script decides dead-letter internally
+      // (attemptCount >= maxRetries after the parsed+1 bump) and returns
+      // {2, N}. Adapter surfaces N in the warn line and does not compute
+      // it JS-side.
+      const redis = createMockRedis({
+        releaseItem: vi.fn().mockResolvedValue([2, 3]),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.release('worker-1', sampleItem);
+
+      // No JS-side ZADD to dead-letter — that happens inside Lua now.
+      expect(redis.zadd).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        {
+          workerId: 'worker-1',
+          itemKey: 'test-org/test-repo#42',
+          attemptCount: 3,
+          maxRetries: 3,
+        },
+        'Item dead-lettered after max retries',
+      );
+    });
+
+    it('should pass custom maxRetries through ARGV[4] so the script threshold changes', async () => {
+      // Behaviourally verified end-to-end by the real-Redis suite; here
+      // we confirm the adapter forwards the configured `maxRetries` to
+      // Lua as ARGV[4] so the script's `if attemptCount >= maxRetries`
+      // gate uses the right threshold.
+      const redis = createMockRedis({
+        releaseItem: vi.fn().mockResolvedValue([2, 1]),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger, { maxRetries: 1 });
+
+      await adapter.release('worker-1', sampleItem);
+
+      const argvMaxRetries = (redis.releaseItem as ReturnType<typeof vi.fn>).mock.calls[0][8];
+      expect(argvMaxRetries).toBe('1');
     });
 
     it('should gracefully degrade on Redis error', async () => {
       const redis = createMockRedis({
-        hget: vi.fn().mockRejectedValue(new Error('Connection refused')),
+        releaseItem: vi.fn().mockRejectedValue(new Error('Connection refused')),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
@@ -889,15 +951,20 @@ describe('RedisQueueAdapter', () => {
     });
 
     it('should set retry priority on release re-queue', async () => {
-      const serialized = buildSerializedItem(sampleItem, 0);
+      // #1069 — the ZADD moved inside RELEASE_SCRIPT. The retry-priority
+      // score is passed to Lua as ARGV[2] and the script's `ZADD KEYS[1],
+      // tonumber(ARGV[2])` uses it. The adapter has to compute the score
+      // JS-side either way (Lua can't call `getPriorityScore`), so we
+      // assert on the string passed to the script.
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        releaseItem: vi.fn().mockResolvedValue([1, 1]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.release('worker-1', sampleItem);
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const retryPriorityArgv = (redis.releaseItem as ReturnType<typeof vi.fn>).mock.calls[0][6] as string;
+      const score = Number(retryPriorityArgv);
       // Retry priority is 1.{timestamp}
       expect(score).toBeGreaterThan(1);
       expect(score).toBeLessThan(2);
@@ -920,32 +987,37 @@ describe('RedisQueueAdapter', () => {
   });
 
   describe('constructor defaults', () => {
-    it('should default maxRetries to 3', async () => {
-      // Verify default by releasing an item at attemptCount 2 (becomes 3 -> dead-letter)
-      const serialized = buildSerializedItem(sampleItem, 2);
+    // #1069 — the dead-letter-vs-retry decision moved inside RELEASE_SCRIPT.
+    // Adapter forwards `maxRetries` to the script as ARGV[4] and the
+    // script's `if attemptCount >= maxRetries` gate makes the decision.
+    // The real end-to-end verification (that maxRetries=3 dead-letters
+    // at attemptCount 3, and maxRetries=5 does not) lives in the
+    // real-Redis suite at redis-queue-adapter.release-atomic.test.ts.
+    // These hermetic tests lock the wiring from the JS constructor
+    // default and the {maxRetries: N} option into the script's ARGV[4].
+
+    it('should default maxRetries to 3 (forwarded to script as ARGV[4])', async () => {
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        releaseItem: vi.fn().mockResolvedValue([1, 1]),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.release('worker-1', sampleItem);
 
-      const zaddCalls = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls;
-      expect(zaddCalls[0][0]).toBe('orchestrator:queue:dead-letter');
+      const argvMaxRetries = (redis.releaseItem as ReturnType<typeof vi.fn>).mock.calls[0][8];
+      expect(argvMaxRetries).toBe('3');
     });
 
-    it('should allow custom maxRetries via config', async () => {
-      // With maxRetries=5, attemptCount 2 -> 3 should NOT dead-letter
-      const serialized = buildSerializedItem(sampleItem, 2);
+    it('should allow custom maxRetries via config (forwarded to script as ARGV[4])', async () => {
       const redis = createMockRedis({
-        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+        releaseItem: vi.fn().mockResolvedValue([1, 1]),
       });
       const adapter = new RedisQueueAdapter(redis, logger, { maxRetries: 5 });
 
       await adapter.release('worker-1', sampleItem);
 
-      const zaddCalls = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls;
-      expect(zaddCalls[0][0]).toBe('orchestrator:queue:pending');
+      const argvMaxRetries = (redis.releaseItem as ReturnType<typeof vi.fn>).mock.calls[0][8];
+      expect(argvMaxRetries).toBe('5');
     });
   });
 });

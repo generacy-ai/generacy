@@ -211,12 +211,23 @@ describe('RedisQueueAdapter — REQUEUE_FOR_RESUME_SCRIPT text (#1069 script-wir
     expect(happyIdx, '{1, parsed.attemptCount} present').toBeGreaterThan(nullGuardIdx);
   });
 
-  it('preserves parsed.attemptCount verbatim (FR-003 — do NOT increment)', () => {
-    // Load-bearing assertion: any refactor that changes this to
-    // `parsed.attemptCount + 1` would silently condemn blameless items
-    // to dead-letter after N lease-expiry events.
+  it('preserves parsed.attemptCount verbatim with `or 0` nil-guard (FR-003 — do NOT increment)', () => {
+    // Load-bearing assertion: pins BOTH facts in one shot on the normalized
+    // line — (a) the `or 0` nil-guard is present so a nil claim payload
+    // doesn't concat-fail Lua's `+` operator on the sibling RELEASE side,
+    // and (b) no `+ 1` follows. A refactor that either drops the `or 0`
+    // hardening OR silently starts incrementing would fail this pin.
+    // Loose form `/attemptCount/` would tolerate the exact edit we're
+    // guarding against, and would make the assertion decorative.
     expect(REQUEUE_FOR_RESUME_SCRIPT).toMatch(
-      /base\.attemptCount\s*=\s*parsed\.attemptCount(?!\s*\+)/,
+      /base\.attemptCount\s*=\s*parsed\.attemptCount\s+or\s+0\s*$/m,
+    );
+    // Belt-and-braces: explicitly forbid any `+ N` arithmetic on the RHS
+    // of this assignment. Redundant with the anchored line above, but
+    // this catches a refactor that reorders operands (e.g. `= 0 or parsed
+    // .attemptCount + 1`).
+    expect(REQUEUE_FOR_RESUME_SCRIPT).not.toMatch(
+      /base\.attemptCount\s*=\s*[^\n]*parsed\.attemptCount[^\n]*\+/,
     );
   });
 
@@ -258,9 +269,16 @@ describe('RedisQueueAdapter — RELEASE_SCRIPT text (#1069 script-wiring asserti
     );
   });
 
-  it('increments attemptCount by exactly one on the retry side (FR-004)', () => {
+  it('increments attemptCount by exactly one with `or 0` nil-guard on the retry side (FR-004)', () => {
+    // Load-bearing assertion: pins BOTH facts in one shot on the normalized
+    // line — (a) the `or 0` nil-guard is present so a nil claim payload
+    // yields attemptCount=1 (not a Lua concat/type error), and (b) the
+    // arithmetic is `+ 1` exactly. A refactor that either drops the
+    // `or 0` hardening OR silently changes the increment (say to `+ 2`
+    // or `* 2`) would fail this pin. A loose form like `/attemptCount/`
+    // would tolerate the exact edit we're guarding against.
     expect(RELEASE_SCRIPT).toMatch(
-      /attemptCount\s*=\s*parsed\.attemptCount\s*\+\s*1/,
+      /local\s+attemptCount\s*=\s*\(\s*parsed\.attemptCount\s+or\s+0\s*\)\s*\+\s*1\s*$/m,
     );
   });
 
