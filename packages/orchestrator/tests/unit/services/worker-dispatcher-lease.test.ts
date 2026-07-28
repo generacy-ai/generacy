@@ -277,7 +277,7 @@ describe('WorkerDispatcher lease integration', () => {
   // 4. Heartbeat expiry cancels worker and re-enqueues with resume priority
   // -------------------------------------------------------------------------
   describe('heartbeat expiry cancels worker and re-enqueues', () => {
-    it('should cancel worker and re-enqueue with priority 0 when lease heartbeat expires', async () => {
+    it('should cancel worker and re-enqueue via release() when lease heartbeat expires (#1060)', async () => {
       dispatcher.setLeaseManager(leaseManager);
 
       // Handler that never resolves (long-running worker)
@@ -317,22 +317,25 @@ describe('WorkerDispatcher lease integration', () => {
       // Heartbeat interval is 100ms, so 3 failures = ~300ms + some buffer
       await tick(450);
 
-      // lease:expired should have been emitted and handled —
-      // worker should be removed and item re-enqueued
+      // lease:expired should have been emitted and handled — worker removed
+      // and item re-pended via release() (not enqueue — that would be
+      // dropped by the new in-flight-SET dedupe since CLAIM preserves
+      // in-flight membership).
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
 
-      expect(queue.enqueue).toHaveBeenCalledWith(
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
         expect.objectContaining({
           owner: 'test-org',
           repo: 'test-repo',
           issueNumber: 42,
-          priority: 0,
-          queueReason: 'resume',
         }),
       );
+      // enqueue() must NOT be called on this path (release() covers re-pending).
+      expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it('should not re-enqueue if duplicate already in queue', async () => {
+    it('should call release() unconditionally on lease expiry (no duplicate check — release is atomic in Redis) (#1060)', async () => {
       dispatcher.setLeaseManager(leaseManager);
 
       handler.mockImplementation(() => new Promise<void>(() => {}));
@@ -341,7 +344,9 @@ describe('WorkerDispatcher lease integration', () => {
         .mockResolvedValueOnce({ ...sampleItem })
         .mockResolvedValue(null);
 
-      // Simulate duplicate already in queue
+      // Even if getQueueItems reports a "duplicate", release() is still called;
+      // the old duplicate-check path is removed in favor of release()'s atomic
+      // HDEL+ZADD sequence.
       (queue.getQueueItems as ReturnType<typeof vi.fn>).mockResolvedValue([
         { item: { ...sampleItem }, score: 1000 },
       ]);
@@ -367,13 +372,17 @@ describe('WorkerDispatcher lease integration', () => {
 
       await tick(450);
 
-      // Worker removed but enqueue should NOT be called (duplicate exists)
+      // Worker removed. release() called regardless of "duplicate" state.
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ issueNumber: 42 }),
+      );
       expect(queue.enqueue).not.toHaveBeenCalled();
 
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ itemKey: 'test-org/test-repo#42' }),
-        'Skipped re-enqueue (duplicate already in queue)',
+        'Re-enqueued via release() after lease expiry',
       );
     });
   });

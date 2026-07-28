@@ -20,6 +20,7 @@ const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
 const HEARTBEAT_KEY_PREFIX = 'orchestrator:worker:';
 const DEAD_LETTER_KEY = 'orchestrator:queue:dead-letter';
 const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
+const DEDUP_KEY_PREFIX = 'orchestrator:queue:_dedup:';
 
 /**
  * Lua script for atomic in-flight-checked enqueue.
@@ -32,6 +33,38 @@ const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
  * Returns 1 if enqueued, 0 if already in flight.
  */
 const ENQUEUE_IF_ABSENT_SCRIPT = `
+local exists = redis.call('SISMEMBER', KEYS[2], ARGV[1])
+if exists == 1 then
+  return 0
+end
+redis.call('SADD', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), ARGV[3])
+return 1
+`;
+
+/**
+ * #1060 — Lua script for atomic in-flight-checked enqueue on the
+ * `enqueue()` path. Byte-identical to `ENQUEUE_IF_ABSENT_SCRIPT`; the two
+ * verbs share the same atomic dedupe-and-add sequence and differ only in
+ * how the caller reads the boolean return.
+ *
+ * Restores the `in-flight = pending ∪ claimed` invariant on the
+ * `process:<workflow>` intake path — before this script existed, `enqueue()`
+ * ran a plain `ZADD pending` with no in-flight SET add and no dedupe, so a
+ * subsequent monitor `enqueueIfAbsent` for the same itemKey passed its
+ * SISMEMBER guard and produced a second distinct pending member.
+ *
+ * KEYS[1] = pending sorted set
+ * KEYS[2] = in-flight SET
+ * KEYS[3] = `_dedup:<itemKey>` hash (reserved for future D6-a upgrade;
+ *           the D6-b body below does not touch it)
+ * ARGV[1] = itemKey
+ * ARGV[2] = priority (numeric string)
+ * ARGV[3] = serialized item JSON
+ *
+ * Returns 1 if enqueued, 0 if already in flight.
+ */
+const ENQUEUE_SCRIPT = `
 local exists = redis.call('SISMEMBER', KEYS[2], ARGV[1])
 if exists == 1 then
   return 0
@@ -164,6 +197,7 @@ export class RedisQueueAdapter implements QueueManager {
   private readonly heartbeatCheckIntervalMs: number;
   private claimCommandDefined = false;
   private enqueueIfAbsentCommandDefined = false;
+  private enqueueCommandDefined = false;
   private reclaimOrphanCommandDefined = false;
   /**
    * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
@@ -213,6 +247,15 @@ export class RedisQueueAdapter implements QueueManager {
       lua: ENQUEUE_IF_ABSENT_SCRIPT,
     });
     this.enqueueIfAbsentCommandDefined = true;
+  }
+
+  private ensureEnqueueCommand(): void {
+    if (this.enqueueCommandDefined) return;
+    this.redis.defineCommand('enqueueItem', {
+      numberOfKeys: 3,
+      lua: ENQUEUE_SCRIPT,
+    });
+    this.enqueueCommandDefined = true;
   }
 
   private ensureReclaimOrphanCommand(): void {
@@ -576,7 +619,8 @@ export class RedisQueueAdapter implements QueueManager {
     return report;
   }
 
-  async enqueue(item: QueueItem): Promise<void> {
+  async enqueue(item: QueueItem): Promise<boolean> {
+    this.ensureEnqueueCommand();
     const itemKey = buildItemKey(item);
     const priority = getPriorityScore(item.queueReason);
     const serialized: SerializedQueueItem = {
@@ -587,16 +631,50 @@ export class RedisQueueAdapter implements QueueManager {
     };
 
     try {
-      await this.redis.zadd(PENDING_KEY, priority, JSON.stringify(serialized));
-      this.logger.info(
-        { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority },
-        'Item enqueued to Redis sorted set'
+      const result = await (this.redis as any).enqueueItem(
+        PENDING_KEY,
+        IN_FLIGHT_KEY,
+        `${DEDUP_KEY_PREFIX}${itemKey}`,
+        itemKey,
+        String(priority),
+        JSON.stringify(serialized),
       );
+      const enqueued = result === 1;
+      if (enqueued) {
+        // #1054 finding 7 — seed the enqueuedAt cache so subsequent drop-path
+        // reads don't fan out into an O(workers) SCAN.
+        const enqueuedAtMs = Date.parse(item.enqueuedAt);
+        if (!Number.isNaN(enqueuedAtMs)) {
+          this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+        }
+        this.logger.info(
+          { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
+          'Item enqueued to Redis sorted set (in-flight-checked)',
+        );
+        return true;
+      }
+      // #1060 / FR-005: in-flight-collision drop, mirrors enqueueIfAbsent's
+      // transition-edge log path so both verbs emit the same shape.
+      const ageMs = await this.hasInFlightAge(itemKey);
+      const decision = classifyDropSeverity(
+        itemKey,
+        ageMs,
+        this.maxRunDurationMs,
+        this.dropLogState,
+      );
+      emitDropLog(
+        this.logger,
+        decision,
+        { itemKey, source: 'enqueue', reason: 'in-flight', ageMs },
+        'Dropping enqueue (item already in flight)',
+      );
+      return false;
     } catch (error) {
       this.logger.warn(
         { err: error, itemKey },
-        'Redis error in enqueue, item not added to queue'
+        'Redis error in enqueue, item not added to queue',
       );
+      return false;
     }
   }
 

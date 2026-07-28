@@ -27,6 +27,9 @@ function createMockRedis(overrides: Record<string, unknown> = {}) {
     defineCommand: vi.fn(),
     claimItem: vi.fn().mockResolvedValue(null),
     enqueueIfAbsent: vi.fn().mockResolvedValue(1),
+    // #1060 — enqueue() now routes through the ENQUEUE_SCRIPT Lua command
+    // (returns 1 on enqueue, 0 on in-flight drop).
+    enqueueItem: vi.fn().mockResolvedValue(1),
     ...overrides,
   };
   // Chainable multi() that forwards to the underlying fns and returns [null, res] tuples on exec.
@@ -79,21 +82,25 @@ describe('RedisQueueAdapter', () => {
   });
 
   describe('enqueue', () => {
-    it('should add item to sorted set with correct priority score', async () => {
+    it('should invoke ENQUEUE_SCRIPT with correct itemKey, priority, and serialized payload (#1060)', async () => {
       const redis = createMockRedis();
       const adapter = new RedisQueueAdapter(redis, logger);
 
-      await adapter.enqueue(sampleItem);
+      const result = await adapter.enqueue(sampleItem);
+      expect(result).toBe(true);
 
-      expect(redis.zadd).toHaveBeenCalledWith(
+      expect(redis.enqueueItem).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        expect.any(Number),
-        expect.any(String)
+        'orchestrator:queue:in-flight-items',
+        'orchestrator:queue:_dedup:test-org/test-repo#42',
+        'test-org/test-repo#42',
+        expect.any(String),
+        expect.any(String),
       );
 
-      // Verify the serialized payload includes attemptCount and itemKey
-      const serializedArg = (redis.zadd as ReturnType<typeof vi.fn>).mock
-        .calls[0][2] as string;
+      // Verify the serialized payload includes attemptCount and itemKey.
+      const serializedArg = (redis.enqueueItem as ReturnType<typeof vi.fn>).mock
+        .calls[0][5] as string;
       const parsed = JSON.parse(serializedArg) as SerializedQueueItem;
       expect(parsed.attemptCount).toBe(0);
       expect(parsed.itemKey).toBe('test-org/test-repo#42');
@@ -118,24 +125,36 @@ describe('RedisQueueAdapter', () => {
           repo: 'test-repo',
           issue: 42,
           priority: expect.any(Number),
+          itemKey: 'test-org/test-repo#42',
         },
-        'Item enqueued to Redis sorted set'
+        'Item enqueued to Redis sorted set (in-flight-checked)'
       );
     });
 
     it('should log warning and not throw on Redis error', async () => {
       const redis = createMockRedis({
-        zadd: vi.fn().mockRejectedValue(new Error('Connection refused')),
+        enqueueItem: vi.fn().mockRejectedValue(new Error('Connection refused')),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
       // Should not throw
-      await adapter.enqueue(sampleItem);
+      const result = await adapter.enqueue(sampleItem);
+      expect(result).toBe(false);
 
       expect(logger.warn).toHaveBeenCalledWith(
         { err: expect.any(Error), itemKey: 'test-org/test-repo#42' },
         'Redis error in enqueue, item not added to queue'
       );
+    });
+
+    it('should return false when ENQUEUE_SCRIPT reports item already in flight', async () => {
+      const redis = createMockRedis({
+        enqueueItem: vi.fn().mockResolvedValue(0),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      const result = await adapter.enqueue(sampleItem);
+      expect(result).toBe(false);
     });
   });
 
@@ -720,7 +739,10 @@ describe('RedisQueueAdapter', () => {
 
       await adapter.enqueue({ ...sampleItem, queueReason: 'resume' });
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      // #1060: enqueue routes through ENQUEUE_SCRIPT; priority is ARGV[2] (index 4).
+      const score = Number(
+        (redis.enqueueItem as ReturnType<typeof vi.fn>).mock.calls[0][4] as string,
+      );
       expect(score).toBeGreaterThan(0);
       expect(score).toBeLessThan(1);
     });
@@ -731,7 +753,9 @@ describe('RedisQueueAdapter', () => {
 
       await adapter.enqueue({ ...sampleItem, queueReason: 'retry' });
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const score = Number(
+        (redis.enqueueItem as ReturnType<typeof vi.fn>).mock.calls[0][4] as string,
+      );
       expect(score).toBeGreaterThan(1);
       expect(score).toBeLessThan(2);
     });
@@ -744,7 +768,9 @@ describe('RedisQueueAdapter', () => {
       await adapter.enqueue({ ...sampleItem, queueReason: 'new' });
       const after = Date.now();
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const score = Number(
+        (redis.enqueueItem as ReturnType<typeof vi.fn>).mock.calls[0][4] as string,
+      );
       expect(score).toBeGreaterThanOrEqual(before);
       expect(score).toBeLessThanOrEqual(after);
     });
@@ -757,8 +783,8 @@ describe('RedisQueueAdapter', () => {
       await adapter.enqueue({ ...sampleItem, issueNumber: 2, queueReason: 'retry' });
       await adapter.enqueue({ ...sampleItem, issueNumber: 3, queueReason: 'new' });
 
-      const scores = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls.map(
-        (call: unknown[]) => call[1] as number
+      const scores = (redis.enqueueItem as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call: unknown[]) => Number(call[4] as string),
       );
       expect(scores[0]).toBeLessThan(scores[1]); // resume < retry
       expect(scores[1]).toBeLessThan(scores[2]); // retry < new
@@ -787,7 +813,9 @@ describe('RedisQueueAdapter', () => {
       await adapter.enqueue({ ...sampleItem }); // no queueReason
       const after = Date.now();
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const score = Number(
+        (redis.enqueueItem as ReturnType<typeof vi.fn>).mock.calls[0][4] as string,
+      );
       expect(score).toBeGreaterThanOrEqual(before);
       expect(score).toBeLessThanOrEqual(after);
     });

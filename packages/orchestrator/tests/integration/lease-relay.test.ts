@@ -407,16 +407,18 @@ describe('Lease + Relay integration', () => {
       // Worker should have been removed after lease expiry
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
 
-      // Item should be re-enqueued with resume priority
-      expect(queue.enqueue).toHaveBeenCalledWith(
+      // #1060: item is re-pended via release() (not enqueue). release()
+      // atomically HDELs the claim and ZADDs to pending while preserving
+      // in-flight-SET membership.
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
         expect.objectContaining({
           owner: sampleItem.owner,
           repo: sampleItem.repo,
           issueNumber: sampleItem.issueNumber,
-          priority: 0,
-          queueReason: 'resume',
         }),
       );
+      expect(queue.enqueue).not.toHaveBeenCalled();
 
       // Resolve handler to clean up
       resolveHandler();

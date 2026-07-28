@@ -61,27 +61,29 @@ export class InMemoryQueueAdapter implements QueueManager {
     this.maxRunDurationMs = config?.maxRunDurationMs ?? 1_800_000;
   }
 
-  async enqueue(item: QueueItem): Promise<void> {
+  async enqueue(item: QueueItem): Promise<boolean> {
     const itemKey = buildItemKey(item);
 
-    // Dedup: reject if item key already exists in pending
-    if (this.pending.some((p) => p.itemKey === itemKey)) {
-      this.logger.debug(
-        { itemKey },
-        'Duplicate item key in pending queue, skipping enqueue'
+    // #1060 / FR-001: dedupe against the full in-flight index (pending ∪
+    // claimed) via the SET rather than scanning both. Matches Redis adapter.
+    if (this.inFlightSet.has(itemKey)) {
+      // #1060 / FR-005: funnel through the same transition-edge log path as
+      // Redis + enqueueIfAbsent so the log-line shape matches across adapters
+      // and verbs (SC-003).
+      const ageMs = await this.hasInFlightAge(itemKey);
+      const decision = classifyDropSeverity(
+        itemKey,
+        ageMs,
+        this.maxRunDurationMs,
+        this.dropLogState,
       );
-      return;
-    }
-
-    // Dedup: reject if item key already claimed by any worker
-    for (const workerItems of this.claimed.values()) {
-      if (workerItems.has(itemKey)) {
-        this.logger.debug(
-          { itemKey },
-          'Duplicate item key in claimed set, skipping enqueue'
-        );
-        return;
-      }
+      emitDropLog(
+        this.logger,
+        decision,
+        { itemKey, source: 'enqueue', reason: 'in-flight', ageMs },
+        'Dropping enqueue (item already in flight)',
+      );
+      return false;
     }
 
     const priority = getPriorityScore(item.queueReason);
@@ -99,6 +101,7 @@ export class InMemoryQueueAdapter implements QueueManager {
       { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority },
       'Item enqueued to in-memory queue'
     );
+    return true;
   }
 
   async enqueueIfAbsent(item: QueueItem): Promise<boolean> {

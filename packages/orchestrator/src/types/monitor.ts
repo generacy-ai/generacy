@@ -227,7 +227,21 @@ export interface MonitorState {
  * Queue adapter interface for enqueuing items
  */
 export interface QueueAdapter {
-  enqueue(item: QueueItem): Promise<void>;
+  /**
+   * Atomically enqueue an item, dropping if its `itemKey` is already in
+   * flight (pending or claimed by any worker).
+   *
+   * Invariant: after `enqueue(item)` returns `true`, `item.itemKey` MUST
+   * be a member of the in-flight index (`orchestrator:queue:in-flight-items`
+   * on the Redis adapter, `inFlightSet` on the in-memory adapter). Every
+   * implementation of this interface is bound to the end-to-end equality
+   * `in-flight = pending ∪ claimed` at every intermediate step of the
+   * `enqueue → claim → release-retry → reclaim-orphan → complete` sequence.
+   *
+   * @returns true if enqueued, false if dropped (already in flight or
+   *          transport error).
+   */
+  enqueue(item: QueueItem): Promise<boolean>;
 }
 
 /**

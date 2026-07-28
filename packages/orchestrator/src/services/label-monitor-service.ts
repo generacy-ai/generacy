@@ -425,11 +425,18 @@ export class LabelMonitorService {
     }
 
     // type === 'process'
-    await this.queueManager.enqueue(queueItem);
-    this.logger.info(
-      { owner, repo, issueNumber, command: queueItem.command, workflowName },
-      'Issue enqueued',
-    );
+    // #1060 / FR-003: `enqueue()` now returns a boolean and drops in-flight
+    // collisions internally (via emitDropLog). Observe the boolean, but
+    // proceed with post-enqueue steps regardless — a `false` return means
+    // the item was already in flight and the enqueue's intent is satisfied.
+    // No extra log line here; the adapter owns FR-005.
+    const enqueued = await this.queueManager.enqueue(queueItem);
+    if (enqueued) {
+      this.logger.info(
+        { owner, repo, issueNumber, command: queueItem.command, workflowName },
+        'Issue enqueued',
+      );
+    }
 
     // Mark as processed for dedup
     await this.phaseTracker.markProcessed(owner, repo, issueNumber, parsedName);

@@ -50,12 +50,19 @@ describe('InMemoryQueueAdapter', () => {
 
     it('should reject duplicate item key already in pending', async () => {
       await adapter.enqueue(makeItem());
-      await adapter.enqueue(makeItem());
+      const second = await adapter.enqueue(makeItem());
 
+      expect(second).toBe(false);
       expect(await adapter.getQueueDepth()).toBe(1);
-      expect(logger.debug).toHaveBeenCalledWith(
-        { itemKey: 'test-org/test-repo#42' },
-        'Duplicate item key in pending queue, skipping enqueue'
+      // #1060 / FR-005: drop funnels through emitDropLog with source='enqueue'.
+      // Fixed 2024-01-01 enqueuedAt is > maxRunDurationMs → transition edge → warn.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemKey: 'test-org/test-repo#42',
+          source: 'enqueue',
+          reason: 'in-flight',
+        }),
+        'Dropping enqueue (item already in flight)'
       );
     });
 
@@ -64,12 +71,18 @@ describe('InMemoryQueueAdapter', () => {
       await adapter.claim('worker-1');
 
       // Item is now claimed — enqueue same key again
-      await adapter.enqueue(makeItem());
+      const second = await adapter.enqueue(makeItem());
 
+      expect(second).toBe(false);
       expect(await adapter.getQueueDepth()).toBe(0);
-      expect(logger.debug).toHaveBeenCalledWith(
-        { itemKey: 'test-org/test-repo#42' },
-        'Duplicate item key in claimed set, skipping enqueue'
+      // #1060 / FR-005: drop funnels through emitDropLog with source='enqueue'.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemKey: 'test-org/test-repo#42',
+          source: 'enqueue',
+          reason: 'in-flight',
+        }),
+        'Dropping enqueue (item already in flight)'
       );
     });
 

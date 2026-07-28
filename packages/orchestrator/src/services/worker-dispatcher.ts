@@ -257,24 +257,20 @@ export class WorkerDispatcher {
     this.workerLeases.delete(targetWorkerId);
     this.activeWorkers.delete(targetWorkerId);
 
-    // Re-enqueue with resume priority (0) — check for duplicates first
-    const existingItems = await this.queue.getQueueItems(0, 100);
+    // #1060 / FR-003 (clarifications Q2=A): call `release()` first — it
+    // moves the item from the claimed hash back to pending while preserving
+    // its in-flight-SET membership (via `HDEL claimed` / `DEL heartbeat` /
+    // `ZADD pending` with no `SREM`). After the invariant fix, the itemKey
+    // is still in the in-flight SET after CLAIM, so a naked `enqueue()`
+    // here would be dropped by the new dedupe and leave the item
+    // orphan-claimed. Priority-tier divergence (release re-pends at `retry`,
+    // not `resume`): acceptable per research.md § Decision 3 Option R1.
     const itemKey = `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}`;
-    const isDuplicate = existingItems.some(
-      (qi) => `${qi.item.owner}/${qi.item.repo}#${qi.item.issueNumber}` === itemKey,
+    await this.queue.release(targetWorkerId, worker.item);
+    this.logger.info(
+      { itemKey, workerId: targetWorkerId },
+      'Re-enqueued via release() after lease expiry',
     );
-
-    if (!isDuplicate) {
-      await this.queue.enqueue({
-        ...worker.item,
-        priority: 0, // Resume priority (highest)
-        queueReason: 'resume',
-        enqueuedAt: new Date().toISOString(),
-      });
-      this.logger.info({ itemKey }, 'Re-enqueued with resume priority after lease expiry');
-    } else {
-      this.logger.info({ itemKey }, 'Skipped re-enqueue (duplicate already in queue)');
-    }
   }
 
   private async pollLoop(signal: AbortSignal): Promise<void> {
