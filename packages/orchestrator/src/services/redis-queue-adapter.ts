@@ -47,8 +47,16 @@ return 1
  * KEYS[2] = claimed hash for this worker
  * KEYS[3] = heartbeat key for this worker
  * ARGV[1] = heartbeat TTL in seconds
+ * ARGV[2] = ISO-8601 claimedAt timestamp (client-computed at call time)
  *
- * Returns the serialized item string, or nil if queue is empty.
+ * #1054 finding 3 — stamps `claimedAt` into the persisted claim payload
+ * so the reaper's grace-window can measure age-since-CLAIM rather than
+ * age-since-ENQUEUE (an item that waited hours in pending must not skip
+ * the grace window the instant it's claimed). Legacy payloads written
+ * before this field existed fall back to `enqueuedAt` on the reap side.
+ *
+ * Returns the serialized item string (with claimedAt injected), or nil
+ * if queue is empty.
  */
 const CLAIM_SCRIPT = `
 local result = redis.call('ZPOPMIN', KEYS[1], 1)
@@ -57,10 +65,12 @@ if #result == 0 then
 end
 local member = result[1]
 local parsed = cjson.decode(member)
+parsed.claimedAt = ARGV[2]
+local reserialized = cjson.encode(parsed)
 local itemKey = parsed.itemKey
-redis.call('HSET', KEYS[2], itemKey, member)
+redis.call('HSET', KEYS[2], itemKey, reserialized)
 redis.call('SET', KEYS[3], '1', 'EX', tonumber(ARGV[1]))
-return member
+return reserialized
 `;
 
 /**
@@ -70,15 +80,23 @@ return member
  * before invoking this script is a fast-path optimization; this script is
  * the load-bearing guard.
  *
+ * #1054 finding 1 — this script does NOT SREM the in-flight SET. A
+ * reclaimed item is legitimately still in flight (moved from claimed back
+ * to pending), so the in-flight = pending ∪ claimed invariant would be
+ * broken by SREM + ZADD together — the ZSET would then hold two distinct
+ * members for the same itemKey (Redis ZSETs key on the member string,
+ * and the reclaim payload differs from any future monitor re-enqueue).
+ * This mirrors `release()`'s retry-branch pattern (HDEL + DEL + ZADD, no
+ * SREM), which only `complete()` and the dead-letter branch fire.
+ *
  * KEYS[1] = orchestrator:queue:claimed:<workerId>
  * KEYS[2] = orchestrator:worker:<workerId>:heartbeat
- * KEYS[3] = orchestrator:queue:in-flight-items
- * KEYS[4] = orchestrator:queue:pending
+ * KEYS[3] = orchestrator:queue:pending
  * ARGV[1] = itemKey
- * ARGV[2] = ageMs (client-computed: now - Date.parse(claimed.enqueuedAt))
+ * ARGV[2] = ageMs (client-computed: now - Date.parse(claimed.claimedAt ?? claimed.enqueuedAt))
  * ARGV[3] = graceWindowMs
  * ARGV[4] = resumePriority (numeric string; "0" for 'resume')
- * ARGV[5] = pre-serialized reclaim-item JSON (attemptCount++, queueReason='resume')
+ * ARGV[5] = pre-serialized reclaim-item JSON (reclaimCount++, queueReason='resume')
  *
  * Return codes:
  *   0 = no-op (claim hash field absent; concurrent reclaim already ran)
@@ -105,8 +123,7 @@ if redis.call('HLEN', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[1])
 end
 
-redis.call('SREM', KEYS[3], ARGV[1])
-redis.call('ZADD', KEYS[4], tonumber(ARGV[4]), ARGV[5])
+redis.call('ZADD', KEYS[3], tonumber(ARGV[4]), ARGV[5])
 
 return 1
 `;
@@ -154,6 +171,16 @@ export class RedisQueueAdapter implements QueueManager {
    * and on successful reclaim (via `reapOrphanClaims`) to keep growth bounded.
    */
   private readonly dropLogState = new Map<string, DropTransitionState>();
+  /**
+   * #1054 finding 7 — amortized `enqueuedAt` cache. The collision path (fired
+   * every ~5 min per in-flight issue by four monitors — hot in practice,
+   * contrary to the earlier "not hot" comment) reads from this cache first
+   * so `hasInFlightAge` doesn't fan out into an O(workers) SCAN + HGET per
+   * drop. Populated by (a) `enqueueIfAbsent` on successful enqueue, (b) the
+   * reaper on every HGETALL, (c) any explicit `hasInFlightAge` scan fallback.
+   * Cleared by `complete()`, dead-letter, and successful reclaim.
+   */
+  private readonly enqueuedAtCache = new Map<string, number>();
 
   constructor(
     redis: Redis,
@@ -191,7 +218,7 @@ export class RedisQueueAdapter implements QueueManager {
   private ensureReclaimOrphanCommand(): void {
     if (this.reclaimOrphanCommandDefined) return;
     this.redis.defineCommand('reclaimOrphan', {
-      numberOfKeys: 4,
+      numberOfKeys: 3,
       lua: RECLAIM_ORPHAN_SCRIPT,
     });
     this.reclaimOrphanCommandDefined = true;
@@ -218,6 +245,12 @@ export class RedisQueueAdapter implements QueueManager {
       );
       const enqueued = result === 1;
       if (enqueued) {
+        // #1054 finding 7 — seed the enqueuedAt cache so subsequent drop-path
+        // reads don't fan out into an O(workers) SCAN.
+        const enqueuedAtMs = Date.parse(item.enqueuedAt);
+        if (!Number.isNaN(enqueuedAtMs)) {
+          this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+        }
         this.logger.info(
           { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
           'Item enqueued to Redis sorted set (in-flight-checked)',
@@ -265,17 +298,49 @@ export class RedisQueueAdapter implements QueueManager {
 
   /**
    * #1054 / FR-006 / FR-007 — return the age in ms of the given itemKey's
-   * in-flight claim, or `null` if not in flight or on transport error
-   * (fail-safe per AD-11).
+   * in-flight entry (pending OR claimed), or `null` if not in flight or on
+   * transport error (fail-safe per AD-11).
    *
-   * Complexity: O(N-workers). Acceptable because the drop path is not hot
-   * (fires only on collision) and N (active workers per cluster) is small
-   * — typically 1 per replica.
+   * #1054 finding 8 — checks BOTH pending (ZSET) and claimed (per-worker
+   * hashes) so the drop-log severity dispatcher escalates for pending-side
+   * wedges too, matching `InMemoryQueueAdapter.hasInFlightAge`. Without
+   * pending coverage, a reclaimed item sitting in pending while dispatch
+   * is stalled (worker cap / lease-denied pausePolling) never crosses the
+   * warn threshold and reproduces the invisible-wedge shape #1054 set out
+   * to eliminate.
+   *
+   * #1054 finding 7 — cache-first read path amortizes the O(workers) SCAN
+   * across drops. `enqueuedAtCache` is populated by `enqueueIfAbsent`,
+   * `reapOrphanClaims`, and this method's own fallback scan. Cache miss
+   * falls back to a full scan (pending + claimed) and populates.
    */
   async hasInFlightAge(itemKey: string): Promise<number | null> {
+    const now = Date.now();
+    const cached = this.enqueuedAtCache.get(itemKey);
+    if (cached !== undefined) {
+      return now - cached;
+    }
+
     try {
+      // Pending-side scan (finding 8 — parity with in-memory adapter). ZSCAN
+      // over member strings would require parsing each; simpler + correct to
+      // ZRANGE the whole set. Called only on cache miss, not every drop.
+      const pendingMembers = await this.redis.zrange(PENDING_KEY, 0, -1);
+      for (const member of pendingMembers) {
+        try {
+          const parsed: SerializedQueueItem = JSON.parse(member);
+          if (parsed.itemKey !== itemKey) continue;
+          const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+          if (Number.isNaN(enqueuedAtMs)) return null;
+          this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+          return now - enqueuedAtMs;
+        } catch {
+          continue;
+        }
+      }
+
+      // Claimed-side scan.
       let cursor = '0';
-      const now = Date.now();
       do {
         const [nextCursor, keys] = await this.redis.scan(
           cursor,
@@ -292,6 +357,7 @@ export class RedisQueueAdapter implements QueueManager {
             const parsed: SerializedQueueItem = JSON.parse(payload);
             const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
             if (Number.isNaN(enqueuedAtMs)) return null;
+            this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
             return now - enqueuedAtMs;
           } catch {
             return null;
@@ -320,6 +386,14 @@ export class RedisQueueAdapter implements QueueManager {
    *
    * Never throws. On transport error mid-sweep: `warn` + return the
    * partial report so subsequent cycles retry.
+   *
+   * #1054 finding 6 — KNOWN RESIDUE: the sweep is candidate-set-driven by
+   * `claimed:*` keys, so an in-flight-SET member whose backing claim hash
+   * was evicted / HDEL'd without a paired SREM is unreachable from here.
+   * The chosen direction is right for the reported incident (heartbeat-
+   * ABSENT candidates), but a periodic `in-flight-items \ (pending ∪
+   * claimed)` reconciliation would close the residual gap. Follow-up
+   * tracked separately.
    */
   async reapOrphanClaims(now: number = Date.now()): Promise<ReapReport> {
     this.ensureReclaimOrphanCommand();
@@ -392,23 +466,44 @@ export class RedisQueueAdapter implements QueueManager {
               continue;
             }
 
-            const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
-            if (Number.isNaN(enqueuedAtMs)) {
+            // #1054 finding 3 — grace-window measures age-since-CLAIM, not
+            // age-since-ENQUEUE. Fall back to enqueuedAt for legacy claim
+            // payloads written before CLAIM_SCRIPT stamped claimedAt.
+            const ageBasisIso = parsed.claimedAt ?? parsed.enqueuedAt;
+            const ageBasisMs = Date.parse(ageBasisIso);
+            if (Number.isNaN(ageBasisMs)) {
               this.logger.warn(
-                { workerId, itemKey, enqueuedAt: parsed.enqueuedAt },
-                'Unparseable enqueuedAt in reapOrphanClaims, skipping',
+                { workerId, itemKey, claimedAt: parsed.claimedAt, enqueuedAt: parsed.enqueuedAt },
+                'Unparseable claim age timestamp in reapOrphanClaims, skipping',
               );
               continue;
             }
-            const ageMs = now - enqueuedAtMs;
+            const ageMs = now - ageBasisMs;
+            // Refresh the enqueue-time cache from the claim payload — the
+            // collision path's `hasInFlightAge` reads this instead of
+            // re-scanning every drop (finding 7).
+            const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+            if (!Number.isNaN(enqueuedAtMs)) {
+              this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+            }
 
+            // #1054 finding 9 — bump `reclaimCount`, NOT `attemptCount`.
+            // `release()`'s dead-letter gate reads `attemptCount`; letting
+            // infra events (cluster restart → heartbeat gone → reap) inflate
+            // it would condemn blameless items after N restarts.
             const attemptCountBefore = parsed.attemptCount;
-            const attemptCountAfter = attemptCountBefore + 1;
+            const attemptCountAfter = attemptCountBefore;
+            const reclaimCountBefore = parsed.reclaimCount ?? 0;
+            const reclaimCountAfter = reclaimCountBefore + 1;
             const reclaimItem: SerializedQueueItem = {
               ...parsed,
-              attemptCount: attemptCountAfter,
+              // attemptCount deliberately unchanged.
+              reclaimCount: reclaimCountAfter,
               queueReason: 'resume',
               priority: resumePriority,
+              // claimedAt is a claim-lifecycle field; strip it when re-pending
+              // so the next claim stamps a fresh one.
+              claimedAt: undefined,
             };
             const reclaimItemJSON = JSON.stringify(reclaimItem);
 
@@ -417,7 +512,6 @@ export class RedisQueueAdapter implements QueueManager {
               result = (await (this.redis as any).reclaimOrphan(
                 claimedKey,
                 heartbeatKey,
-                IN_FLIGHT_KEY,
                 PENDING_KEY,
                 itemKey,
                 String(ageMs),
@@ -440,6 +534,8 @@ export class RedisQueueAdapter implements QueueManager {
                 ageMs,
                 attemptCountBefore,
                 attemptCountAfter,
+                reclaimCountBefore,
+                reclaimCountAfter,
               };
               report.reclaimed.push(reclaimed);
               // FR-008: per-reclaim `warn` line. Not gated by transition-edge
@@ -454,6 +550,8 @@ export class RedisQueueAdapter implements QueueManager {
                   ageMs,
                   attemptCountBefore,
                   attemptCountAfter,
+                  reclaimCountBefore,
+                  reclaimCountAfter,
                   reason: 'orphaned-claim-no-heartbeat',
                 },
                 'Reclaimed orphaned queue claim (worker heartbeat absent)',
@@ -510,13 +608,17 @@ export class RedisQueueAdapter implements QueueManager {
     const claimedKey = buildClaimedKey(workerId);
     const heartbeatKey = buildHeartbeatKey(workerId);
     const ttlSeconds = Math.ceil(30000 / 1000); // Default; actual TTL managed by dispatcher's heartbeat refresh
+    // #1054 finding 3 — stamp claimedAt so the reaper's grace-window
+    // measures age-since-CLAIM (see CLAIM_SCRIPT docstring).
+    const claimedAt = new Date().toISOString();
 
     try {
       const result = await (this.redis as any).claimItem(
         pendingKey,
         claimedKey,
         heartbeatKey,
-        ttlSeconds
+        ttlSeconds,
+        claimedAt,
       );
 
       if (!result) {
@@ -579,6 +681,9 @@ export class RedisQueueAdapter implements QueueManager {
           .exec();
         // #1054 / R6: bound the transition-edge Map growth.
         this.dropLogState.delete(itemKey);
+        // #1054 finding 7 — dead-letter fully removes the item from flight;
+        // clear the enqueuedAt cache to bound growth alongside dropLogState.
+        this.enqueuedAtCache.delete(itemKey);
         this.logger.warn(
           { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
           'Item dead-lettered after max retries'
@@ -626,6 +731,9 @@ export class RedisQueueAdapter implements QueueManager {
         .exec();
       // #1054 / R6: bound the transition-edge Map growth.
       this.dropLogState.delete(itemKey);
+      // #1054 finding 7 — complete fully removes the item from flight;
+      // clear the enqueuedAt cache to bound growth alongside dropLogState.
+      this.enqueuedAtCache.delete(itemKey);
       this.logger.info(
         { workerId, itemKey },
         'Item completed and removed from claimed set + in-flight index'

@@ -87,15 +87,21 @@ export function classifyDropSeverity(
  * decision. Kept as a separate function so callers can unit-test the
  * classification without spying on the logger.
  *
- * Emit rule (per contract table):
- *   - severity=warn AND isTransitionEdge=true → `logger.warn` (loud first-alert)
+ * Emit rule (per contract table, updated for #1054 finding 4):
+ *   - isTransitionEdge=true (EITHER info→warn OR warn→info) → `logger.warn`
+ *     — loud first-alert on wedge open AND loud clear on wedge close, so an
+ *     operator paging on warns actually sees the wedge close instead of
+ *     watching it stay open in their mental model until they check by hand
+ *     (FR-008 audience: "an operator paging on warns"). The `severity` field
+ *     on the payload distinguishes the two edges.
  *   - all other combinations → `logger.info` (silent for anti-spam per FR-006)
  *
  * This matches the "17 identical warns is the anti-pattern that hid #1054"
  * design constraint: a wedge produces exactly ONE `warn` line on entry
- * and ONE `warn` line via `reap-orphan-claims`. Subsequent drops for the
- * same wedged itemKey emit at `info` so log queries can still surface
- * them but alerting stays quiet.
+ * and ONE `warn` line on exit (plus one via `reap-orphan-claims`).
+ * Subsequent drops for the same wedged itemKey between the two transitions
+ * emit at `info` so log queries can still surface them but alerting stays
+ * quiet.
  */
 export function emitDropLog(
   logger: Logger,
@@ -103,8 +109,10 @@ export function emitDropLog(
   payload: Record<string, unknown>,
   message: string,
 ): void {
-  if (decision.severity === 'warn' && decision.isTransitionEdge) {
-    logger.warn(payload, message);
+  if (decision.isTransitionEdge) {
+    // Attach the resolved severity so a single warn line carries whether it
+    // is a wedge-open (severity='warn') or wedge-close (severity='info') edge.
+    logger.warn({ ...payload, severity: decision.severity }, message);
   } else {
     logger.info(payload, message);
   }

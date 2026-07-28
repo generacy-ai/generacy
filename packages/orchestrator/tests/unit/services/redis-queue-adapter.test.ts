@@ -200,19 +200,22 @@ describe('RedisQueueAdapter', () => {
       expect(result!.metadata).toEqual({ prNumber: 7, reviewThreadIds: [1, 2] });
     });
 
-    it('should call claimItem with correct keys and TTL', async () => {
+    it('should call claimItem with correct keys, TTL, and claimedAt (#1054 finding 3)', async () => {
       const redis = createMockRedis();
       const adapter = new RedisQueueAdapter(redis, logger);
 
       await adapter.claim('worker-1');
 
+      // #1054 finding 3 — CLAIM_SCRIPT stamps a fresh ISO-8601 claimedAt
+      // (ARGV[2]) so the reaper's grace-window measures age-since-CLAIM.
       expect(
         (redis as any).claimItem
       ).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
         'orchestrator:queue:claimed:worker-1',
         'orchestrator:worker:worker-1:heartbeat',
-        30 // Math.ceil(30000 / 1000)
+        30, // Math.ceil(30000 / 1000)
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/),
       );
     });
 

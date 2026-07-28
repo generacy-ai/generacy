@@ -297,19 +297,27 @@ describe('RedisQueueAdapter.enqueueIfAbsent', () => {
     );
   });
 
-  it('rejected enqueueIfAbsent (already in flight) emits structured info drop log (FR-009)', async () => {
+  it('rejected enqueueIfAbsent (already in flight, fresh) emits structured info drop log (FR-009)', async () => {
     const { redis } = createMockRedisWithState();
     const adapter = new RedisQueueAdapter(redis as unknown as import('ioredis').Redis, logger);
 
-    await adapter.enqueueIfAbsent(sampleItem);
+    // #1054 finding 7 — enqueueIfAbsent now seeds the enqueuedAt cache on
+    // success, so subsequent drops for the same itemKey use the cached age
+    // to classify severity. Use a fresh enqueuedAt so the collision drop
+    // is under the maxRunDurationMs threshold (severity = info).
+    const freshItem: QueueItem = {
+      ...sampleItem,
+      enqueuedAt: new Date().toISOString(),
+    };
+
+    await adapter.enqueueIfAbsent(freshItem);
     logger.info.mockClear();
 
-    const second = await adapter.enqueueIfAbsent(sampleItem);
+    const second = await adapter.enqueueIfAbsent(freshItem);
 
     expect(second).toBe(false);
     // #879 / FR-009: adapter-level drop signal. Distinct from Redis-error warn.
-    // #1054: shape now carries `ageMs` (may be null when scan mock isn't
-    // wired — that's a fail-safe info per the transition-edge helper).
+    // Fresh item → ageMs << maxRunDurationMs → severity=info → logger.info.
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({ itemKey: 'test-org/test-repo#42', reason: 'in-flight' }),
       'Dropping enqueue (item already in flight)',

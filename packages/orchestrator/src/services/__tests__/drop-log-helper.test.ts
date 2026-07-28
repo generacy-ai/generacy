@@ -199,8 +199,11 @@ describe('emitDropLog', () => {
 
     emitDropLog(logger, decision, { itemKey: 'a', reason: 'in-flight' }, 'msg');
 
+    // #1054 finding 4 — payload now carries the resolved severity so
+    // operators can distinguish wedge-open (severity='warn') from
+    // wedge-close (severity='info') edges in a single log query.
     expect(logger.warn).toHaveBeenCalledWith(
-      { itemKey: 'a', reason: 'in-flight' },
+      { itemKey: 'a', reason: 'in-flight', severity: 'warn' },
       'msg',
     );
     expect(logger.info).not.toHaveBeenCalled();
@@ -226,9 +229,12 @@ describe('emitDropLog', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('FR-006 transition-down: dispatches to logger.info when severity=info AND isTransitionEdge=true (clear)', () => {
-    // The transition down (wedge cleared) emits at info — the wedge-cleared
-    // event is not alarm-worthy; only the wedge-detected event is.
+  it('#1054 finding 4: dispatches to logger.warn on the CLEARING edge (severity=info AND isTransitionEdge=true)', () => {
+    // Per the finding-4 rewrite of the emit rule: BOTH transition edges
+    // route to `logger.warn` so an operator paging on warns actually sees
+    // the wedge close (previously this emitted at info and the wedge
+    // stayed open in their mental model until they checked by hand).
+    // The `severity` field on the payload distinguishes the two edges.
     const logger = { info: vi.fn(), warn: vi.fn() };
     const decision = {
       severity: 'info' as const,
@@ -238,10 +244,10 @@ describe('emitDropLog', () => {
 
     emitDropLog(logger, decision, { itemKey: 'a', reason: 'in-flight' }, 'msg');
 
-    expect(logger.info).toHaveBeenCalledWith(
-      { itemKey: 'a', reason: 'in-flight' },
+    expect(logger.warn).toHaveBeenCalledWith(
+      { itemKey: 'a', reason: 'in-flight', severity: 'info' },
       'msg',
     );
-    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.info).not.toHaveBeenCalled();
   });
 });

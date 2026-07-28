@@ -12,13 +12,40 @@ import type { QueueItem, SerializedQueueItem } from '../../types/index.js';
  * `EXISTS`/`SCAN`/`HGETALL`/`HLEN`/`DEL`/`SREM`/`ZADD` behaviour and a
  * `defineCommand('reclaimOrphan', ...)` Lua stub simulating the return-code
  * contract in `contracts/reclaim-orphan-script.md`.
+ *
+ * #1054 finding 2 — pending is keyed by the FULL MEMBER STRING (mirrors real
+ * Redis ZSET semantics: two distinct payloads for the same itemKey ARE two
+ * ZSET members and BOTH claim a pollOnce slot). The earlier upsert-by-itemKey
+ * mock structurally hid the double-enqueue hazard that would have been caused
+ * by an errant SREM in the reclaim script.
  */
 
 interface MockState {
-  pending: Map<string, { score: number; member: string }>;      // itemKey → ZSET entry
+  /**
+   * Pending ZSET: keyed by the full serialized member string, mirroring real
+   * Redis ZADD semantics. Duplicate itemKeys with different payloads land as
+   * two distinct entries — a `pollOnce` in production would claim each one.
+   */
+  pending: Map<string, { score: number; member: string }>;      // member string → entry
   claimed: Map<string, Map<string, string>>;                    // workerId → itemKey → serialized
   inFlight: Set<string>;                                        // itemKey members
   heartbeats: Set<string>;                                      // heartbeat keys (present = alive)
+}
+
+function pendingByItemKey(
+  state: MockState,
+  itemKey: string,
+): { score: number; member: string }[] {
+  const out: { score: number; member: string }[] = [];
+  for (const entry of state.pending.values()) {
+    try {
+      const parsed: SerializedQueueItem = JSON.parse(entry.member);
+      if (parsed.itemKey === itemKey) out.push(entry);
+    } catch {
+      // Ignore
+    }
+  }
+  return out;
 }
 
 function createMockRedisWithState() {
@@ -31,9 +58,11 @@ function createMockRedisWithState() {
 
   const redis: Record<string, unknown> = {
     zadd: vi.fn(async (key: string, score: number | string, member: string) => {
-      const parsed: SerializedQueueItem = JSON.parse(member);
       if (key === 'orchestrator:queue:pending') {
-        state.pending.set(parsed.itemKey, { score: Number(score), member });
+        // Real Redis ZADD upserts by MEMBER (byte-for-byte string), not by
+        // any inner field. Two distinct payloads for the same itemKey are
+        // two distinct members. #1054 finding 2 relies on this shape.
+        state.pending.set(member, { score: Number(score), member });
       }
       return 1;
     }),
@@ -125,40 +154,46 @@ function createMockRedisWithState() {
     ) => {
       if (state.inFlight.has(itemKey)) return 0;
       state.inFlight.add(itemKey);
-      state.pending.set(itemKey, { score: Number(priority), member: payload });
+      state.pending.set(payload, { score: Number(priority), member: payload });
       return 1;
     }),
 
-    // Mock CLAIM_SCRIPT
+    // Mock CLAIM_SCRIPT — stamps claimedAt into the payload (finding 3).
     claimItem: vi.fn(async (
       _pendingKey: string,
       claimedKey: string,
       heartbeatKey: string,
+      _ttlSeconds: number,
+      claimedAt: string,
     ) => {
       if (state.pending.size === 0) return null;
       const sorted = [...state.pending.values()].sort((a, b) => a.score - b.score);
       const first = sorted[0]!;
       const parsed: SerializedQueueItem = JSON.parse(first.member);
-      state.pending.delete(parsed.itemKey);
+      parsed.claimedAt = claimedAt;
+      const reserialized = JSON.stringify(parsed);
+      state.pending.delete(first.member);
       const workerId = claimedKey.replace('orchestrator:queue:claimed:', '');
       let workerMap = state.claimed.get(workerId);
       if (!workerMap) {
         workerMap = new Map();
         state.claimed.set(workerId, workerMap);
       }
-      workerMap.set(parsed.itemKey, first.member);
+      workerMap.set(parsed.itemKey, reserialized);
       state.heartbeats.add(heartbeatKey);
-      return first.member;
+      return reserialized;
     }),
 
     /**
      * Mock RECLAIM_ORPHAN_SCRIPT — mirrors the Lua contract return codes
      * from contracts/reclaim-orphan-script.md.
+     *
+     * #1054 finding 1: does NOT SREM the in-flight SET (reclaimed item is
+     * legitimately still in flight).
      */
     reclaimOrphan: vi.fn(async (
       claimedKey: string,
       heartbeatKey: string,
-      inFlightKey: string,
       pendingKey: string,
       itemKey: string,
       ageMsStr: string,
@@ -179,11 +214,10 @@ function createMockRedisWithState() {
 
       workerMap!.delete(itemKey);
       if (workerMap!.size === 0) state.claimed.delete(workerId);
-      if (inFlightKey === 'orchestrator:queue:in-flight-items') {
-        state.inFlight.delete(itemKey);
-      }
+      // NOTE: no SREM on in-flight (finding 1). Reclaimed items stay in the
+      // in-flight SET — they've moved from claimed back to pending.
       if (pendingKey === 'orchestrator:queue:pending') {
-        state.pending.set(itemKey, {
+        state.pending.set(reclaimItemJSON, {
           score: Number(resumePriorityStr),
           member: reclaimItemJSON,
         });
@@ -293,7 +327,7 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     logger = createLogger();
   });
 
-  it('FR-001 / SC-001 / US4: orphaned claim (no heartbeat) reclaimed → claim gone, in-flight cleared, item re-pending with resume/attemptCount++', async () => {
+  it('FR-001 / SC-001 / US4: orphaned claim (no heartbeat) reclaimed → claim gone, IN-FLIGHT PRESERVED, item re-pending with resume, attemptCount preserved, reclaimCount++', async () => {
     const { redis, state } = createMockRedisWithState();
     const adapter = makeAdapter(redis, logger);
 
@@ -309,34 +343,75 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     expect(state.claimed.get(ORPHANED_WORKER_ID)?.get(ORPHANED_ITEM_KEY)).toBeUndefined();
     expect(state.claimed.has(ORPHANED_WORKER_ID)).toBe(false);
 
-    // (c) itemKey no longer in in-flight SET, item is back in pending.
-    expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(false);
-    expect(state.pending.has(ORPHANED_ITEM_KEY)).toBe(true);
+    // (c) #1054 finding 1: itemKey STAYS in the in-flight SET (reclaimed item
+    // is legitimately still in flight — moved from claimed back to pending).
+    // The item is now in pending. `in-flight = pending ∪ claimed` invariant
+    // is preserved by leaving it in the SET.
+    expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(true);
+    const pendingEntries = pendingByItemKey(state, ORPHANED_ITEM_KEY);
+    expect(pendingEntries).toHaveLength(1);
 
-    // Pending payload preserves enqueuedAt + metadata and bumps attemptCount,
-    // queueReason='resume', priority=0.
-    const pendingEntry = state.pending.get(ORPHANED_ITEM_KEY)!;
+    // Pending payload preserves enqueuedAt + metadata + attemptCount, bumps
+    // reclaimCount, queueReason='resume', priority=0.
+    const pendingEntry = pendingEntries[0]!;
     const parsed: SerializedQueueItem = JSON.parse(pendingEntry.member);
     expect(parsed.queueReason).toBe('resume');
     // Resume tier: getPriorityScore('resume') is 0.{timestamp} (< 1).
     expect(parsed.priority).toBeGreaterThanOrEqual(0);
     expect(parsed.priority).toBeLessThan(1);
-    expect(parsed.attemptCount).toBe(1);
+    // #1054 finding 9: attemptCount is preserved (reaper does not bump the
+    // dead-letter gate's counter). reclaimCount bumps instead.
+    expect(parsed.attemptCount).toBe(0);
+    expect(parsed.reclaimCount).toBe(1);
     expect(parsed.metadata).toEqual({ prNumber: 1052, reviewThreadIds: [3660221572, 3660221578] });
     expect(parsed.enqueuedAt).toBeDefined();
 
-    // (d) A subsequent enqueueIfAbsent for the same itemKey succeeds — actually
-    // the wedge that #1051 hit was that the second enqueue kept returning false.
-    // Now that in-flight is cleared, either a new enqueue succeeds OR the current
-    // pending entry blocks it (correct — the item is queued). Assert the item is
-    // in pending and not stuck as an orphan hash.
-    expect(state.pending.has(ORPHANED_ITEM_KEY)).toBe(true);
+    // (d) The invariant is now: item is in pending AND in the in-flight SET,
+    // so a subsequent enqueueIfAbsent for the same itemKey returns 0
+    // (correctly — the item is already queued). This is the desired shape:
+    // the SET tracks "somewhere in the pipeline" (pending ∪ claimed).
+    expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(true);
 
     // Report shape.
     expect(report.scanned).toBe(1);
     expect(report.reclaimed).toHaveLength(1);
     expect(report.skippedRaceReappeared).toBe(0);
     expect(report.skippedGraceWindow).toBe(0);
+  });
+
+  it('#1054 finding 1 regression: reclaim must NOT SREM the in-flight SET (otherwise a subsequent monitor enqueue would land a second ZSET member for the same itemKey — double-enqueue hole)', async () => {
+    const { redis, state } = createMockRedisWithState();
+    const adapter = makeAdapter(redis, logger);
+
+    seedOrphanedClaim(state);
+
+    await adapter.reapOrphanClaims();
+
+    // Immediately after reclaim, the item is in pending AND in the in-flight SET.
+    expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(true);
+    expect(pendingByItemKey(state, ORPHANED_ITEM_KEY)).toHaveLength(1);
+
+    // Simulate the exact incident scenario: 5 min later a monitor cycle
+    // fires enqueueIfAbsent for the same issue.
+    const monitorItem: QueueItem = {
+      owner: 'generacy-ai',
+      repo: 'generacy',
+      issueNumber: 1051,
+      workflowName: 'speckit-feature',
+      command: 'address-pr-feedback',
+      priority: 1000,
+      enqueuedAt: new Date().toISOString(),
+      queueReason: 'resume',
+    };
+
+    const enqueued = await adapter.enqueueIfAbsent(monitorItem);
+
+    // Because in-flight was NOT cleared by the reclaim, the second enqueue
+    // is (correctly) dropped as a duplicate. Only ONE pending ZSET member
+    // exists — no double-enqueue. If the SREM were reintroduced, this test
+    // would fail with `pendingByItemKey(...).length === 2`.
+    expect(enqueued).toBe(false);
+    expect(pendingByItemKey(state, ORPHANED_ITEM_KEY)).toHaveLength(1);
   });
 
   it('US2 / SC-002: live heartbeat (still alive) survives sweep — no reclaim, no FR-008 warn', async () => {
@@ -355,7 +430,7 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     // itemKey still in in-flight SET.
     expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(true);
     // No re-enqueue.
-    expect(state.pending.has(ORPHANED_ITEM_KEY)).toBe(false);
+    expect(pendingByItemKey(state, ORPHANED_ITEM_KEY)).toHaveLength(0);
     // No FR-008 warn emitted.
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: 'orphan-claim-reclaimed' }),
@@ -383,7 +458,7 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     // No mutation.
     expect(state.claimed.get(ORPHANED_WORKER_ID)?.get(ORPHANED_ITEM_KEY)).toBeDefined();
     expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(true);
-    expect(state.pending.has(ORPHANED_ITEM_KEY)).toBe(false);
+    expect(pendingByItemKey(state, ORPHANED_ITEM_KEY)).toHaveLength(0);
   });
 
   it('US2 race abort: heartbeat re-appears server-side between outer EXISTS and Lua → skippedRaceReappeared, no mutation, no FR-008 warn', async () => {
@@ -405,7 +480,7 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     // No mutation.
     expect(state.claimed.get(ORPHANED_WORKER_ID)?.get(ORPHANED_ITEM_KEY)).toBeDefined();
     expect(state.inFlight.has(ORPHANED_ITEM_KEY)).toBe(true);
-    expect(state.pending.has(ORPHANED_ITEM_KEY)).toBe(false);
+    expect(pendingByItemKey(state, ORPHANED_ITEM_KEY)).toHaveLength(0);
     // No FR-008 warn.
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: 'orphan-claim-reclaimed' }),
@@ -413,25 +488,31 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     );
   });
 
-  it('AD-6 / FR-002: reclaimed attemptCount is source + 1 (never dead-lettered by the reaper)', async () => {
+  it('AD-6 / FR-002 / #1054 finding 9: reaper preserves attemptCount (dead-letter gate) and bumps reclaimCount (diagnostic) — never dead-lettered by the reaper', async () => {
     const { redis, state } = createMockRedisWithState();
     const adapter = makeAdapter(redis, logger);
 
     // Source item already has attemptCount = 7 (well over any default maxRetries).
+    // If the reaper bumped attemptCount, release()'s dead-letter gate would fire
+    // on the very next heartbeat expiry — condemning an item that never failed.
     seedOrphanedClaim(state, { attemptCount: 7 });
 
     const report = await adapter.reapOrphanClaims();
 
     expect(report.reclaimed).toHaveLength(1);
-    const parsed: SerializedQueueItem = JSON.parse(
-      state.pending.get(ORPHANED_ITEM_KEY)!.member,
-    );
-    expect(parsed.attemptCount).toBe(8);
+    const pendingEntries = pendingByItemKey(state, ORPHANED_ITEM_KEY);
+    expect(pendingEntries).toHaveLength(1);
+    const parsed: SerializedQueueItem = JSON.parse(pendingEntries[0]!.member);
+    // attemptCount is PRESERVED (finding 9). Only reclaimCount bumps.
+    expect(parsed.attemptCount).toBe(7);
+    expect(parsed.reclaimCount).toBe(1);
     // Not dead-lettered — pending contains the item, dead-letter untouched.
-    expect(state.pending.has(ORPHANED_ITEM_KEY)).toBe(true);
-    // attemptCountBefore/After surface both counts on the report + warn.
+    // attemptCountBefore === attemptCountAfter (both 7) — the reaper is not
+    // an execution-failure signal.
     expect(report.reclaimed[0]!.attemptCountBefore).toBe(7);
-    expect(report.reclaimed[0]!.attemptCountAfter).toBe(8);
+    expect(report.reclaimed[0]!.attemptCountAfter).toBe(7);
+    expect(report.reclaimed[0]!.reclaimCountBefore).toBe(0);
+    expect(report.reclaimed[0]!.reclaimCountAfter).toBe(1);
   });
 
   it("AD-9: reclaimed item's queueReason is 'resume' and priority = 0", async () => {
@@ -442,7 +523,9 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
 
     await adapter.reapOrphanClaims();
 
-    const pendingEntry = state.pending.get(ORPHANED_ITEM_KEY)!;
+    const pendingEntries = pendingByItemKey(state, ORPHANED_ITEM_KEY);
+    expect(pendingEntries).toHaveLength(1);
+    const pendingEntry = pendingEntries[0]!;
     // Resume tier: getPriorityScore('resume') is 0.{timestamp} (< 1).
     expect(pendingEntry.score).toBeGreaterThanOrEqual(0);
     expect(pendingEntry.score).toBeLessThan(1);
@@ -452,7 +535,7 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
     expect(parsed.priority).toBeLessThan(1);
   });
 
-  it('FR-008: reclaim emits a single warn line with attemptCountBefore + attemptCountAfter distinguishing infra vs execution paths', async () => {
+  it('FR-008: reclaim emits a single warn line with reclaimCountBefore + reclaimCountAfter distinguishing infra vs execution paths', async () => {
     const { redis, state } = createMockRedisWithState();
     const adapter = makeAdapter(redis, logger);
 
@@ -466,8 +549,11 @@ describe('RedisQueueAdapter.reapOrphanClaims — #1054 / US4 / FR-009 regression
         workerId: ORPHANED_WORKER_ID,
         itemKey: ORPHANED_ITEM_KEY,
         ageMs: expect.any(Number),
+        // attemptCount preserved across reclaim (finding 9).
         attemptCountBefore: 2,
-        attemptCountAfter: 3,
+        attemptCountAfter: 2,
+        reclaimCountBefore: 0,
+        reclaimCountAfter: 1,
         reason: 'orphaned-claim-no-heartbeat',
       }),
       'Reclaimed orphaned queue claim (worker heartbeat absent)',
