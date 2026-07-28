@@ -620,5 +620,23 @@ describe('messages', () => {
       const result = parseRelayMessage(msg);
       expect(result).toBeNull();
     });
+
+    // Cloud's unknown-subtype reply (generacy-cloud message-handler.ts) sends
+    // gateId: '' when the incoming frame carried none. This reply is the
+    // rollout-window observability path — dropping it defeats the purpose of
+    // the schema loosening in #1063.
+    it('accepts an empty-string gateId (unknown-subtype reply)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-xyz',
+        frameType: 'unknown',
+        gateId: '',
+        accepted: false,
+        reason: 'unknown-subtype',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
   });
 });

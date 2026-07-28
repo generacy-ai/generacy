@@ -377,13 +377,16 @@ const TierInfoMessageSchema = z.object({
 //   wroteDoc:  'created' | 'rebound'
 // .passthrough() preserves unknown top-level fields (Q1=A / FR-002) so future
 // cloud additions do not require a coordinated cluster release.
+// gateId is a plain string (no .min(1)): the cloud's unknown-subtype reply sends
+// gateId: '' when the incoming frame carried none — rejecting the empty string
+// would drop the exact message the rollout-window observability path depends on.
 const ClusterCockpitReplyMessageSchema = z
   .object({
     type: z.literal('cluster.cockpit.reply'),
     timestamp: z.string(),
     frameId: z.string().nullable(),
     frameType: z.string(),
-    gateId: z.string().min(1),
+    gateId: z.string(),
     gateKey: z.string().optional(),
     accepted: z.boolean(),
     reason: z.string().optional(),
