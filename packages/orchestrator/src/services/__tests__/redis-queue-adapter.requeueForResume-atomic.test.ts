@@ -27,12 +27,16 @@ const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
 const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
 const HEARTBEAT_KEY_PREFIX = 'orchestrator:worker:';
 
-// Per-file keyspace isolation via a random keyPrefix so vitest's parallel
-// workers cannot stomp on one another when they share a Redis instance.
-// ioredis auto-prepends the prefix to every key including those inside
-// `defineCommand` Lua scripts.
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
-const KEY_PREFIX = `t1069req-${Math.random().toString(36).slice(2, 10)}:`;
+// Per-file Redis DB isolation. Vitest may run test files in parallel
+// workers that share the same Redis instance; using a distinct DB per
+// file keeps keyspaces separate. `flushdb()` (NOT `flushall`) is scoped
+// to the currently selected DB.
+//
+// keyPrefix was tried and rejected — `ioredis`'s keyPrefix does NOT
+// prefix the MATCH pattern of `SCAN`, so `reapOrphanClaims`'s scan for
+// `orchestrator:queue:claimed:*` would miss the prefixed keys the test
+// wrote, breaking the reaper path this suite depends on.
+const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/13';
 const skipReason = process.env.SKIP_REAL_REDIS_TESTS === '1'
   ? 'skipped via SKIP_REAL_REDIS_TESTS=1'
   : null;
@@ -80,41 +84,16 @@ async function seedClaimedItemWithoutHeartbeat(
   // No heartbeat SET — reaper eligible.
 }
 
-async function flushPrefix(redis: IORedis, prefix: string): Promise<void> {
-  // Delete only the keys owned by this test file's prefix. Called from
-  // beforeEach + afterEach so tests inside the file stay isolated too.
-  // NOTE: ioredis auto-prepends the client's `keyPrefix` to KEY arguments
-  // of most commands, but NOT to arguments that look like patterns for
-  // SCAN. We must include the prefix explicitly in the SCAN pattern.
-  let cursor = '0';
-  do {
-    const [next, keys] = await redis.scan(
-      cursor,
-      'MATCH',
-      `${prefix}*`,
-      'COUNT',
-      100,
-    );
-    cursor = next;
-    for (const k of keys) {
-      // The returned keys already include the prefix; ioredis would
-      // double-prefix if we passed them via a keyPrefix-aware command.
-      // `unlink` accepts full keys and does NOT re-prefix.
-      await (redis as unknown as { unlink: (k: string) => Promise<number> }).unlink(k);
-    }
-  } while (cursor !== '0');
-}
-
 let redis: IORedis;
 
 describeReal('RedisQueueAdapter — requeueForResume atomic (#1069)', () => {
   beforeEach(async () => {
-    redis = new IORedis(REDIS_URL, { keyPrefix: KEY_PREFIX });
-    await flushPrefix(redis, KEY_PREFIX);
+    redis = new IORedis(REDIS_URL);
+    await redis.flushdb();
   });
 
   afterEach(async () => {
-    await flushPrefix(redis, KEY_PREFIX);
+    await redis.flushdb();
     await redis.quit();
   });
 
@@ -261,7 +240,7 @@ describeReal('RedisQueueAdapter — requeueForResume atomic (#1069)', () => {
         expect(matching).toHaveLength(1);
 
         // Clean up between iterations to bound Redis memory.
-        await flushPrefix(redis, KEY_PREFIX);
+        await redis.flushdb();
       }
     });
   });
