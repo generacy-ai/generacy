@@ -123,6 +123,83 @@ function createMockRedisWithState() {
       state.heartbeats.add(heartbeatKey);
       return first.member;
     }),
+
+    // #1069 mock: mirrors REQUEUE_FOR_RESUME_SCRIPT — [code, attemptCount].
+    requeueForResumeItem: vi.fn(async (
+      _pendingKey: string,
+      claimedKey: string,
+      heartbeatKey: string,
+      itemKey: string,
+      resumePriority: string,
+      baseJson: string,
+    ) => {
+      const workerId = claimedKey.replace('orchestrator:queue:claimed:', '');
+      const claimed = state.claimed.get(workerId)?.get(itemKey);
+      if (!claimed) {
+        state.heartbeats.delete(heartbeatKey);
+        return [0, -1];
+      }
+      const parsed: SerializedQueueItem = JSON.parse(claimed);
+      const base: SerializedQueueItem = JSON.parse(baseJson);
+      base.queueReason = 'resume';
+      base.priority = Number(resumePriority);
+      base.attemptCount = parsed.attemptCount;
+      base.itemKey = itemKey;
+      base.claimedAt = undefined;
+      const repayload = JSON.stringify(base);
+      state.claimed.get(workerId)?.delete(itemKey);
+      state.heartbeats.delete(heartbeatKey);
+      state.pending.set(itemKey, { score: Number(resumePriority), member: repayload });
+      zaddSpy(_pendingKey, Number(resumePriority), repayload);
+      return [1, parsed.attemptCount];
+    }),
+
+    // #1069 mock: mirrors RELEASE_SCRIPT — [code, attemptCount].
+    releaseItem: vi.fn(async (
+      _pendingKey: string,
+      claimedKey: string,
+      heartbeatKey: string,
+      _deadLetterKey: string,
+      _inFlightKey: string,
+      itemKey: string,
+      retryPriority: string,
+      baseJson: string,
+      maxRetriesStr: string,
+      nowMsStr: string,
+    ) => {
+      const workerId = claimedKey.replace('orchestrator:queue:claimed:', '');
+      const claimed = state.claimed.get(workerId)?.get(itemKey);
+      if (!claimed) {
+        state.heartbeats.delete(heartbeatKey);
+        return [0, -1];
+      }
+      const parsed: SerializedQueueItem = JSON.parse(claimed);
+      const attemptCount = parsed.attemptCount + 1;
+      const maxRetries = Number(maxRetriesStr);
+      const base: SerializedQueueItem = JSON.parse(baseJson);
+      base.attemptCount = attemptCount;
+      base.itemKey = itemKey;
+      base.claimedAt = undefined;
+
+      if (attemptCount >= maxRetries) {
+        const dlpayload = JSON.stringify(base);
+        state.claimed.get(workerId)?.delete(itemKey);
+        state.heartbeats.delete(heartbeatKey);
+        state.deadLetter.push({ score: Number(nowMsStr), member: dlpayload });
+        sremSpy(_inFlightKey, itemKey);
+        state.inFlight.delete(itemKey);
+        return [2, attemptCount];
+      }
+
+      base.queueReason = 'retry';
+      base.priority = Number(retryPriority);
+      const repayload = JSON.stringify(base);
+      state.claimed.get(workerId)?.delete(itemKey);
+      state.heartbeats.delete(heartbeatKey);
+      state.pending.set(itemKey, { score: Number(retryPriority), member: repayload });
+      zaddSpy(_pendingKey, Number(retryPriority), repayload);
+      return [1, attemptCount];
+    }),
   };
 
   // Chainable multi() that forwards to the underlying mocks.

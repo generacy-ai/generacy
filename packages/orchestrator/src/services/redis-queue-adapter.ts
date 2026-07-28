@@ -153,6 +153,134 @@ redis.call('ZADD', KEYS[3], tonumber(ARGV[4]), ARGV[5])
 return 1
 `;
 
+/**
+ * #1069 — Atomic read-and-re-pend for lease-expiry events. Folds the
+ * previous `HGET` + client-side `MULTI: HDEL + DEL + ZADD` into a single
+ * Lua script so the orphan reaper cannot interleave between the read and
+ * the re-pend (which would produce two distinct pending members for the
+ * same itemKey — the failure sequence #1060/#1065 closed for `enqueue()`,
+ * arriving here via `requeueForResume` instead).
+ *
+ * Mirrors `RECLAIM_ORPHAN_SCRIPT`'s three-key shape. Preserves
+ * `attemptCount` verbatim (FR-003) — lease expiry is infrastructure, not a
+ * work failure.
+ *
+ * KEYS[1] = orchestrator:queue:pending
+ * KEYS[2] = orchestrator:queue:claimed:<workerId>
+ * KEYS[3] = orchestrator:worker:<workerId>:heartbeat
+ * ARGV[1] = itemKey
+ * ARGV[2] = resumePriority (numeric string)
+ * ARGV[3] = pre-serialized base item JSON (client-side JSON.stringify(item))
+ *
+ * Returns Lua array {code, attemptCount}:
+ *   {0, -1} = no-op (claim already cleared — reaper race)
+ *   {1, N}  = re-pended at resume priority; N is preserved attemptCount
+ */
+const REQUEUE_FOR_RESUME_SCRIPT = `
+local claimed = redis.call('HGET', KEYS[2], ARGV[1])
+if not claimed then
+  redis.call('DEL', KEYS[3])
+  return {0, -1}
+end
+
+local parsed = cjson.decode(claimed)
+local base = cjson.decode(ARGV[3])
+base.queueReason = 'resume'
+base.priority = tonumber(ARGV[2])
+base.attemptCount = parsed.attemptCount or 0
+base.itemKey = ARGV[1]
+base.claimedAt = nil
+local repayload = cjson.encode(base)
+
+redis.call('HDEL', KEYS[2], ARGV[1])
+redis.call('DEL', KEYS[3])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), repayload)
+
+return {1, parsed.attemptCount}
+`;
+
+/**
+ * Exported for the script-wiring static-assertion tests only. Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _REQUEUE_FOR_RESUME_SCRIPT_FOR_TESTS = REQUEUE_FOR_RESUME_SCRIPT;
+
+/**
+ * #1069 — Atomic read-and-re-pend (retry branch) OR read-and-dead-letter
+ * (max-retries branch). Both branches folded into a single Lua script per
+ * Clarifications Q1 → A so SC-004's "exactly 1 round trip" invariant is
+ * satisfied on both.
+ *
+ * `attemptCount` is read from the claim payload inside Lua (via
+ * `cjson.decode`), incremented, and dispatched — passing it in as ARGV
+ * would reintroduce the exact TOCTOU hazard being closed (the caller
+ * would still read via a separate `HGET` first).
+ *
+ * KEYS[1] = orchestrator:queue:pending
+ * KEYS[2] = orchestrator:queue:claimed:<workerId>
+ * KEYS[3] = orchestrator:worker:<workerId>:heartbeat
+ * KEYS[4] = orchestrator:queue:dead-letter
+ * KEYS[5] = orchestrator:queue:in-flight-items
+ * ARGV[1] = itemKey
+ * ARGV[2] = retryPriority (numeric string)
+ * ARGV[3] = pre-serialized base item JSON
+ * ARGV[4] = maxRetries (numeric string; dead-letter dispatch threshold)
+ * ARGV[5] = nowMs (numeric string; ZADD score for dead-letter entry)
+ *
+ * Returns Lua array {code, attemptCount}:
+ *   {0, -1} = no-op (claim already cleared — reaper race)
+ *   {1, N}  = retry re-pended; N is `parsed.attemptCount + 1`
+ *   {2, N}  = dead-lettered; N is `parsed.attemptCount + 1`
+ *
+ * FR-006 in-flight-SET invariant:
+ *   - Retry branch (code 1): NO SREM — item stays in flight (pending).
+ *   - Dead-letter branch (code 2): SREM inside the script — item is
+ *     permanently out of flight.
+ *   - No-op branch (code 0): untouched — whichever concurrent actor won
+ *     the race owns the invariant.
+ */
+const RELEASE_SCRIPT = `
+local claimed = redis.call('HGET', KEYS[2], ARGV[1])
+if not claimed then
+  redis.call('DEL', KEYS[3])
+  return {0, -1}
+end
+
+local parsed = cjson.decode(claimed)
+local attemptCount = (parsed.attemptCount or 0) + 1
+local maxRetries = tonumber(ARGV[4])
+local base = cjson.decode(ARGV[3])
+base.attemptCount = attemptCount
+base.itemKey = ARGV[1]
+base.claimedAt = nil
+
+if attemptCount >= maxRetries then
+  local dlpayload = cjson.encode(base)
+  redis.call('HDEL', KEYS[2], ARGV[1])
+  redis.call('DEL', KEYS[3])
+  redis.call('ZADD', KEYS[4], tonumber(ARGV[5]), dlpayload)
+  redis.call('SREM', KEYS[5], ARGV[1])
+  return {2, attemptCount}
+end
+
+base.queueReason = 'retry'
+base.priority = tonumber(ARGV[2])
+local repayload = cjson.encode(base)
+redis.call('HDEL', KEYS[2], ARGV[1])
+redis.call('DEL', KEYS[3])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), repayload)
+
+return {1, attemptCount}
+`;
+
+/**
+ * Exported for the script-wiring static-assertion tests only. Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _RELEASE_SCRIPT_FOR_TESTS = RELEASE_SCRIPT;
+
 interface Logger {
   info(msg: string): void;
   info(obj: Record<string, unknown>, msg: string): void;
@@ -190,6 +318,8 @@ export class RedisQueueAdapter implements QueueManager {
   private claimCommandDefined = false;
   private enqueueIfAbsentCommandDefined = false;
   private reclaimOrphanCommandDefined = false;
+  private requeueForResumeCommandDefined = false;
+  private releaseCommandDefined = false;
   /**
    * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
    * drop-log transition-edge decision. Cleared on `complete()` (R6 mitigation)
@@ -247,6 +377,27 @@ export class RedisQueueAdapter implements QueueManager {
       lua: RECLAIM_ORPHAN_SCRIPT,
     });
     this.reclaimOrphanCommandDefined = true;
+  }
+
+  private ensureRequeueForResumeCommand(): void {
+    if (this.requeueForResumeCommandDefined) return;
+    // Command name uses the `Item` suffix so it does not shadow this
+    // class's own `requeueForResume` method on the ioredis client object.
+    this.redis.defineCommand('requeueForResumeItem', {
+      numberOfKeys: 3,
+      lua: REQUEUE_FOR_RESUME_SCRIPT,
+    });
+    this.requeueForResumeCommandDefined = true;
+  }
+
+  private ensureReleaseCommand(): void {
+    if (this.releaseCommandDefined) return;
+    // Same `Item` suffix rationale as `ensureRequeueForResumeCommand`.
+    this.redis.defineCommand('releaseItem', {
+      numberOfKeys: 5,
+      lua: RELEASE_SCRIPT,
+    });
+    this.releaseCommandDefined = true;
   }
 
   async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
@@ -721,93 +872,68 @@ export class RedisQueueAdapter implements QueueManager {
     }
   }
 
+  /**
+   * #1069 — Atomic read-and-re-pend or read-and-dead-letter via
+   * `RELEASE_SCRIPT`. The two-round-trip `HGET` + client-side `MULTI`
+   * this replaced could interleave with the orphan reaper's
+   * `RECLAIM_ORPHAN_SCRIPT` between the read and the re-pend, producing
+   * two distinct pending members for the same itemKey → two concurrent
+   * worker claims. Folding both branches into one Lua script closes the
+   * TOCTOU window; the caller only dispatches on the returned code and
+   * preserves the existing log-line shape for both branches (FR-005 /
+   * SC-007).
+   */
   async release(workerId: string, item: QueueItem): Promise<void> {
+    this.ensureReleaseCommand();
     const itemKey = buildItemKey(item);
     const claimedKey = buildClaimedKey(workerId);
     const heartbeatKey = buildHeartbeatKey(workerId);
+    const retryPriority = getPriorityScore('retry');
 
     try {
-      // Get the claimed item to check attempt count
-      const claimedRaw = await this.redis.hget(claimedKey, itemKey);
+      const [code, attemptCount] = (await (this.redis as any).releaseItem(
+        PENDING_KEY,
+        claimedKey,
+        heartbeatKey,
+        DEAD_LETTER_KEY,
+        IN_FLIGHT_KEY,
+        itemKey,
+        String(retryPriority),
+        JSON.stringify(item),
+        String(this.maxRetries),
+        String(Date.now()),
+      )) as [number, number];
 
-      // #1060 PR #1065 review finding 1 — null-guard the retry branch.
-      // If the claim hash entry is gone, another actor (typically the
-      // orphan reaper's `RECLAIM_ORPHAN_SCRIPT`) has already re-pended
-      // this itemKey via its own `HDEL claimed` + `ZADD pending`. Doing
-      // another `ZADD pending` here would create a SECOND distinct
-      // pending member for the same itemKey (Redis ZSETs key on the full
-      // member string, and the reclaim payload differs in
-      // `queueReason` / `priority` / `attemptCount` / `enqueuedAt`).
-      // Two pending members → two `CLAIM_SCRIPT` pops → two concurrent
-      // workers on one issue → the exact failure sequence #1060 exists
-      // to prevent, arriving via `release()` instead of `enqueue()`.
-      //
-      // The heartbeat may still exist (independent of the claim hash),
-      // so best-effort DEL it before returning to avoid a stale key.
-      if (!claimedRaw) {
-        try {
-          await this.redis.del(heartbeatKey);
-        } catch {
-          /* best-effort */
-        }
-        this.logger.info(
-          { workerId, itemKey },
-          'release() called on already-cleared claim (reaper race) — skipping re-pend to avoid duplicate pending member',
-        );
-        return;
-      }
-
-      const parsed: SerializedQueueItem = JSON.parse(claimedRaw);
-      const attemptCount = parsed.attemptCount + 1;
-
-      if (attemptCount >= this.maxRetries) {
-        // Dead-letter: too many retries. Co-atomically remove from in-flight SET.
-        const deadLetterItem: SerializedQueueItem = {
-          ...item,
-          attemptCount,
-          itemKey,
-        };
-        await this.redis
-          .multi()
-          .hdel(claimedKey, itemKey)
-          .del(heartbeatKey)
-          .zadd(DEAD_LETTER_KEY, Date.now(), JSON.stringify(deadLetterItem))
-          .srem(IN_FLIGHT_KEY, itemKey)
-          .exec();
-        // #1054 / R6: bound the transition-edge Map growth.
-        this.dropLogState.delete(itemKey);
-        // #1054 finding 7 — dead-letter fully removes the item from flight;
-        // clear the enqueuedAt cache to bound growth alongside dropLogState.
-        this.enqueuedAtCache.delete(itemKey);
-        this.logger.warn(
-          { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
-          'Item dead-lettered after max retries'
-        );
-      } else {
-        // Re-queue with retry priority. Item stays in in-flight SET (still in flight).
-        const retryPriority = getPriorityScore('retry');
-        const requeueItem: SerializedQueueItem = {
-          ...item,
-          queueReason: 'retry',
-          priority: retryPriority,
-          attemptCount,
-          itemKey,
-        };
-        await this.redis
-          .multi()
-          .hdel(claimedKey, itemKey)
-          .del(heartbeatKey)
-          .zadd(PENDING_KEY, retryPriority, JSON.stringify(requeueItem))
-          .exec();
-        this.logger.info(
-          { workerId, itemKey, attemptCount },
-          'Item released back to pending queue'
-        );
+      switch (code) {
+        case 0:
+          this.logger.info(
+            { workerId, itemKey },
+            'release() called on already-cleared claim (reaper race) — skipping re-pend to avoid duplicate pending member',
+          );
+          return;
+        case 1:
+          this.logger.info(
+            { workerId, itemKey, attemptCount },
+            'Item released back to pending queue',
+          );
+          return;
+        case 2:
+          // #1054 / R6: bound the transition-edge Map growth.
+          this.dropLogState.delete(itemKey);
+          // #1054 finding 7 — dead-letter fully removes the item from
+          // flight; clear the enqueuedAt cache to bound growth alongside
+          // dropLogState. Script preserves the SREM in-flight invariant.
+          this.enqueuedAtCache.delete(itemKey);
+          this.logger.warn(
+            { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
+            'Item dead-lettered after max retries',
+          );
+          return;
       }
     } catch (error) {
       this.logger.warn(
         { err: error, workerId, itemKey },
-        'Redis error in release'
+        'Redis error in release',
       );
     }
   }
@@ -837,54 +963,41 @@ export class RedisQueueAdapter implements QueueManager {
    * `release()` / `complete()` error contract).
    */
   async requeueForResume(workerId: string, item: QueueItem): Promise<void> {
+    this.ensureRequeueForResumeCommand();
     const itemKey = buildItemKey(item);
     const claimedKey = buildClaimedKey(workerId);
     const heartbeatKey = buildHeartbeatKey(workerId);
+    const resumePriority = getPriorityScore('resume');
 
     try {
-      const claimedRaw = await this.redis.hget(claimedKey, itemKey);
-      if (!claimedRaw) {
-        // Reaper (or another lease-expiry firing) already re-pended it.
-        try {
-          await this.redis.del(heartbeatKey);
-        } catch {
-          /* best-effort */
-        }
-        this.logger.info(
-          { workerId, itemKey },
-          'requeueForResume() called on already-cleared claim (reaper race) — skipping re-pend',
-        );
-        return;
-      }
-
-      const parsed: SerializedQueueItem = JSON.parse(claimedRaw);
-      const resumePriority = getPriorityScore('resume');
-      // Preserve attemptCount verbatim — lease expiry does NOT count as
-      // a work failure.
-      const requeueItem: SerializedQueueItem = {
-        ...item,
-        queueReason: 'resume',
-        priority: resumePriority,
-        attemptCount: parsed.attemptCount,
+      const [code, attemptCount] = (await (this.redis as any).requeueForResumeItem(
+        PENDING_KEY,
+        claimedKey,
+        heartbeatKey,
         itemKey,
-        // Strip claim-lifecycle field so next claim stamps a fresh one.
-        claimedAt: undefined,
-      };
-      await this.redis
-        .multi()
-        .hdel(claimedKey, itemKey)
-        .del(heartbeatKey)
-        .zadd(PENDING_KEY, resumePriority, JSON.stringify(requeueItem))
-        .exec();
-      this.logger.info(
-        {
-          workerId,
-          itemKey,
-          attemptCount: parsed.attemptCount,
-          reason: 'lease-expiry',
-        },
-        'Item re-pended at resume priority (attemptCount preserved)',
-      );
+        String(resumePriority),
+        JSON.stringify(item),
+      )) as [number, number];
+
+      switch (code) {
+        case 0:
+          this.logger.info(
+            { workerId, itemKey },
+            'requeueForResume() called on already-cleared claim (reaper race) — skipping re-pend',
+          );
+          return;
+        case 1:
+          this.logger.info(
+            {
+              workerId,
+              itemKey,
+              attemptCount,
+              reason: 'lease-expiry',
+            },
+            'Item re-pended at resume priority (attemptCount preserved)',
+          );
+          return;
+      }
     } catch (error) {
       this.logger.warn(
         { err: error, workerId, itemKey },
