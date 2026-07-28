@@ -14,6 +14,7 @@
  * Wire: tetrad-development/docs/cockpit-remote-gates-plan.md § "Wire contracts".
  * Error mapping: contracts/error-mapping.md (mirror of `gates/client.ts`).
  */
+import { getLogger } from '../../../../utils/logger.js';
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import { CockpitGateOpenInputSchema } from '../schemas.js';
 import { invokeGate } from '../gates/client.js';
@@ -33,6 +34,23 @@ export interface CockpitGateOpenData {
   [k: string]: unknown;
 }
 
+/**
+ * #1053 — Per-`gateId` `askedAt` cache. Hoisted above the retry boundary so
+ * two `cockpit_gate_open` calls for the same natural gate (same `runId`, same
+ * `issueRef`/`gateType`/`generation`) produce byte-identical wire frames.
+ * US2 correctness must NOT rely on cloud `gateId`-keyed dedup (which under
+ * FR-004 is the bug source). Unbounded, process-lifetime — plan D-2.
+ */
+const askedAtCache: Map<string, string> = new Map();
+
+function getOrMintAskedAt(gateId: string, provided?: string): string {
+  const cached = askedAtCache.get(gateId);
+  if (cached !== undefined) return cached;
+  const value = provided ?? new Date().toISOString();
+  askedAtCache.set(gateId, value);
+  return value;
+}
+
 export function cockpitGateOpen(
   input: unknown,
   deps: BuildMcpServerDeps = {},
@@ -48,8 +66,35 @@ export function cockpitGateOpen(
     }
 
     const s = parsed.data;
-    const gateKey = deriveGateKey(s.issueRef, s.gateType, s.generation);
+    // #1053 — Fold the per-run discriminator into the `gateKey` pre-image.
+    // Explicit runId wins and is appended as a 4th `gateKey` segment; when the
+    // caller omits it the tool derives with the pre-#1053 3-tuple shape
+    // (byte-for-byte back-compat). A process-scoped fallback (INSTANCE_NONCE)
+    // was rejected on review: it re-introduced the same cross-run collision
+    // #1053 exists to close (two `/cockpit:auto` runs in one MCP-server process
+    // share a nonce) AND desynced against the cloud's positional-3-tuple
+    // `generationFromGateKey` parser on the read side. The real fix therefore
+    // ships as a compatible schema surface (`runId` accepted on input); the
+    // per-run discriminator is a no-op until callers thread `runId` through
+    // (agency-side `/cockpit:auto` companion PR — spec FR-006).
+    const runIdSource: 'explicit' | 'unset' =
+      s.runId !== undefined ? 'explicit' : 'unset';
+    const gateKey = deriveGateKey(s.issueRef, s.gateType, s.generation, s.runId);
     const gateId = deriveGateId(gateKey);
+
+    // Make the source of the runId observable at the tool boundary. `runId`
+    // itself is not logged (auto-run ids embed cluster/repo/issue/timestamp,
+    // which is noise not needed for correlation — data-model E-3).
+    getLogger().info(
+      {
+        event: 'cockpit_gate_open.runid-source',
+        runIdSource,
+        gateId,
+        gateType: s.gateType,
+        issueRef: s.issueRef,
+      },
+      `gate-open runId source: ${runIdSource}`,
+    );
 
     // Assemble the FLAT frozen record. Optional wire fields are omitted (not
     // set to `undefined`) so the serialized frame matches the cloud schema.
@@ -69,7 +114,7 @@ export function cockpitGateOpen(
       options: s.options,
       allowFreeText: s.allowFreeText,
       sessionId: s.sessionId,
-      askedAt: s.askedAt ?? new Date().toISOString(),
+      askedAt: getOrMintAskedAt(gateId, s.askedAt),
     };
 
     // Self-check: never emit a frame the cloud would warn-drop as malformed.

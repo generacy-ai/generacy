@@ -32,6 +32,8 @@ import { once } from 'node:events';
 import { readFile, appendFile, rename, writeFile } from 'node:fs/promises';
 import { WebSocket as WsWebSocket } from 'ws';
 import {
+  deriveGateId,
+  deriveGateKey,
   gateOpenFixture,
   gateOutcomeFixture,
   answerLineFixture,
@@ -283,6 +285,127 @@ describe('Cockpit gates integration', () => {
       expect(
         ctx.peer.received.events.filter((e) => e.event === 'cluster.cockpit'),
       ).toHaveLength(0);
+    });
+
+    // FR-008 (#1053) — run-scoped gateKey/gateId round-trip. Terminal-collision
+    // regression: pre-fix, Run B re-emission of the same natural gate reused
+    // gateIdA and the cloud silently dropped it. Post-fix, the runId suffix on
+    // gateKey yields a fresh gateId per run.
+    it('#1053 FR-008 — Run A `applied` then Run B re-emits same natural gate; distinct gateIds at peer, within-run frames byte-identical', async () => {
+      const issueRef = 'christrudelpw/snappoll#1';
+      const gateType = 'phase-queue';
+      const generation = 'P2';
+
+      // Simulate what the MCP tool would emit for Run A / Run B — the runId
+      // suffix on gateKey is what guarantees distinct gateIds under FR-001.
+      const runIdA = 'christrudelpw-snappoll-1-20260727-200458';
+      const runIdB = 'christrudelpw-snappoll-1-20260727-210500';
+
+      const gateKeyA = deriveGateKey(issueRef, gateType, generation, runIdA);
+      const gateKeyB = deriveGateKey(issueRef, gateType, generation, runIdB);
+      const gateIdA = deriveGateId(gateKeyA);
+      const gateIdB = deriveGateId(gateKeyB);
+      expect(gateIdA).not.toBe(gateIdB); // sanity: distinct pre-images → distinct ids
+
+      // --- Run A: open + ack (applied) ---
+      const runAAskedAt = '2026-07-27T20:04:58.000Z';
+      const bodyA = gateOpenFixture({
+        gateId: gateIdA,
+        gateKey: gateKeyA,
+        gateType,
+        issueRef,
+        epicRef: issueRef,
+        askedAt: runAAskedAt,
+      });
+
+      const openARes = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(bodyA),
+      });
+      expect(openARes.status).toBe(202);
+      const openAEvent = await ctx.peer.waitForEvent(
+        'cluster.cockpit',
+        (d) => (d as { gateId?: string }).gateId === gateIdA,
+      );
+      expect(openAEvent.data).toMatchObject({ type: 'gate-open', gateId: gateIdA, gateKey: gateKeyA });
+
+      // SC-002 (within-run byte-identical frames): a second POST of the same
+      // Run A body — mimicking a MCP-tool retry after the askedAt hoist —
+      // reaches the peer as a byte-identical second event. Same gateId, same
+      // gateKey, same askedAt. Cloud dedup collapses these to one inbox row.
+      const openARetryRes = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(bodyA),
+      });
+      expect(openARetryRes.status).toBe(202);
+      await waitFor(
+        () => cockpitEvents(ctx, gateIdA).length >= 2,
+        3000,
+        'second Run A frame never observed at peer',
+      );
+      const runAFrames = cockpitEvents(ctx, gateIdA);
+      expect(runAFrames).toHaveLength(2);
+      // Byte-identity: both frames carry the same gateId + gateKey + askedAt.
+      expect(runAFrames[0]!.data).toEqual(runAFrames[1]!.data);
+      expect((runAFrames[0]!.data as { askedAt: string }).askedAt).toBe(runAAskedAt);
+
+      // Ack Run A to `applied` — this is the terminal state that today's
+      // pre-fix code would collide with on re-run.
+      const ackA = gateOutcomeFixture({ gateId: gateIdA, outcome: 'applied' });
+      const ackARes = await fetch(
+        `${ctx.orchestratorUrl}/cockpit/gates/${gateIdA}/ack`,
+        { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(ackA) },
+      );
+      expect(ackARes.status).toBe(202);
+      await ctx.peer.waitForEvent(
+        'cluster.cockpit',
+        (d) =>
+          (d as { type?: string }).type === 'gate-outcome' &&
+          (d as { gateId?: string }).gateId === gateIdA,
+      );
+
+      // --- Run B: re-emit the same natural gate with a fresh runId ---
+      const bodyB = gateOpenFixture({
+        gateId: gateIdB,
+        gateKey: gateKeyB,
+        gateType,
+        issueRef,
+        epicRef: issueRef,
+        askedAt: '2026-07-27T21:05:00.000Z',
+      });
+      const openBRes = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(bodyB),
+      });
+      expect(openBRes.status).toBe(202);
+
+      const openBEvent = await ctx.peer.waitForEvent(
+        'cluster.cockpit',
+        (d) => (d as { gateId?: string }).gateId === gateIdB,
+      );
+      expect(openBEvent.data).toMatchObject({ type: 'gate-open', gateId: gateIdB, gateKey: gateKeyB });
+
+      // SC-001: two distinct gate-open frames observed at the peer, one per
+      // run — proof that Run B is a fresh natural-gate identity even though
+      // (issueRef, gateType, generation) is unchanged.
+      const openFrames = ctx.peer.received.events.filter(
+        (e) =>
+          e.event === 'cluster.cockpit' &&
+          (e.data as { type?: string }).type === 'gate-open' &&
+          [gateIdA, gateIdB].includes((e.data as { gateId?: string }).gateId ?? ''),
+      );
+      const distinctOpenIds = new Set(
+        openFrames.map((e) => (e.data as { gateId: string }).gateId),
+      );
+      expect(distinctOpenIds).toEqual(new Set([gateIdA, gateIdB]));
+
+      // SC-005 replay: both open frames remain visible in the peer's history —
+      // cross-run collision is eliminated; the operator sees a fresh gate.
+      expect(cockpitEvents(ctx, gateIdA).length).toBeGreaterThanOrEqual(1);
+      expect(cockpitEvents(ctx, gateIdB).length).toBeGreaterThanOrEqual(1);
     });
   });
 

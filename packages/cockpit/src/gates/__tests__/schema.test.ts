@@ -230,4 +230,25 @@ describe('gateKey / gateId derivation', () => {
     expect(a).not.toBe(b);
     expect(a).not.toBe(c);
   });
+
+  // #1053 — optional 4th `runId` parameter.
+  it('appends `:${runId}` when a non-empty runId is passed', () => {
+    expect(
+      deriveGateKey('generacy-ai/generacy#1020', 'artifact-review', 'spec-review:abc1234', 'RA'),
+    ).toBe('generacy-ai/generacy#1020:artifact-review:spec-review:abc1234:RA');
+  });
+
+  it('back-compat: undefined runId matches the 3-arg output byte-for-byte', () => {
+    expect(
+      deriveGateKey('generacy-ai/generacy#1020', 'artifact-review', 'spec-review:abc1234', undefined),
+    ).toBe(deriveGateKey('generacy-ai/generacy#1020', 'artifact-review', 'spec-review:abc1234'));
+  });
+
+  it('different runIds produce distinct gateIds for the same natural gate', () => {
+    const a = deriveGateId(deriveGateKey('christrudelpw/snappoll#1', 'phase-queue', 'P2', 'RA'));
+    const b = deriveGateId(deriveGateKey('christrudelpw/snappoll#1', 'phase-queue', 'P2', 'RB'));
+    expect(a).not.toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{24}$/);
+    expect(b).toMatch(/^[0-9a-f]{24}$/);
+  });
 });
