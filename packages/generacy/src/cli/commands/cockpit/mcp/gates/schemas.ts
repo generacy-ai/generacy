@@ -111,9 +111,22 @@ export const GateOpenInputSchema = z
     /**
      * Optional per-run discriminator (#1053). When passed, folded into `gateKey`
      * as a trailing `:${runId}` segment so re-runs against the same natural
-     * gate produce a fresh `gateId`. When omitted, the tool mints a per-process
-     * fallback from `INSTANCE_NONCE` — never validated as `default(...)` here so
-     * the source of the fallback is observable at the tool boundary.
+     * gate produce a fresh `gateId`.
+     *
+     * When OMITTED there is NO run discrimination at all: `deriveGateKey`
+     * returns the legacy 3-tuple `issueRef:gateType:generation`, byte-identical
+     * to pre-#1053 behaviour, so a re-run against a gate that already reached a
+     * terminal status still collides and is dropped by the cloud. Callers MUST
+     * pass `runId` to get the #1053 fix.
+     *
+     * An earlier draft minted a per-process `INSTANCE_NONCE` fallback here.
+     * That was rejected on review: process lifetime is not run lifetime, so it
+     * both failed to discriminate two runs in one MCP process and flipped
+     * mid-run on a server restart. Do not reintroduce it.
+     *
+     * Threading `runId` from callers is tracked in #1059 — note it must land
+     * together with the read-side changes there, or `cockpit_gate_status`
+     * silently returns `absent` for every gate.
      */
     runId: z.string().min(1).optional(),
   })
