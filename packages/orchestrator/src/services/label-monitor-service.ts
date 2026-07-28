@@ -345,6 +345,32 @@ export class LabelMonitorService {
       );
     }
 
+    // #1051 FR-005: dispatch-time closed-issue gate. Drop `process` and
+    // `resume` events whose target issue is closed at the moment of dispatch
+    // — a `resume` event on already-closed generacy-cloud#879 sailed through
+    // this method and reached the git layer, producing the observed
+    // resurrection + duplicate-PR outcome. Zero mutations on drop
+    // (no enqueue, no markProcessed, no label mutation).
+    //
+    // Fallback: if `fetchedIssue` is null (the try/catch above swallowed a
+    // fetch error), the gate does NOT fire — better to enqueue a possibly-
+    // closed issue than to drop a definitely-open one on transient `gh`
+    // failure. FR-002 pre-push guard catches the closed case downstream.
+    if (fetchedIssue && fetchedIssue.state === 'closed') {
+      this.logger.info(
+        {
+          dropped: 'issue-closed',
+          issueNumber,
+          eventType: type,
+          phase: parsedName,
+          owner,
+          repo,
+        },
+        'Dropping label event: issue is closed',
+      );
+      return false;
+    }
+
     // Build queue item
     const queueItem: QueueItem = {
       owner,

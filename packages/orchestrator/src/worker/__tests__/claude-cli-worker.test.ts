@@ -27,6 +27,9 @@ const mockGithub = {
   push: vi.fn().mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' }),
   getCurrentBranch: vi.fn().mockResolvedValue('feature/42'),
   findPRForBranch: vi.fn().mockResolvedValue(null),
+  // #1051 pre-push guard mock — defaults to "no PR in any state" so the
+  // guard falls through to the branch-existence check → allow.
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
   getDefaultBranch: vi.fn().mockResolvedValue('develop'),
   createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
   markPRReady: vi.fn().mockResolvedValue(undefined),

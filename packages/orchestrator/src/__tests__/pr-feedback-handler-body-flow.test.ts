@@ -54,6 +54,9 @@ const mockGitHub = {
   addLabels: vi.fn(),
   resolveReviewThread: vi.fn(),
   getIssue: vi.fn(),
+  // #1051 pre-push guard: default to "no PR in any state" so the guard
+  // falls through and allows the push (fail-open on ls-remote spawn).
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
 } as unknown as GitHubClient;
 
 // Per-test override for executeCommand — driven by `commitTouchedFiles` state.

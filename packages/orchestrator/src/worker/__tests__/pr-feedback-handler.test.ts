@@ -38,6 +38,8 @@ const mockGitHub = {
   removeLabels: vi.fn(),
   addLabels: vi.fn(),
   resolveReviewThread: vi.fn(),
+  // #1051 pre-push guard: default "no PR" allows the push flow to proceed.
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
 } as unknown as GitHubClient;
 
 // ---------------------------------------------------------------------------

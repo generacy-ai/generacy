@@ -275,6 +275,19 @@ export interface GitHubClient {
    */
   findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null>;
 
+  /**
+   * Find a PR for a branch across all states (open, closed, merged).
+   *
+   * Mirrors `findPRForBranch` but passes `--state all` to `gh pr list`, so
+   * callers can detect merged/closed PRs on a branch — used by the push-guard
+   * (#1051 FR-002) to refuse pushes to branches whose PR has already merged.
+   *
+   * Do NOT use this in place of `findPRForBranch` at existing call sites:
+   * five callers depend on the open-only default and a silent state widening
+   * would create foot-guns. See #1051 clarification Q2.
+   */
+  findPRForBranchAnyState(owner: string, repo: string, branch: string): Promise<PullRequest | null>;
+
   // ==========================================================================
   // Label Operations
   // ==========================================================================

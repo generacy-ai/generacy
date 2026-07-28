@@ -59,6 +59,9 @@ const mockGitHub = {
   push: vi.fn(),
   replyToPRComment: vi.fn(),
   resolveReviewThread: vi.fn(),
+  // #1051 pre-push guard: default to "no PR in any state" so the guard
+  // falls through to the branch-existence check and allows the push.
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
