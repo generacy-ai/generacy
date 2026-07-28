@@ -22,7 +22,9 @@ const DEAD_LETTER_KEY = 'orchestrator:queue:dead-letter';
 const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
 const HEARTBEAT_KEY_PREFIX = 'orchestrator:worker:';
 
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/12';
+const DB = 12;
+const REDIS_URL_BASE = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+const REDIS_URL = `${REDIS_URL_BASE.replace(/\/\d+$/, '')}/${DB}`;
 const skipReason = process.env.SKIP_REAL_REDIS_TESTS === '1'
   ? 'skipped via SKIP_REAL_REDIS_TESTS=1'
   : null;

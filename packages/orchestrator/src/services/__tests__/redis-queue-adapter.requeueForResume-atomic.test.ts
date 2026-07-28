@@ -36,7 +36,14 @@ const HEARTBEAT_KEY_PREFIX = 'orchestrator:worker:';
 // prefix the MATCH pattern of `SCAN`, so `reapOrphanClaims`'s scan for
 // `orchestrator:queue:claimed:*` would miss the prefixed keys the test
 // wrote, breaking the reaper path this suite depends on.
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/13';
+// Per-file DB number (0-15). Vitest runs test files in parallel workers
+// that share the same Redis; using distinct DBs isolates the keyspaces.
+// The env-provided URL (e.g. REDIS_URL=redis://host:6379) has no path
+// component, so we must append the DB explicitly rather than trust the
+// URL to carry it.
+const DB = 13;
+const REDIS_URL_BASE = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+const REDIS_URL = `${REDIS_URL_BASE.replace(/\/\d+$/, '')}/${DB}`;
 const skipReason = process.env.SKIP_REAL_REDIS_TESTS === '1'
   ? 'skipped via SKIP_REAL_REDIS_TESTS=1'
   : null;
