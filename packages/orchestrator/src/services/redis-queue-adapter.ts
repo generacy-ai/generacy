@@ -392,8 +392,7 @@ export class RedisQueueAdapter implements QueueManager {
    * was evicted / HDEL'd without a paired SREM is unreachable from here.
    * The chosen direction is right for the reported incident (heartbeat-
    * ABSENT candidates), but a periodic `in-flight-items \ (pending ∪
-   * claimed)` reconciliation would close the residual gap. Follow-up
-   * tracked separately.
+   * claimed)` reconciliation would close the residual gap. Tracked in #1058.
    */
   async reapOrphanClaims(now: number = Date.now()): Promise<ReapReport> {
     this.ensureReclaimOrphanCommand();
