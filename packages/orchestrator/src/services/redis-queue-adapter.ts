@@ -187,7 +187,7 @@ local parsed = cjson.decode(claimed)
 local base = cjson.decode(ARGV[3])
 base.queueReason = 'resume'
 base.priority = tonumber(ARGV[2])
-base.attemptCount = parsed.attemptCount
+base.attemptCount = parsed.attemptCount or 0
 base.itemKey = ARGV[1]
 base.claimedAt = nil
 local repayload = cjson.encode(base)
@@ -248,7 +248,7 @@ if not claimed then
 end
 
 local parsed = cjson.decode(claimed)
-local attemptCount = parsed.attemptCount + 1
+local attemptCount = (parsed.attemptCount or 0) + 1
 local maxRetries = tonumber(ARGV[4])
 local base = cjson.decode(ARGV[3])
 base.attemptCount = attemptCount
