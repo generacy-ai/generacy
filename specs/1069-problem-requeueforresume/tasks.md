@@ -13,7 +13,7 @@
 
 ## Phase 1: Lua-script atomicity (FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007)
 
-- [ ] T001 [US1] Add `REQUEUE_FOR_RESUME_SCRIPT` constant to
+- [X] T001 [US1] Add `REQUEUE_FOR_RESUME_SCRIPT` constant to
   `packages/orchestrator/src/services/redis-queue-adapter.ts`, immediately after
   `RECLAIM_ORPHAN_SCRIPT`. Body per `contracts/requeue-for-resume-script.md § Lua body`:
   `HGET` claim → null-guard returns `{0, -1}` after best-effort `DEL heartbeat`;
@@ -22,7 +22,7 @@
   `claimedAt=nil` (A6) → `HDEL` + `DEL heartbeat` + `ZADD pending` → return
   `{1, parsed.attemptCount}`.
 
-- [ ] T002 [US1] Add `RELEASE_SCRIPT` constant to
+- [X] T002 [US1] Add `RELEASE_SCRIPT` constant to
   `packages/orchestrator/src/services/redis-queue-adapter.ts`, immediately after
   `REQUEUE_FOR_RESUME_SCRIPT`. Body per `contracts/release-script.md § Lua body`:
   `HGET` claim → null-guard returns `{0, -1}` after best-effort `DEL heartbeat`;
@@ -33,25 +33,25 @@
   `queueReason='retry'`, `priority=tonumber(ARGV[2])`, no `SREM`, `HDEL` +
   `DEL heartbeat` + `ZADD pending` → return `{1, attemptCount}`.
 
-- [ ] T003 [US1] Add `_REQUEUE_FOR_RESUME_SCRIPT_FOR_TESTS` and
+- [X] T003 [US1] Add `_REQUEUE_FOR_RESUME_SCRIPT_FOR_TESTS` and
   `_RELEASE_SCRIPT_FOR_TESTS` `@internal` const-exports in the same location
   as `_ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS` (currently around
   `redis-queue-adapter.ts:67`). FR-012 static-assertion pattern parity with
   `_ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS`.
 
-- [ ] T004 [US1] Add private boolean flags `requeueForResumeCommandDefined = false`
+- [X] T004 [US1] Add private boolean flags `requeueForResumeCommandDefined = false`
   and `releaseCommandDefined = false` in the sibling group at
   `redis-queue-adapter.ts:190-192` (next to `claimCommandDefined`,
   `enqueueIfAbsentCommandDefined`, `reclaimOrphanCommandDefined`).
 
-- [ ] T005 [US1] Add `ensureRequeueForResumeCommand()` private method following
+- [X] T005 [US1] Add `ensureRequeueForResumeCommand()` private method following
   the existing `ensureEnqueueIfAbsentCommand()` / `ensureReclaimOrphanCommand()`
   pattern at `redis-queue-adapter.ts:234-250`. Calls
   `this.redis.defineCommand('requeueForResumeItem', { numberOfKeys: 3, lua: REQUEUE_FOR_RESUME_SCRIPT })`.
   Command name uses the `Item` suffix to avoid shadowing the adapter's own
   public method name on the ioredis client object (data-model.md § New adapter fields).
 
-- [ ] T006 [US1] Add `ensureReleaseCommand()` private method with same pattern.
+- [X] T006 [US1] Add `ensureReleaseCommand()` private method with same pattern.
   Calls `this.redis.defineCommand('releaseItem', { numberOfKeys: 5, lua: RELEASE_SCRIPT })`.
   `numberOfKeys: 5` covers pending / claimed / heartbeat / dead-letter /
   in-flight per `contracts/release-script.md § Keys`.
@@ -62,7 +62,7 @@
 
 <!-- Phase boundary: Complete Phase 1 (scripts + defineCommand guards must exist before callers can invoke them). -->
 
-- [ ] T007 [US1] Rewrite `requeueForResume()` at
+- [X] T007 [US1] Rewrite `requeueForResume()` at
   `packages/orchestrator/src/services/redis-queue-adapter.ts:839-894` per the
   caller shape in `contracts/requeue-for-resume-script.md § Caller shape`.
   Call `ensureRequeueForResumeCommand()`; invoke
@@ -74,7 +74,7 @@
   Message text and field shape MUST match `:853-856` + `:879-887` byte-for-byte
   (FR-005 + SC-007).
 
-- [ ] T008 [US1] Rewrite `release()` at
+- [X] T008 [US1] Rewrite `release()` at
   `packages/orchestrator/src/services/redis-queue-adapter.ts:724-813` per the
   caller shape in `contracts/release-script.md § Caller shape`. Call
   `ensureReleaseCommand()`; invoke
@@ -88,7 +88,7 @@
   verbatim. All message text and field shapes MUST match
   `:753-756` + `:782-785` + `:802-805` byte-for-byte (FR-005 + SC-007).
 
-- [ ] T009 [P] [US1] Parity audit of
+- [X] T009 [P] [US1] Parity audit of
   `packages/orchestrator/src/services/in-memory-queue-adapter.ts` per FR-009 /
   OoS-5. Confirm log-line messages and field shapes at `:236-240` (release no-op),
   `:263-266` (dead-letter), `:278-281` (retry), `:296-300` (requeueForResume
@@ -103,7 +103,7 @@
 
 <!-- Phase boundary: Complete Phase 2 (callers must invoke the new scripts before tests can exercise them end-to-end). -->
 
-- [ ] T010 [P] [US1] Create
+- [X] T010 [P] [US1] Create
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.requeueForResume-atomic.test.ts`
   (SC-001, FR-010). Real ioredis against a live `redis:7` service. Two
   `describe` blocks: (a) **Deterministic controlled interleave** — seed a
@@ -118,7 +118,7 @@
   `Promise.all([reapOrphanClaims(), requeueForResume(workerId, item)])`,
   fresh claim per pair; assert `ZCARD pending === 1` each pair.
 
-- [ ] T011 [P] [US1] Create
+- [X] T011 [P] [US1] Create
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.release-atomic.test.ts`
   (SC-002, FR-010). Same shape as T010 for BOTH branches of `release()`.
   Two additional `describe` blocks beyond the requeueForResume shape:
@@ -133,7 +133,7 @@
   SET is untouched (`SISMEMBER === 1`). Both branches exactly 1 round trip
   (SC-004).
 
-- [ ] T012 [P] [US1] Create
+- [X] T012 [P] [US1] Create
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.round-trip-count.test.ts`
   (SC-003 + SC-004). **Separate plain test** per Clarifications Q4 rider —
   no concurrency harness. Wrap the ioredis client with a command counter
@@ -145,7 +145,7 @@
   success (1 × `EVALSHA` of `RELEASE_SCRIPT` — Q1=A load-bearing
   assertion).
 
-- [ ] T013 [P] [US1] Create
+- [X] T013 [P] [US1] Create
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.attemptcount-preservation.test.ts`
   (SC-005 + SC-006). Real ioredis. Three test blocks: (a) 100 repeated
   lease-expiry cycles `enqueueIfAbsent → claim → requeueForResume → claim`,
@@ -156,7 +156,7 @@
   dead-letter fires on exactly the `maxRetries`-th call and item is `SREM`'d
   from `IN_FLIGHT_KEY` (SC-006).
 
-- [ ] T014 [US1] Extend
+- [X] T014 [US1] Extend
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.script-wiring.test.ts`
   (FR-012). For each new script (`REQUEUE_FOR_RESUME_SCRIPT`,
   `RELEASE_SCRIPT`) add: static text assertions (contains `HGET`, `HDEL`,
@@ -169,7 +169,7 @@
   `return {1, ...}` / `return {2, ...}` / `return {0, -1}` on the correct
   branches).
 
-- [ ] T015 [US1] Run the full `redis-queue-adapter.*` suite to verify no
+- [X] T015 [US1] Run the full `redis-queue-adapter.*` suite to verify no
   regressions in the existing files
   (`redis-queue-adapter.enqueueIfAbsent.test.ts`,
   `redis-queue-adapter.orphan-reclaim.test.ts`,
@@ -185,12 +185,12 @@
 
 <!-- Phase boundary: Complete Phases 1-3 before publishing. -->
 
-- [ ] T016 [US1] Verify SC-008 (`git diff packages/orchestrator/src/types/monitor.ts`
+- [X] T016 [US1] Verify SC-008 (`git diff packages/orchestrator/src/types/monitor.ts`
   shows no changes touching `release` or `requeueForResume`). Both methods
   MUST retain `Promise<void>` return contract per FR-008 — the fix is
   adapter-internal only.
 
-- [ ] T017 [US1] Deterministic-interleave baseline demonstration per
+- [X] T017 [US1] Deterministic-interleave baseline demonstration per
   `quickstart.md § Deterministic-interleave baseline`: `git worktree add ../generacy-1069-baseline HEAD~1`,
   `pnpm install`, `pnpm --filter @generacy-ai/orchestrator test -- redis-queue-adapter.release-atomic 2>&1 | tee ../1069-baseline-failure.log`
   (expected: deterministic-interleave `describe` block FAILS with
@@ -199,7 +199,7 @@
   into the PR description as reviewer evidence (Clarifications Q4 → C).
   Clean up: `git worktree remove ../generacy-1069-baseline`.
 
-- [ ] T018 [US1] Author `.changeset/1069-atomic-release-requeue-resume.md`
+- [X] T018 [US1] Author `.changeset/1069-atomic-release-requeue-resume.md`
   with bump `'@generacy-ai/orchestrator': patch` per Decision 9 in
   `research.md`. Verify with `pnpm changeset status` (working-tree state;
   `pnpm changeset status --since=origin/develop` won't see the file until
