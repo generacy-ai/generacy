@@ -10,6 +10,8 @@ import { sortRoutes } from './dispatcher.js';
 export type RelayState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'disconnecting';
 
 export interface Logger {
+  debug(msg: string): void;
+  debug(obj: Record<string, unknown>, msg: string): void;
   info(msg: string): void;
   info(obj: Record<string, unknown>, msg: string): void;
   warn(msg: string): void;
@@ -42,6 +44,10 @@ type EventMap = {
 };
 
 const defaultLogger: Logger = {
+  debug(...args: unknown[]) {
+    if (typeof args[0] === 'string') console.debug(`[relay] ${args[0]}`);
+    else console.debug(`[relay]`, args[0], args[1]);
+  },
   info(...args: unknown[]) {
     if (typeof args[0] === 'string') console.log(`[relay] ${args[0]}`);
     else console.log(`[relay]`, args[0], args[1]);
@@ -318,6 +324,27 @@ export class ClusterRelay {
             (response) => this.send(response),
             (err) => this.logger.error({ err: String(err) }, 'Proxy error'),
           );
+          return;
+        }
+
+        // Cloud-sent gate acknowledgement (#1063). Observability-only until
+        // #1059 steps 4-7 wire the frameId correlation. The return is
+        // structural (Q3=A / FR-003) — prevents any future subscriber from
+        // beginning to correlate before the full design lands.
+        if (message.type === 'cluster.cockpit.reply') {
+          if (message.accepted) {
+            this.logger.debug({ message }, 'cluster.cockpit.reply received');
+          } else {
+            this.logger.info(
+              {
+                reason: message.reason,
+                frameType: message.frameType,
+                gateId: message.gateId,
+                priorStatus: message.priorStatus,
+              },
+              'cluster.cockpit.reply dropped',
+            );
+          }
           return;
         }
 

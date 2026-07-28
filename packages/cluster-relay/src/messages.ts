@@ -148,6 +148,19 @@ export interface TierInfoMessage {
   maxActiveClusters?: number;
 }
 
+export interface ClusterCockpitReplyMessage {
+  type: 'cluster.cockpit.reply';
+  timestamp: string;
+  frameId: string | null;
+  frameType: string;
+  gateId: string;
+  gateKey?: string;
+  accepted: boolean;
+  reason?: string;
+  priorStatus?: string;
+  wroteDoc?: string;
+}
+
 export type RelayMessage =
   | ApiRequestMessage
   | ApiResponseMessage
@@ -166,7 +179,8 @@ export type RelayMessage =
   | TunnelOpenMessage
   | TunnelOpenAckMessage
   | TunnelDataMessage
-  | TunnelCloseMessage;
+  | TunnelCloseMessage
+  | ClusterCockpitReplyMessage;
 
 export interface GitRemote {
   name: string;
@@ -357,6 +371,27 @@ const TierInfoMessageSchema = z.object({
   maxActiveClusters: z.number().optional(),
 });
 
+// Cloud → cluster acknowledgement for every gate frame. Currently-known values
+// (informational only, not enforced — Q2=A open strings):
+//   frameType: 'gate-open' | 'gate-outcome' | 'unknown'
+//   wroteDoc:  'created' | 'rebound'
+// .passthrough() preserves unknown top-level fields (Q1=A / FR-002) so future
+// cloud additions do not require a coordinated cluster release.
+const ClusterCockpitReplyMessageSchema = z
+  .object({
+    type: z.literal('cluster.cockpit.reply'),
+    timestamp: z.string(),
+    frameId: z.string().nullable(),
+    frameType: z.string(),
+    gateId: z.string().min(1),
+    gateKey: z.string().optional(),
+    accepted: z.boolean(),
+    reason: z.string().optional(),
+    priorStatus: z.string().optional(),
+    wroteDoc: z.string().optional(),
+  })
+  .passthrough();
+
 export const RelayMessageSchema = z.discriminatedUnion('type', [
   ApiRequestMessageSchema,
   ApiResponseMessageSchema,
@@ -376,6 +411,7 @@ export const RelayMessageSchema = z.discriminatedUnion('type', [
   TunnelOpenAckMessageSchema,
   TunnelDataMessageSchema,
   TunnelCloseMessageSchema,
+  ClusterCockpitReplyMessageSchema,
 ]);
 
 export { ClusterMetadataSchema, GitRemoteSchema };

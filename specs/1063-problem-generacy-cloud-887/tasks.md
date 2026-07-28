@@ -10,7 +10,7 @@
 
 ## Phase 1: Schema
 
-- [ ] T001 [US2] Extend `packages/cluster-relay/src/messages.ts` with the new
+- [X] T001 [US2] Extend `packages/cluster-relay/src/messages.ts` with the new
   wire shape:
   1. Add `ClusterCockpitReplyMessage` interface next to the other 18 message
      interfaces (around `messages.ts:149`, after `TierInfoMessage`). Fields per
@@ -35,7 +35,7 @@
 ## Phase 2: Router
 <!-- Sequential: Phase 1 must land first — Phase 2 references `message.type === 'cluster.cockpit.reply'` narrowing that only exists after the schema is added -->
 
-- [ ] T002 [US1] Add short-circuit branch in
+- [X] T002 [US1] Add short-circuit branch in
   `packages/cluster-relay/src/relay.ts` inside `ws.on('message', ...)`,
   **after** the existing `api_request` short-circuit at `relay.ts:315-322`
   and **before** the `messageHandlers` fanout at `:324-331`. Placement must
@@ -68,7 +68,7 @@
 
 ## Phase 3: Tests
 
-- [ ] T003 [P] [US2] Add parse-level cases to
+- [X] T003 [P] [US2] Add parse-level cases to
   `packages/cluster-relay/tests/messages.test.ts`:
   - Parses a valid `cluster.cockpit.reply` with `accepted: true` and
     `wroteDoc: 'created'` — returns non-null.
@@ -83,7 +83,7 @@
     from a `type: 'cluster.cockpit.reply'` payload — bad-payload signalling
     preserved via the existing `Invalid relay message, skipping` warn branch.
 
-- [ ] T004 [P] [US1] Add router-level cases to
+- [X] T004 [P] [US1] Add router-level cases to
   `packages/cluster-relay/tests/relay.test.ts` using the existing
   WebSocketServer test harness pattern:
   - **SC-001**: feed `cluster.cockpit.reply { accepted: true }`; assert
@@ -100,7 +100,7 @@
 
 ## Phase 4: Changeset
 
-- [ ] T005 [US1] Create `.changeset/1063-cluster-cockpit-reply.md` with a
+- [X] T005 [US1] Create `.changeset/1063-cluster-cockpit-reply.md` with a
   `minor` bump on `@generacy-ai/cluster-relay`. Content per plan.md:
 
   ```md
@@ -121,7 +121,7 @@
 
 ## Phase 5: Verification
 
-- [ ] T006 [US1,US2] Run the full `packages/cluster-relay` test suite
+- [X] T006 [US1,US2] Run the full `packages/cluster-relay` test suite
   (`pnpm --filter @generacy-ai/cluster-relay test`) and verify:
   - All new cases from T003 and T004 pass.
   - **SC-004 regression**: all pre-existing `messages.test.ts` and
