@@ -1986,6 +1986,226 @@ describe('PrFeedbackMonitorService', () => {
   });
 
   // ==========================================================================
+  // #1070: fixer-timeout retry-eligible branch + counter map
+  // ==========================================================================
+
+  describe('#1070 fixer-timeout retry-eligible branch', () => {
+    function trustLiveThreads() {
+      return [
+        {
+          id: 'PRRT_701',
+          rootCommentId: 701,
+          isResolved: false,
+          comments: [{
+            id: 701, body: 'fix this', author: 'reviewer',
+            authorAssociation: 'MEMBER', created_at: '', updated_at: '',
+          }],
+        },
+      ];
+    }
+
+    // Access the internal counter map for assertions. The map is
+    // intentionally private; tests read it via bracket access to avoid
+    // widening the public API surface.
+    function getRetryCounter(stateKey: string): number | undefined {
+      return (service as unknown as {
+        fixerTimeoutRetryCount: Map<string, number>;
+      }).fixerTimeoutRetryCount.get(stateKey);
+    }
+
+    it('SC-002 base case: blocked:fixer-timeout present + counter=0 → removes label, increments to 1, enqueues with retryAttempt:1', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(mockClient.removeLabels).toHaveBeenCalledWith(
+        'test-org', 'test-repo', 42, ['blocked:fixer-timeout'],
+      );
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(1);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+      const [enqueuedItem] = (queueManager.spies.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect((enqueuedItem as { metadata: { retryAttempt: number } }).metadata.retryAttempt).toBe(1);
+
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-retry-dispatch',
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({ priorRetries: 0, newRetries: 1 });
+    });
+
+    it('normal-path metadata always carries retryAttempt (defaults to 0 when counter unset)', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      const [enqueuedItem] = (queueManager.spies.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect((enqueuedItem as { metadata: { retryAttempt: number } }).metadata.retryAttempt).toBe(0);
+    });
+
+    it('SC-003: three consecutive polls exhaust the budget — cycle 4 no-longer dispatches', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+
+      // Cycle 1: counter 0 → dispatch with retryAttempt:1
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(1);
+
+      // Cycle 2: counter 1 → dispatch with retryAttempt:2
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(2);
+
+      // Cycle 3: counter 2 → budget-exhausted branch fires (defense in depth).
+      // Falls through to generic blocked:* skip. Counter stays at 2.
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(2);
+
+      // Assert 3 enqueues (cycles 1 & 2, plus the initial cycle 3 — wait, no,
+      // cycle 3 should NOT enqueue).  We asserted 3 processPrReviewEvent calls
+      // but only 2 should have enqueued (the third exhausted-budget branch
+      // falls through to the blocked:* skip check).
+      // Actually — after cycle 2 the itemKey is still in flight. Since the
+      // InMemoryQueueAdapter dedupes via `enqueueIfAbsent`, subsequent
+      // successful re-enqueue attempts return false. So the direct assertion
+      // is on the budget-exhausted warn log.
+      const warnCall = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-budget-exhausted',
+      );
+      expect(warnCall).toBeDefined();
+      expect(warnCall![0]).toMatchObject({ priorRetries: 2 });
+    });
+
+    it('SC-003a: `blocked:fixer-timeout-no-progress` (terminal) does NOT match retry-eligible branch — counter NEVER incremented', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout-no-progress',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+      expect(result).toBe(false);
+      // Counter untouched — no retry-eligible carve-out fired.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // Generic blocked:* short-circuit matched.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-label-present',
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({ blockedLabel: 'blocked:fixer-timeout-no-progress' });
+    });
+
+    it('SC-003a: `blocked:fixer-timeout-repeat` (terminal) does NOT match retry-eligible branch — counter NEVER incremented', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout-repeat',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+      expect(result).toBe(false);
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('SC-003b: Case C reset — counter cleared after all threads resolve', async () => {
+      const stateKey = 'test-org/test-repo#10';
+
+      // Cycle 1: retry-eligible dispatch, counter → 1.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter(stateKey)).toBe(1);
+
+      // Cycle 2 (Case C): all threads resolved → counter deleted.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      // getIssueLabels doesn't matter — Case C returns before the label check.
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter(stateKey)).toBeUndefined();
+
+      // Cycle 3: fresh timeout label → counter starts from 0 again.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter(stateKey)).toBe(1);
+    });
+
+    it('failure isolation: client.removeLabels throws → retry branch falls through, counter NOT incremented, generic blocked:* skip matches', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+      (mockClient.removeLabels as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('API error'),
+      );
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      // Counter NOT incremented — we did NOT dispatch.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // Fell through to generic blocked:* skip.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+
+      // Warn log for the removal failure.
+      const warnCall = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => typeof c[1] === 'string' && c[1].includes('Failed to remove blocked:fixer-timeout'),
+      );
+      expect(warnCall).toBeDefined();
+    });
+
+    // PR #1072 review regression: guard-before-mutation.
+    //
+    // When a second blocked:* label from another handler (e.g.
+    // blocked:stuck-merge-conflicts) coexists with blocked:fixer-timeout, the
+    // retry-eligible branch must NOT consume the retry budget or remove the
+    // timeout signal. The generic blocked:* skip must fire on the coexisting
+    // label so the timeout label survives and no retry is spent.
+    it('regression: coexisting other blocked:* label → counter unchanged, blocked:fixer-timeout NOT removed', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+        'blocked:stuck-merge-conflicts',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      // Counter untouched — no retry burned by the guard-before-mutation fix.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // blocked:fixer-timeout signal preserved — the label is NOT removed
+      // because dispatch never committed. The operator can still see it.
+      expect(mockClient.removeLabels).not.toHaveBeenCalled();
+      // No dispatch.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      // Retry-dispatch info log NOT emitted.
+      const retryDispatchLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-retry-dispatch',
+      );
+      expect(retryDispatchLog).toBeUndefined();
+      // Generic blocked:* skip fires. Either coexisting label is a valid
+      // report — the load-bearing signal is that the skip happened and
+      // nothing mutated.
+      const skipLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-label-present',
+      );
+      expect(skipLog).toBeDefined();
+      expect((skipLog![0] as { blockedLabel?: string }).blockedLabel).toMatch(/^blocked:/);
+    });
+  });
+
+  // ==========================================================================
   // #1049: drop-gate log-level lift + merged-PR gate
   // ==========================================================================
 

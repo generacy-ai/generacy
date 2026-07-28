@@ -40,6 +40,20 @@ export interface PrFeedbackMetadata {
   prNumber: number;
   /** IDs of unresolved review threads at detection time */
   reviewThreadIds: number[];
+  /**
+   * #1070 D-1: Number of auto-retries dispatched so far for this trigger,
+   * INCLUDING this dispatch. Original cycle = 0. First auto-retry = 1.
+   * Second auto-retry = 2 (last permitted per Q5=C max=2).
+   *
+   * Written by PrFeedbackMonitorService at every enqueue (both the normal
+   * path and the retry-eligible branch). Read by PrFeedbackHandler on the
+   * timeout+hasChanges disposition to decide between
+   * `blocked:fixer-timeout` (< 2) and `blocked:fixer-timeout-repeat` (>= 2).
+   *
+   * Optional for backwards compatibility with in-flight QueueItems queued
+   * before this PR lands. Handler reads `?? 0`.
+   */
+  retryAttempt?: number;
 }
 
 /**
