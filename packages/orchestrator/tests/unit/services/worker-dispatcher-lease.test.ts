@@ -26,6 +26,9 @@ function createMockQueueManager(
     enqueue: vi.fn().mockResolvedValue(undefined),
     claim: vi.fn().mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    // #1060 PR #1065 review finding 2 — lease-expiry routes through
+    // requeueForResume(), which preserves attemptCount.
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),
@@ -277,7 +280,7 @@ describe('WorkerDispatcher lease integration', () => {
   // 4. Heartbeat expiry cancels worker and re-enqueues with resume priority
   // -------------------------------------------------------------------------
   describe('heartbeat expiry cancels worker and re-enqueues', () => {
-    it('should cancel worker and re-enqueue with priority 0 when lease heartbeat expires', async () => {
+    it('should cancel worker and re-enqueue via requeueForResume() when lease heartbeat expires (#1060, PR #1065 finding 2)', async () => {
       dispatcher.setLeaseManager(leaseManager);
 
       // Handler that never resolves (long-running worker)
@@ -317,22 +320,28 @@ describe('WorkerDispatcher lease integration', () => {
       // Heartbeat interval is 100ms, so 3 failures = ~300ms + some buffer
       await tick(450);
 
-      // lease:expired should have been emitted and handled —
-      // worker should be removed and item re-enqueued
+      // lease:expired should have been emitted and handled — worker removed
+      // and item re-pended via requeueForResume() (PR #1065 finding 2 —
+      // lease expiry is an infrastructure event and must NOT consume a
+      // retry attempt as release() would).
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
 
-      expect(queue.enqueue).toHaveBeenCalledWith(
+      expect(queue.requeueForResume).toHaveBeenCalledWith(
+        expect.any(String),
         expect.objectContaining({
           owner: 'test-org',
           repo: 'test-repo',
           issueNumber: 42,
-          priority: 0,
-          queueReason: 'resume',
         }),
       );
+      // enqueue() must NOT be called on this path (requeueForResume covers re-pending).
+      expect(queue.enqueue).not.toHaveBeenCalled();
+      // release() must NOT be called on this path (finding 2 — it would
+      // consume an attempt and could dead-letter after 3 lease expiries).
+      expect(queue.release).not.toHaveBeenCalled();
     });
 
-    it('should not re-enqueue if duplicate already in queue', async () => {
+    it('should call requeueForResume() unconditionally on lease expiry (no duplicate check — atomic in Redis) (#1060, PR #1065 finding 2)', async () => {
       dispatcher.setLeaseManager(leaseManager);
 
       handler.mockImplementation(() => new Promise<void>(() => {}));
@@ -341,7 +350,10 @@ describe('WorkerDispatcher lease integration', () => {
         .mockResolvedValueOnce({ ...sampleItem })
         .mockResolvedValue(null);
 
-      // Simulate duplicate already in queue
+      // Even if getQueueItems reports a "duplicate", requeueForResume() is
+      // still called; the old duplicate-check path is removed in favor of
+      // requeueForResume()'s atomic HDEL+ZADD sequence with a reaper-race
+      // null-guard.
       (queue.getQueueItems as ReturnType<typeof vi.fn>).mockResolvedValue([
         { item: { ...sampleItem }, score: 1000 },
       ]);
@@ -367,13 +379,18 @@ describe('WorkerDispatcher lease integration', () => {
 
       await tick(450);
 
-      // Worker removed but enqueue should NOT be called (duplicate exists)
+      // Worker removed. requeueForResume() called regardless of "duplicate" state.
       expect(dispatcher.getActiveWorkerCount()).toBe(0);
+      expect(queue.requeueForResume).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ issueNumber: 42 }),
+      );
       expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(queue.release).not.toHaveBeenCalled();
 
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ itemKey: 'test-org/test-repo#42' }),
-        'Skipped re-enqueue (duplicate already in queue)',
+        'Re-enqueued via requeueForResume() after lease expiry (attemptCount preserved)',
       );
     });
   });

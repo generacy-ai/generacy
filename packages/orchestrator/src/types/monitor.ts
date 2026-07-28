@@ -227,7 +227,29 @@ export interface MonitorState {
  * Queue adapter interface for enqueuing items
  */
 export interface QueueAdapter {
-  enqueue(item: QueueItem): Promise<void>;
+  /**
+   * Atomically enqueue an item, dropping if its `itemKey` is already in
+   * flight (pending or claimed by any worker).
+   *
+   * Invariant: after `enqueue(item)` returns `true`, `item.itemKey` MUST
+   * be a member of the in-flight index (`orchestrator:queue:in-flight-items`
+   * on the Redis adapter, `inFlightSet` on the in-memory adapter). Every
+   * implementation of this interface is bound to the end-to-end equality
+   * `in-flight = pending ∪ claimed` at every intermediate step of the
+   * `enqueue → claim → release-retry → reclaim-orphan → complete` sequence.
+   *
+   * ERROR contract (PR #1065 review finding 4): implementations MUST NOT
+   * conflate "already in flight" with "transport error". On transport
+   * failure, this method throws — callers that dedup on a `false` return
+   * would otherwise silently drop a real intake on a transient Redis blip.
+   * Sibling `enqueueIfAbsent` intentionally swallows errors (its callers
+   * treat the two the same way); `enqueue`'s caller does not.
+   *
+   * @returns true if enqueued, false if dropped because the itemKey is
+   *          already in flight.
+   * @throws  the underlying transport error on Redis / adapter failure.
+   */
+  enqueue(item: QueueItem): Promise<boolean>;
 }
 
 /**
@@ -284,8 +306,34 @@ export interface SerializedQueueItem extends QueueItem {
 export interface QueueManager extends QueueAdapter {
   /** Atomically claim the highest-priority item for a worker */
   claim(workerId: string): Promise<QueueItem | null>;
-  /** Release a claimed item back to the pending queue */
+  /**
+   * Release a claimed item back to the pending queue.
+   *
+   * Consumes a retry attempt (`attemptCount++`) and dead-letters at
+   * `maxRetries`. INTENDED for handler-failure paths only. For
+   * infrastructure events (lease expiry, cluster restart) that must NOT
+   * consume an attempt, use `requeueForResume`.
+   *
+   * #1060 PR #1065 review finding 1 — the retry branch is null-guarded:
+   * if the claim hash entry is already gone (reaper race), the method
+   * returns without a `ZADD pending`, avoiding a duplicate pending
+   * member for the itemKey.
+   */
   release(workerId: string, item: QueueItem): Promise<void>;
+  /**
+   * #1060 PR #1065 review finding 2 — re-pend after an infrastructure
+   * event (lease expiry) WITHOUT consuming a retry attempt.
+   *
+   * `attemptCount` is preserved verbatim; the item re-enters pending at
+   * `resume` priority. In-flight-SET membership is preserved (the item
+   * was and remains in flight — SREM is never issued). Reaper-race
+   * safe: if the claim hash entry is already gone, returns without a
+   * `ZADD pending`, avoiding a duplicate pending member.
+   *
+   * Never throws; Redis errors are logged at `warn` and swallowed
+   * (matches `release()` / `complete()` error contract).
+   */
+  requeueForResume(workerId: string, item: QueueItem): Promise<void>;
   /** Mark a claimed item as complete and remove it */
   complete(workerId: string, item: QueueItem): Promise<void>;
   /** Get the number of items in the pending queue */

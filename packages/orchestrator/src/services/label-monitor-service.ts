@@ -425,13 +425,34 @@ export class LabelMonitorService {
     }
 
     // type === 'process'
-    await this.queueManager.enqueue(queueItem);
-    this.logger.info(
-      { owner, repo, issueNumber, command: queueItem.command, workflowName },
-      'Issue enqueued',
-    );
+    // #1060 / FR-003 (PR #1065 review finding 4): `enqueue()` returns a
+    // boolean but THROWS on transport error. That distinction is
+    // load-bearing — a `false` return means "already in flight" (the
+    // enqueue's intent is satisfied, safe to `markProcessed` for dedup),
+    // but a transport error means the intake was NOT persisted and we
+    // must NOT `markProcessed` (otherwise the next poll's `isDuplicate`
+    // gate skips it and the issue is silently dropped).
+    let enqueued: boolean;
+    try {
+      enqueued = await this.queueManager.enqueue(queueItem);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber, workflowName },
+        'Queue enqueue errored — leaving dedup state unmarked so the next poll retries',
+      );
+      return false;
+    }
+    if (enqueued) {
+      this.logger.info(
+        { owner, repo, issueNumber, command: queueItem.command, workflowName },
+        'Issue enqueued',
+      );
+    }
 
-    // Mark as processed for dedup
+    // Mark as processed for dedup. Reached on:
+    //   - enqueued === true  (fresh enqueue)
+    //   - enqueued === false (already in flight — dedup intent satisfied)
+    // NOT reached on transport error (see try/catch above).
     await this.phaseTracker.markProcessed(owner, repo, issueNumber, parsedName);
 
     // Manage labels via GitHubClient.

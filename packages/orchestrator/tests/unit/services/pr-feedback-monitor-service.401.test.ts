@@ -16,11 +16,12 @@ function createMockLogger() {
 
 function createMockQueueManager(): QueueManager {
   return {
-    enqueue: vi.fn().mockResolvedValue(undefined),
+    enqueue: vi.fn().mockResolvedValue(true),
     enqueueIfAbsent: vi.fn().mockResolvedValue(true),
     hasInFlight: vi.fn().mockResolvedValue(false),
     claim: vi.fn().mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),

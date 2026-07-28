@@ -26,6 +26,10 @@ function createMockRedis(overrides: Record<string, unknown> = {}) {
     scan: vi.fn().mockResolvedValue(['0', []]),
     defineCommand: vi.fn(),
     claimItem: vi.fn().mockResolvedValue(null),
+    // #1060 PR #1065 review findings 5+6 — enqueue() and enqueueIfAbsent()
+    // share the single `enqueueIfAbsent` command (byte-identical Lua, one
+    // registration). The previously-separate `enqueueItem` command was
+    // deleted; regressing would require re-adding it.
     enqueueIfAbsent: vi.fn().mockResolvedValue(1),
     ...overrides,
   };
@@ -79,21 +83,26 @@ describe('RedisQueueAdapter', () => {
   });
 
   describe('enqueue', () => {
-    it('should add item to sorted set with correct priority score', async () => {
+    it('should invoke enqueueIfAbsent command with correct itemKey, priority, and serialized payload (#1060, PR #1065 findings 5+6)', async () => {
       const redis = createMockRedis();
       const adapter = new RedisQueueAdapter(redis, logger);
 
-      await adapter.enqueue(sampleItem);
+      const result = await adapter.enqueue(sampleItem);
+      expect(result).toBe(true);
 
-      expect(redis.zadd).toHaveBeenCalledWith(
+      // 2 keys (pending + in-flight) + 3 argv (itemKey + priority + payload).
+      // NOT the deleted 3-key `enqueueItem` variant (finding 5: CROSSSLOT-safe).
+      expect(redis.enqueueIfAbsent).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        expect.any(Number),
-        expect.any(String)
+        'orchestrator:queue:in-flight-items',
+        'test-org/test-repo#42',
+        expect.any(String),
+        expect.any(String),
       );
 
-      // Verify the serialized payload includes attemptCount and itemKey
-      const serializedArg = (redis.zadd as ReturnType<typeof vi.fn>).mock
-        .calls[0][2] as string;
+      // Verify the serialized payload includes attemptCount and itemKey.
+      const serializedArg = (redis.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock
+        .calls[0][4] as string;
       const parsed = JSON.parse(serializedArg) as SerializedQueueItem;
       expect(parsed.attemptCount).toBe(0);
       expect(parsed.itemKey).toBe('test-org/test-repo#42');
@@ -118,24 +127,137 @@ describe('RedisQueueAdapter', () => {
           repo: 'test-repo',
           issue: 42,
           priority: expect.any(Number),
+          itemKey: 'test-org/test-repo#42',
         },
-        'Item enqueued to Redis sorted set'
+        'Item enqueued to Redis sorted set (in-flight-checked)'
       );
     });
 
-    it('should log warning and not throw on Redis error', async () => {
+    it('should THROW on Redis error (PR #1065 review finding 4 — must not conflate transport error with in-flight drop)', async () => {
       const redis = createMockRedis({
-        zadd: vi.fn().mockRejectedValue(new Error('Connection refused')),
+        enqueueIfAbsent: vi.fn().mockRejectedValue(new Error('Connection refused')),
       });
       const adapter = new RedisQueueAdapter(redis, logger);
 
-      // Should not throw
-      await adapter.enqueue(sampleItem);
+      // Contract change: rethrow instead of swallow. Callers on the
+      // intake path (label-monitor-service) need to distinguish "already
+      // in flight" (safe to markProcessed for dedup) from "transport
+      // error" (must NOT markProcessed — the next poll must retry).
+      await expect(adapter.enqueue(sampleItem)).rejects.toThrow('Connection refused');
+    });
 
-      expect(logger.warn).toHaveBeenCalledWith(
-        { err: expect.any(Error), itemKey: 'test-org/test-repo#42' },
-        'Redis error in enqueue, item not added to queue'
+    it('should return false when enqueueIfAbsent reports item already in flight', async () => {
+      const redis = createMockRedis({
+        enqueueIfAbsent: vi.fn().mockResolvedValue(0),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      const result = await adapter.enqueue(sampleItem);
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('release — reaper-race null-guard (#1060 PR #1065 review finding 1)', () => {
+    it('should NOT re-pend to ZSET when claim hash is already gone (reaper HDEL raced)', async () => {
+      // Simulate the exact sequence from the review comment: reaper's
+      // RECLAIM_ORPHAN_SCRIPT already HDEL'd the claim + re-pended it;
+      // lease-expiry (via handleLeaseExpired → release()) fires second.
+      // The old code would ZADD a SECOND distinct pending member.
+      const redis = createMockRedis({
+        hget: vi.fn().mockResolvedValue(null),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.release('worker-1', sampleItem);
+
+      // Zero ZADDs — the null-guard bails before the retry branch runs.
+      expect(redis.zadd).not.toHaveBeenCalled();
+      // Heartbeat is still best-effort cleared (independent lifetime).
+      expect(redis.del).toHaveBeenCalledWith('orchestrator:worker:worker-1:heartbeat');
+      // Structured log line for the race path (SC-002 observability).
+      expect(logger.info).toHaveBeenCalledWith(
+        { workerId: 'worker-1', itemKey: 'test-org/test-repo#42' },
+        'release() called on already-cleared claim (reaper race) — skipping re-pend to avoid duplicate pending member',
       );
+    });
+  });
+
+  describe('requeueForResume (#1060 PR #1065 review finding 2)', () => {
+    it('should re-pend at resume priority WITHOUT bumping attemptCount', async () => {
+      // Preserve attemptCount verbatim: lease expiry is an infrastructure
+      // event and MUST NOT count toward dead-letter (default maxRetries=3).
+      const serialized = buildSerializedItem(sampleItem, 2);
+      const redis = createMockRedis({
+        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.requeueForResume('worker-1', sampleItem);
+
+      // ZADD to PENDING (not dead-letter) even though attemptCount=2 was
+      // the last-execution attempt count and would-be-3-after-release
+      // would have dead-lettered.
+      expect(redis.zadd).toHaveBeenCalledWith(
+        'orchestrator:queue:pending',
+        expect.any(Number),
+        expect.any(String),
+      );
+      const requeuedPayload = JSON.parse(
+        (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][2] as string,
+      ) as SerializedQueueItem;
+      // attemptCount preserved verbatim (2, not incremented to 3).
+      expect(requeuedPayload.attemptCount).toBe(2);
+      expect(requeuedPayload.queueReason).toBe('resume');
+
+      // Resume priority is 0.x (highest priority tier).
+      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      expect(score).toBeGreaterThan(0);
+      expect(score).toBeLessThan(1);
+    });
+
+    it('should NEVER dead-letter, even at attemptCount that would normally dead-letter via release()', async () => {
+      // Contract enforcement: three lease expiries on the same item must
+      // not accumulate into dead-letter. Sim attemptCount=99 to make the
+      // point unmissable.
+      const serialized = buildSerializedItem(sampleItem, 99);
+      const redis = createMockRedis({
+        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.requeueForResume('worker-1', sampleItem);
+
+      const zaddCalls = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls;
+      // Exactly one ZADD, to pending — no dead-letter ZADD.
+      expect(zaddCalls).toHaveLength(1);
+      expect(zaddCalls[0][0]).toBe('orchestrator:queue:pending');
+    });
+
+    it('should null-guard the claim-hash read (same reaper race as release())', async () => {
+      const redis = createMockRedis({
+        hget: vi.fn().mockResolvedValue(null),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.requeueForResume('worker-1', sampleItem);
+
+      // No ZADD — reaper already re-pended it, no duplicate member created.
+      expect(redis.zadd).not.toHaveBeenCalled();
+    });
+
+    it('should preserve in-flight-SET membership (never SREM)', async () => {
+      // The item was and remains in flight (only its claim moves back to
+      // pending). SREM would break the in-flight = pending ∪ claimed
+      // invariant that #1060 exists to enforce.
+      const serialized = buildSerializedItem(sampleItem, 0);
+      const redis = createMockRedis({
+        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.requeueForResume('worker-1', sampleItem);
+
+      expect(redis.srem).not.toHaveBeenCalled();
     });
   });
 
@@ -295,7 +417,7 @@ describe('RedisQueueAdapter', () => {
       expect(requeuedPayload.queueReason).toBe('retry');
     });
 
-    it('should re-queue with attemptCount 0 when no claimed data exists', async () => {
+    it('should NOT re-queue when no claimed data exists (PR #1065 review finding 1 — reaper-race null-guard)', async () => {
       const redis = createMockRedis({
         hget: vi.fn().mockResolvedValue(null),
       });
@@ -303,18 +425,12 @@ describe('RedisQueueAdapter', () => {
 
       await adapter.release('worker-1', sampleItem);
 
-      // attemptCount starts at 0 when no claimed data, re-queued with retry priority
-      expect(redis.zadd).toHaveBeenCalledWith(
-        'orchestrator:queue:pending',
-        expect.any(Number),
-        expect.any(String)
-      );
-
-      const requeuedPayload = JSON.parse(
-        (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][2] as string
-      ) as SerializedQueueItem;
-      expect(requeuedPayload.attemptCount).toBe(0);
-      expect(requeuedPayload.queueReason).toBe('retry');
+      // Contract change: previously re-queued with attemptCount 0.
+      // Now bails to prevent duplicate pending member — the null return
+      // means another actor (reaper's RECLAIM_ORPHAN_SCRIPT) already
+      // re-pended it, and a naked ZADD here would create a SECOND
+      // distinct pending member for the same itemKey.
+      expect(redis.zadd).not.toHaveBeenCalled();
     });
 
     it('should move to dead-letter set after maxRetries exceeded', async () => {
@@ -720,7 +836,11 @@ describe('RedisQueueAdapter', () => {
 
       await adapter.enqueue({ ...sampleItem, queueReason: 'resume' });
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      // #1060 PR #1065 findings 5+6: enqueue routes through the shared
+      // enqueueIfAbsent command (2 keys + 3 argv → priority at index 3).
+      const score = Number(
+        (redis.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0][3] as string,
+      );
       expect(score).toBeGreaterThan(0);
       expect(score).toBeLessThan(1);
     });
@@ -731,7 +851,9 @@ describe('RedisQueueAdapter', () => {
 
       await adapter.enqueue({ ...sampleItem, queueReason: 'retry' });
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const score = Number(
+        (redis.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0][3] as string,
+      );
       expect(score).toBeGreaterThan(1);
       expect(score).toBeLessThan(2);
     });
@@ -744,7 +866,9 @@ describe('RedisQueueAdapter', () => {
       await adapter.enqueue({ ...sampleItem, queueReason: 'new' });
       const after = Date.now();
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const score = Number(
+        (redis.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0][3] as string,
+      );
       expect(score).toBeGreaterThanOrEqual(before);
       expect(score).toBeLessThanOrEqual(after);
     });
@@ -757,8 +881,8 @@ describe('RedisQueueAdapter', () => {
       await adapter.enqueue({ ...sampleItem, issueNumber: 2, queueReason: 'retry' });
       await adapter.enqueue({ ...sampleItem, issueNumber: 3, queueReason: 'new' });
 
-      const scores = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls.map(
-        (call: unknown[]) => call[1] as number
+      const scores = (redis.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call: unknown[]) => Number(call[3] as string),
       );
       expect(scores[0]).toBeLessThan(scores[1]); // resume < retry
       expect(scores[1]).toBeLessThan(scores[2]); // retry < new
@@ -787,7 +911,9 @@ describe('RedisQueueAdapter', () => {
       await adapter.enqueue({ ...sampleItem }); // no queueReason
       const after = Date.now();
 
-      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      const score = Number(
+        (redis.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0][3] as string,
+      );
       expect(score).toBeGreaterThanOrEqual(before);
       expect(score).toBeLessThanOrEqual(after);
     });

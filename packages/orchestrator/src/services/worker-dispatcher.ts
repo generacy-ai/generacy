@@ -257,24 +257,29 @@ export class WorkerDispatcher {
     this.workerLeases.delete(targetWorkerId);
     this.activeWorkers.delete(targetWorkerId);
 
-    // Re-enqueue with resume priority (0) — check for duplicates first
-    const existingItems = await this.queue.getQueueItems(0, 100);
+    // #1060 PR #1065 review findings 1+2 — use `requeueForResume()`, not
+    // `release()`:
+    //   - Finding 2: `release()` increments `attemptCount` and dead-letters
+    //     at `maxRetries` (default 3). Lease expiry is an infrastructure
+    //     event (relay disconnect, cluster restart, worker OOM-kill) and
+    //     MUST NOT consume a retry attempt — otherwise three unrelated
+    //     restarts would silently dead-letter a blameless issue.
+    //   - Finding 1: both `release()` and `requeueForResume()` now
+    //     null-guard the claim-hash read to avoid a duplicate pending
+    //     member when the reaper HDEL'd the claim first (the reaper's
+    //     re-pend uses a DIFFERENT payload string, so a raw `ZADD` here
+    //     would create a second distinct ZSET member for the same
+    //     itemKey → two concurrent workers on one issue).
+    //   - Priority: `requeueForResume` re-pends at `resume` priority
+    //     (the correct tier for an infrastructure interruption); the
+    //     `release()` retry-branch used `retry` priority, which was the
+    //     wrong tier for this path.
     const itemKey = `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}`;
-    const isDuplicate = existingItems.some(
-      (qi) => `${qi.item.owner}/${qi.item.repo}#${qi.item.issueNumber}` === itemKey,
+    await this.queue.requeueForResume(targetWorkerId, worker.item);
+    this.logger.info(
+      { itemKey, workerId: targetWorkerId },
+      'Re-enqueued via requeueForResume() after lease expiry (attemptCount preserved)',
     );
-
-    if (!isDuplicate) {
-      await this.queue.enqueue({
-        ...worker.item,
-        priority: 0, // Resume priority (highest)
-        queueReason: 'resume',
-        enqueuedAt: new Date().toISOString(),
-      });
-      this.logger.info({ itemKey }, 'Re-enqueued with resume priority after lease expiry');
-    } else {
-      this.logger.info({ itemKey }, 'Skipped re-enqueue (duplicate already in queue)');
-    }
   }
 
   private async pollLoop(signal: AbortSignal): Promise<void> {
