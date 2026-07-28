@@ -476,13 +476,407 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #883: timeout → Disposition B → blocked label added
+      // #1070 FR-002 / B5: timeout with partial push and no prior retries
+      // → retry-eligible `blocked:fixer-timeout` (not `blocked:stuck-feedback-loop`
+      // as in the pre-#1070 collapsed branch).
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:fixer-timeout'],
+      );
+      expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
         ['blocked:stuck-feedback-loop'],
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // #1070 T041: four-branch disposition matrix (B4/B5/B6 + preserved B1/B2/B3).
+  //
+  // Precondition tuple (success, hasChanges, timedOut, retryAttempt) drives:
+  //   (a) which specific label the handler applies (github.addLabels),
+  //   (b) the disposition field on the warn log line,
+  //   (c) `agent:in-progress` cleared via the shared finally (FR-010),
+  //   (d) `waiting-for:address-pr-feedback` NOT removed (FR-012).
+  // ---------------------------------------------------------------------------
+  describe('#1070 disposition matrix', () => {
+    // Helper: assert the shared finally cleared agent:in-progress AND that
+    // waiting-for:address-pr-feedback was NOT touched by any branch (FR-010,
+    // FR-012).
+    function expectSharedFinallyInvariants() {
+      // FR-012: waiting-for:address-pr-feedback MUST NOT be removed.
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      // FR-010: `agent:in-progress` MUST be cleared by the shared finally.
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
+    }
+
+    function findDispositionWarn(disposition: string): unknown {
+      const warnCalls = (mockLogger.warn as ReturnType<typeof vi.fn>).mock.calls;
+      const match = warnCalls.find(
+        (call) => (call[0] as { disposition?: string } | undefined)?.disposition === disposition,
+      );
+      return match?.[0];
+    }
+
+    describe('B4: timedOut && !hasChanges → blocked:fixer-timeout-no-progress', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('applies terminal no-progress label regardless of retryAttempt', async () => {
+        const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1], retryAttempt: 1 });
+        const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+        mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+          createMockComment(1, false),
+        ]);
+
+        // Timeout with NO pushed changes.
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        let exitResolve!: (code: number | null) => void;
+        const exitPromise = new Promise<number | null>((resolve) => {
+          exitResolve = resolve;
+        });
+        const handle: ChildProcessHandle = {
+          stdout: stdout as unknown as NodeJS.ReadableStream,
+          stderr: stderr as unknown as NodeJS.ReadableStream,
+          pid: 12345,
+          kill: vi.fn((signal?: string) => {
+            if (signal === 'SIGKILL') exitResolve(143);
+            return true;
+          }),
+          exitPromise,
+        };
+        spawnFn.mockReturnValue(handle);
+
+        // No changes: hasChanges === false.
+        mockGitHub.getStatus = vi.fn().mockResolvedValue({
+          has_changes: false, staged: [], unstaged: [], untracked: [],
+        });
+
+        const p = handler.handle(item, checkoutPath);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(5_000);
+        await p;
+
+        // Terminal label applied.
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout-no-progress'],
+        );
+        // NOT any other label.
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout-repeat'],
+        );
+
+        const payload = findDispositionWarn('timeout-no-progress') as
+          { disposition: string; cliCompleted: boolean; retryAttempt: number } | undefined;
+        expect(payload?.disposition).toBe('timeout-no-progress');
+        expect(payload?.cliCompleted).toBe(false);
+        // retryAttempt logged for observability but doesn't influence the label.
+        expect(payload?.retryAttempt).toBe(1);
+
+        expectSharedFinallyInvariants();
+      });
+    });
+
+    describe('B5: timedOut && hasChanges && retryAttempt < 2 → blocked:fixer-timeout', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it.each([[0], [1]])('applies retry-eligible label at retryAttempt=%s', async (retryAttempt) => {
+        const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1], retryAttempt });
+        const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+        mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+          createMockComment(1, false),
+        ]);
+
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        let exitResolve!: (code: number | null) => void;
+        const exitPromise = new Promise<number | null>((resolve) => {
+          exitResolve = resolve;
+        });
+        const handle: ChildProcessHandle = {
+          stdout: stdout as unknown as NodeJS.ReadableStream,
+          stderr: stderr as unknown as NodeJS.ReadableStream,
+          pid: 12345,
+          kill: vi.fn((signal?: string) => {
+            if (signal === 'SIGKILL') exitResolve(143);
+            return true;
+          }),
+          exitPromise,
+        };
+        spawnFn.mockReturnValue(handle);
+
+        mockGitHub.getStatus = vi.fn().mockResolvedValue({
+          has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+        });
+
+        const p = handler.handle(item, checkoutPath);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(5_000);
+        await p;
+
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout-repeat'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
+        );
+
+        const payload = findDispositionWarn('fixer-timeout') as
+          { disposition: string; retryAttempt: number; cliCompleted: boolean } | undefined;
+        expect(payload?.disposition).toBe('fixer-timeout');
+        expect(payload?.retryAttempt).toBe(retryAttempt);
+        expect(payload?.cliCompleted).toBe(false);
+
+        expectSharedFinallyInvariants();
+      });
+    });
+
+    describe('B6: timedOut && hasChanges && retryAttempt >= 2 → blocked:fixer-timeout-repeat', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('applies terminal repeat label at retryAttempt=2', async () => {
+        const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1], retryAttempt: 2 });
+        const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+        mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+          createMockComment(1, false),
+        ]);
+
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        let exitResolve!: (code: number | null) => void;
+        const exitPromise = new Promise<number | null>((resolve) => {
+          exitResolve = resolve;
+        });
+        const handle: ChildProcessHandle = {
+          stdout: stdout as unknown as NodeJS.ReadableStream,
+          stderr: stderr as unknown as NodeJS.ReadableStream,
+          pid: 12345,
+          kill: vi.fn((signal?: string) => {
+            if (signal === 'SIGKILL') exitResolve(143);
+            return true;
+          }),
+          exitPromise,
+        };
+        spawnFn.mockReturnValue(handle);
+
+        mockGitHub.getStatus = vi.fn().mockResolvedValue({
+          has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+        });
+
+        const p = handler.handle(item, checkoutPath);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(5_000);
+        await p;
+
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout-repeat'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout'],
+        );
+
+        const payload = findDispositionWarn('fixer-timeout-repeat') as
+          { disposition: string; retryAttempt: number; cliCompleted: boolean } | undefined;
+        expect(payload?.disposition).toBe('fixer-timeout-repeat');
+        expect(payload?.retryAttempt).toBe(2);
+        expect(payload?.cliCompleted).toBe(false);
+
+        expectSharedFinallyInvariants();
+      });
+    });
+
+    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → blocked:stuck-feedback-loop (preserved)', () => {
+      it('B1 (success && !hasChanges): no-diff clean exit → blocked:stuck-feedback-loop', async () => {
+        const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+        const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+        mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+          createMockComment(1, false),
+        ]);
+
+        // Clean exit 0, but no diff.
+        const { handle } = createMockProcess(0, 50);
+        spawnFn.mockReturnValue(handle);
+        mockGitHub.getStatus = vi.fn().mockResolvedValue({
+          has_changes: false, staged: [], unstaged: [], untracked: [],
+        });
+
+        await handler.handle(item, checkoutPath);
+
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
+        );
+        // B4/B5/B6 labels NOT applied.
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout-no-progress'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout-repeat'],
+        );
+
+        const payload = findDispositionWarn('no-diff') as { disposition: string } | undefined;
+        expect(payload?.disposition).toBe('no-diff');
+
+        expectSharedFinallyInvariants();
+      });
+
+      it('B2 (!success && !timedOut && hasChanges): clean non-zero exit with commit → blocked:stuck-feedback-loop', async () => {
+        const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+        const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+        mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+          createMockComment(1, false),
+        ]);
+
+        // Non-zero exit but the CLI did NOT time out.
+        const { handle } = createMockProcess(1, 50);
+        spawnFn.mockReturnValue(handle);
+        mockGitHub.getStatus = vi.fn().mockResolvedValue({
+          has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+        });
+
+        await handler.handle(item, checkoutPath);
+
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
+        );
+        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, ['blocked:fixer-timeout'],
+        );
+
+        const payload = findDispositionWarn('push-failed') as { disposition: string } | undefined;
+        expect(payload?.disposition).toBe('push-failed');
+
+        expectSharedFinallyInvariants();
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // #1070 T042: SC-004 log-line audit — `'Successfully pushed changes to PR
+  // branch'` MUST NOT be emitted on the timeout+partial-push path.
+  // ---------------------------------------------------------------------------
+  describe('#1070 SC-004 log-line audit', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('does NOT emit "Successfully pushed changes to PR branch" when timedOut && hasChanges', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      let exitResolve!: (code: number | null) => void;
+      const exitPromise = new Promise<number | null>((resolve) => {
+        exitResolve = resolve;
+      });
+      const handle: ChildProcessHandle = {
+        stdout: stdout as unknown as NodeJS.ReadableStream,
+        stderr: stderr as unknown as NodeJS.ReadableStream,
+        pid: 12345,
+        kill: vi.fn((signal?: string) => {
+          if (signal === 'SIGKILL') exitResolve(143);
+          return true;
+        }),
+        exitPromise,
+      };
+      spawnFn.mockReturnValue(handle);
+
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+      });
+
+      const p = handler.handle(item, checkoutPath);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await p;
+
+      const infoMsgs = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[1] ?? ''));
+      const warnMsgs = (mockLogger.warn as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[1] ?? ''));
+
+      // SC-004: the historically contradictory `Successfully pushed` +
+      // `success: false` message MUST NOT appear on the timeout path.
+      expect(infoMsgs.some((m) => m.includes('Successfully pushed changes to PR branch'))).toBe(false);
+      // The partial-push warn line SHOULD appear.
+      expect(warnMsgs.some((m) => m.includes('Pushed partial changes before CLI timed out'))).toBe(true);
+    });
+
+    it('DOES emit "Successfully pushed changes to PR branch" on happy path (hasChanges && success)', async () => {
+      // Real timers: happy path uses `createMockProcess(0, 50)` which schedules
+      // exit via setTimeout — under fake timers it never fires and the handler
+      // hangs on `child.exitPromise`.
+      vi.useRealTimers();
+
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+      });
+
+      await handler.handle(item, checkoutPath);
+
+      const infoMsgs = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[1] ?? ''));
+      expect(infoMsgs.some((m) => m.includes('Successfully pushed changes to PR branch'))).toBe(true);
     });
   });
 

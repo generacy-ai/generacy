@@ -83,6 +83,29 @@ export class PrFeedbackMonitorService {
   // re-triggers the notice, which is idempotency-safe via the marker grep.
   private lastZeroTrustedState: Map<string, boolean> = new Map();
 
+  /**
+   * #1070 Q1=A / FR-006 / Assumption 4: per-stateKey retry counter for the
+   * blocked:fixer-timeout retry-eligible branch. Mirrors the sibling
+   * lastUnresolvedThreadCount map above. Instance-scoped so state doesn't
+   * leak across services.
+   *
+   * Key: `${owner}/${repo}#${prNumber}` (same as lastUnresolvedThreadCount).
+   * Value: number of auto-retries dispatched so far, capped at 2 per Q5=C.
+   *
+   * Write sites:
+   *   - Increment in the retry-eligible branch of processPrReviewEvent per D-4.
+   *   - Delete in Case C (`totalUnresolvedThreads === 0`) per D-5 (progress-
+   *     only reset, Q5=C).
+   *
+   * Read sites:
+   *   - Retry-eligible branch decides `counter < 2` for dispatch permission.
+   *   - Same branch bakes the current value into `PrFeedbackMetadata.retryAttempt`
+   *     for handler consumption.
+   *
+   * Restart-loss failure mode is bounded and benign (spec §Assumption 7).
+   */
+  private fixerTimeoutRetryCount: Map<string, number> = new Map();
+
   // #1054 / FR-006 / FR-007: per-itemKey severity state for the in-flight-drop
   // transition-edge decision. Keyed by `${owner}/${repo}#${issueNumber}`.
   // Instance-scoped so state doesn't leak across services (SC-004 divergence).
@@ -313,6 +336,12 @@ export class PrFeedbackMonitorService {
       );
       this.lastUnresolvedThreadCount.set(stateKey, 0);
       this.lastZeroTrustedState.set(stateKey, false);
+      // #1070 D-5 / FR-013 (Q5=C): the sole counter-reset site. Case C fires
+      // naturally on the next monitor poll after all review threads are fully
+      // resolved (via Disposition A on the handler side OR manual operator
+      // resolution). Map.delete on absent key is a no-op — safe unconditional
+      // invocation.
+      this.fixerTimeoutRetryCount.delete(stateKey);
       return false;
     }
 
@@ -370,6 +399,76 @@ export class PrFeedbackMonitorService {
       );
       issueLabels = [];
     }
+    // #1070 FR-006 / D-4: retry-eligible check fires BEFORE the blocked:*
+    // short-circuit. Preserves Assumption 5 — any UNRECOGNIZED blocked:*
+    // label still pauses the monitor; only the specific `blocked:fixer-timeout`
+    // (retry-eligible) is carved out here.
+    //
+    // PR #1072 review — order-of-operations fix: check for any OTHER blocked:*
+    // label FIRST, before touching the counter or removing the label. Multiple
+    // handlers (`pr-feedback-handler`, `merge-conflict-handler`,
+    // `validate-fix-handler`) all write `blocked:*` labels to the same issue
+    // and do not coordinate, so two coexisting blocked labels is a normal
+    // state. If we consume the retry budget + remove the timeout signal and
+    // THEN discover another blocked label is present, we silently destroy the
+    // timeout signal (label gone from the issue) and burn a retry on a
+    // dispatch that never happens. The invariant is: do not mutate remote
+    // state or consume budget until the dispatch is committed.
+    const otherBlocked = issueLabels.find(
+      l => l.startsWith('blocked:') && l !== 'blocked:fixer-timeout',
+    );
+    if (!otherBlocked && issueLabels.includes('blocked:fixer-timeout')) {
+      const priorRetries = this.fixerTimeoutRetryCount.get(stateKey) ?? 0;
+      if (priorRetries < 2) {
+        // Budget remaining — remove the retry-eligible label and continue to
+        // the normal enqueue path with an incremented counter.
+        let removed = true;
+        try {
+          await client.removeLabels(owner, repo, issueNumber, ['blocked:fixer-timeout']);
+        } catch (error) {
+          removed = false;
+          this.logger.warn(
+            { err: error, owner, repo, issueNumber },
+            'Failed to remove blocked:fixer-timeout before retry dispatch — non-fatal, will re-check on next poll',
+          );
+          // Fall through to the blocked:* skip check below — safer than
+          // dispatching with the label still present (would race the handler's
+          // own removeLabels call).
+        }
+        if (removed) {
+          this.fixerTimeoutRetryCount.set(stateKey, priorRetries + 1);
+          // Filter the just-removed label out of the local list so the
+          // generic blocked:* short-circuit below does NOT re-match it. The
+          // API removal happened successfully; the local array is a snapshot
+          // taken before the removal.
+          issueLabels = issueLabels.filter(l => l !== 'blocked:fixer-timeout');
+          this.logger.info(
+            {
+              owner, repo, prNumber, issueNumber,
+              priorRetries,
+              newRetries: priorRetries + 1,
+              gate: 'blocked-fixer-timeout-retry-dispatch',
+            },
+            'Dispatching auto-retry after blocked:fixer-timeout (Q5=C, max 2)',
+          );
+          // Do NOT return — fall through to the normal enqueue path.
+        }
+      } else {
+        // priorRetries >= 2. Defense in depth: handler should have applied
+        // blocked:fixer-timeout-repeat and this branch shouldn't fire. If it
+        // does, log and fall through to the blocked:* skip check below.
+        this.logger.warn(
+          {
+            owner, repo, prNumber, issueNumber,
+            priorRetries,
+            gate: 'blocked-fixer-timeout-budget-exhausted',
+          },
+          'blocked:fixer-timeout present but retry budget exhausted — expected blocked:fixer-timeout-repeat (handler bug?)',
+        );
+        // Fall through to the blocked:* skip check below (which will match).
+      }
+    }
+
     const blockedLabel = issueLabels.find(l => l.startsWith('blocked:'));
     if (blockedLabel) {
       this.logger.info(
@@ -410,10 +509,16 @@ export class PrFeedbackMonitorService {
     // 5. Resolve workflow name from issue labels
     const workflowName = await this.resolveWorkflowName(owner, repo, issueNumber);
 
-    // 6. Build queue item
+    // 6. Build queue item.
+    // #1070 D-1 / handler-counter-seam: attach the current retry counter to
+    // every enqueue (both the normal path AND the retry-eligible branch above,
+    // which has already incremented). Non-retry dispatches get 0. Handler
+    // reads `?? 0` for pre-#1070 backwards compatibility.
+    const currentRetries = this.fixerTimeoutRetryCount.get(stateKey) ?? 0;
     const metadata: PrFeedbackMetadata = {
       prNumber,
       reviewThreadIds: unresolvedThreadIds,
+      retryAttempt: currentRetries,
     };
 
     const queueItem: QueueItem = {

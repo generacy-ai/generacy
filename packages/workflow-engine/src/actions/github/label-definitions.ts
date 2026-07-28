@@ -113,6 +113,21 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
     description: 'PR-feedback loop paused: last cycle could not advance the trigger. Remove to retry.',
   },
   {
+    name: 'blocked:fixer-timeout',
+    color: 'D73A4A',
+    description: 'PR-feedback CLI timed out after partial commit — up to 2 auto-retries will follow (#1070).',
+  },
+  {
+    name: 'blocked:fixer-timeout-no-progress',
+    color: 'D73A4A',
+    description: 'PR-feedback CLI timed out with no commit — human intervention required (#1070).',
+  },
+  {
+    name: 'blocked:fixer-timeout-repeat',
+    color: 'D73A4A',
+    description: 'PR-feedback CLI timed out; auto-retry budget (2) exhausted — human intervention required (#1070).',
+  },
+  {
     name: 'blocked:stuck-validate-fix',
     color: 'D73A4A',
     description: 'Validate-fix paused (#892): duplicate evidence, no-diff, or sibling overlap. Remove to retry.',
