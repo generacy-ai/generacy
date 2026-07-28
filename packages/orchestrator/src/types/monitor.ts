@@ -242,8 +242,36 @@ export interface QueueItemWithScore {
  * Internal representation stored in Redis, adding retry tracking
  */
 export interface SerializedQueueItem extends QueueItem {
-  /** Number of times this item has been claimed and released */
+  /**
+   * Number of times this item's own execution failed and it was released.
+   * Bumped exclusively by `QueueManager.release()`. Consumed by `release()`'s
+   * dead-letter gate at `attemptCount >= maxRetries`. MUST NOT be bumped by
+   * infrastructure events (orphan reclaim, cluster restart) — those would
+   * condemn blameless items after N infra events (see #1054 finding 9).
+   */
   attemptCount: number;
+  /**
+   * #1054 finding 9 — diagnostic counter for orphan-reclaims of this item.
+   * Bumped by `reapOrphanClaims`. NEVER read by any dead-letter or retry
+   * gate; purely observability so operators can distinguish an item that
+   * has genuinely failed N times (`attemptCount` high) from one that has
+   * just weathered N cluster restarts (`reclaimCount` high).
+   *
+   * Optional for backwards compatibility — legacy payloads written before
+   * this field existed round-trip as `undefined`; callers must default to 0.
+   */
+  reclaimCount?: number;
+  /**
+   * #1054 finding 3 — ISO timestamp stamped by CLAIM_SCRIPT at claim time.
+   * Reaper's grace-window (FR-005) measures age-since-CLAIM, not
+   * age-since-enqueue, so an item that waited hours in pending doesn't
+   * skip the grace window the instant it's claimed.
+   *
+   * Optional for backwards compatibility — legacy claim payloads written
+   * before this field existed fall back to `enqueuedAt` for the age
+   * calculation.
+   */
+  claimedAt?: string;
   /** Unique key for deduplication in the sorted set */
   itemKey: string;
 }
@@ -290,6 +318,67 @@ export interface QueueManager extends QueueAdapter {
    * Exposed for admin/queue routes and future cockpit views.
    */
   hasInFlight(itemKey: string): Promise<boolean>;
+  /**
+   * #1054 / FR-001 / FR-002 / FR-004: reclaim orphaned claims whose owning
+   * worker's heartbeat is absent. Runs on the dispatcher's reaper cadence.
+   *
+   * Race safety (US2): the outer-loop `EXISTS heartbeat` check is an
+   * optimization; the load-bearing guard is the server-side re-check inside
+   * `RECLAIM_ORPHAN_SCRIPT`. A heartbeat that re-appears between the two
+   * checks aborts the reclaim without mutating state.
+   *
+   * Grace window (FR-005): claims younger than `2 × heartbeatCheckIntervalMs`
+   * are skipped to defend against a hypothetical future refactor that splits
+   * `CLAIM_SCRIPT`'s atomicity.
+   *
+   * @param now epoch-ms; parameterized for testability (default `Date.now()`)
+   */
+  reapOrphanClaims(now?: number): Promise<ReapReport>;
+  /**
+   * #1054 / FR-006 / FR-007: observability accessor — returns the age in ms
+   * of the given itemKey's in-flight entry, or `null` if not in flight OR on
+   * transport error. Called by monitor-side drop sites to compute `ageMs`
+   * for the shared severity dispatcher.
+   */
+  hasInFlightAge(itemKey: string): Promise<number | null>;
+}
+
+/**
+ * #1054 — one entry per reclaimed orphan produced by
+ * `QueueManager.reapOrphanClaims`.
+ *
+ * #1054 finding 9 — the reaper bumps `reclaimCount`, NOT `attemptCount`,
+ * so `attemptCountBefore === attemptCountAfter` on every reclaimed item
+ * (kept in the shape for wire compatibility). The load-bearing pair is
+ * `reclaimCountBefore` / `reclaimCountAfter`.
+ */
+export interface ReclaimedItem {
+  workerId: string;
+  itemKey: string;
+  ageMs: number;
+  /** Preserved verbatim across reclaim (attemptCount tracks execution failures, not infra events). */
+  attemptCountBefore: number;
+  /** Equal to attemptCountBefore — kept in the shape for wire compatibility. */
+  attemptCountAfter: number;
+  /** Reclaim count before the sweep (0 for first reclaim, else N). */
+  reclaimCountBefore: number;
+  /** Reclaim count after the sweep (always reclaimCountBefore + 1). */
+  reclaimCountAfter: number;
+}
+
+/**
+ * #1054 — aggregate result of one `reapOrphanClaims` sweep. Consumed by
+ * `WorkerDispatcher.reaperLoop`'s per-cycle log line (info when nonzero).
+ */
+export interface ReapReport {
+  /** Number of claim (workerId, itemKey) pairs iterated. */
+  scanned: number;
+  /** Successfully reclaimed items. */
+  reclaimed: ReclaimedItem[];
+  /** Skipped because heartbeat re-appeared server-side (US2 defence). */
+  skippedRaceReappeared: number;
+  /** Skipped because claim was within the grace window (FR-005). */
+  skippedGraceWindow: number;
 }
 
 /**

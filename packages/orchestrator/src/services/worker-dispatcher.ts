@@ -569,6 +569,40 @@ export class WorkerDispatcher {
 
       try {
         await this.reapStaleWorkers();
+
+        // #1054 / FR-001 / AD-4: sequential Redis-side reap after the in-memory
+        // pass, so the Redis sweep sees a coherent state. Error-tolerant (R2/R3)
+        // — a Redis error must not skip subsequent cycles.
+        //
+        // #1054 finding 5 — the invocation MUST sit inside the surrounding
+        // try/catch, not outside. `.catch()` handles rejections only; a
+        // synchronous throw (undefined `reapOrphanClaims` on a hand-rolled
+        // `as unknown as QueueManager` mock, or an older adapter instance in
+        // a mixed deploy) would exit the `while (!signal.aborted)` loop
+        // and permanently kill BOTH reap paths for the process lifetime.
+        const report = await this.queue
+          .reapOrphanClaims()
+          .catch((err) => {
+            this.logger.warn({ err }, 'reapOrphanClaims failed');
+            return null;
+          });
+        if (
+          report &&
+          (report.reclaimed.length > 0 ||
+            report.skippedRaceReappeared > 0 ||
+            report.skippedGraceWindow > 0)
+        ) {
+          this.logger.info(
+            {
+              event: 'reap-orphan-claims',
+              scanned: report.scanned,
+              reclaimed: report.reclaimed.length,
+              skippedRaceReappeared: report.skippedRaceReappeared,
+              skippedGraceWindow: report.skippedGraceWindow,
+            },
+            'Reaper cycle complete (Redis-side)',
+          );
+        }
       } catch (error) {
         this.logger.error({ err: error }, 'Error during reaper cycle');
       }
