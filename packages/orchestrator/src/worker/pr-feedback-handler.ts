@@ -30,6 +30,17 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
 
 /**
+ * #1070 labels for the CLI-timeout disposition split. See FR-002/002a/003 and
+ * `contracts/label-vocabulary.md`.
+ *   - `blocked:fixer-timeout` — retry-eligible (timeout + partial push, budget remaining).
+ *   - `blocked:fixer-timeout-no-progress` — terminal (timeout without any commit).
+ *   - `blocked:fixer-timeout-repeat` — terminal (auto-retry budget exhausted).
+ */
+const BLOCKED_FIXER_TIMEOUT_LABEL = 'blocked:fixer-timeout';
+const BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL = 'blocked:fixer-timeout-no-progress';
+const BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL = 'blocked:fixer-timeout-repeat';
+
+/**
  * Label added by Disposition C (#1047) when the fixer completed a cycle
  * without touching any file named by an unaddressed review-body finding.
  * The monitor's bare `l.startsWith('blocked:')` skip gate honors this
@@ -56,6 +67,35 @@ function setsEqual<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
   if (a.size !== b.size) return false;
   for (const v of a) if (!b.has(v)) return false;
   return true;
+}
+
+/**
+ * #1070 FR-011: Return shape of `spawnClaudeForFeedback` (widened from
+ * `boolean`). Private to this module — not re-exported from
+ * `@generacy-ai/orchestrator`.
+ *
+ * `success` is true iff the CLI exited with code 0.
+ * `timedOut` is true iff the internal SIGTERM timer fired (regardless of exit
+ * code).
+ * `exitCode` is the process exit code (null when the process died via signal
+ * before an exit code was captured — matches Node's ChildProcess.exitCode
+ * semantics).
+ *
+ * Semantic invariants:
+ *   1. `timedOut === true` implies `success === false`. A timeout that races
+ *      with a natural exit-0 finish is treated as timeout; the SIGTERM timer
+ *      fires and this cycle's work is bounded (per FR-013).
+ *   2. `exitCode === null` is legal and signals "process died via signal
+ *      before exit code was captured". Handler treats `null` identically to
+ *      a non-zero exit code for disposition purposes (both are `success: false`).
+ *   3. When `timedOut === true`, `exitCode` will typically be `143` (SIGTERM)
+ *      but callers MUST NOT switch on the specific numeric value — `timedOut`
+ *      is the authoritative signal.
+ */
+interface SpawnClaudeResult {
+  success: boolean;
+  exitCode: number | null;
+  timedOut: boolean;
 }
 
 type OutcomeResult = { ok: true } | { ok: false; error: string };
@@ -118,10 +158,14 @@ export class PrFeedbackHandler {
     }
 
     const { prNumber } = metadata;
+    // #1070 D-1: read the current retry counter (or 0 for pre-#1070 items
+    // still queued from an older monitor). Handler is stateless w.r.t. the
+    // counter — the monitor owns storage and reset (Case C).
+    const retryAttempt = metadata.retryAttempt ?? 0;
     const workflowId = `${owner}/${repo}#${issueNumber}`;
 
     this.logger.info(
-      { prNumber, issueNumber, owner, repo },
+      { prNumber, issueNumber, owner, repo, retryAttempt },
       'Starting PR feedback addressing',
     );
 
@@ -408,8 +452,11 @@ export class PrFeedbackHandler {
       // getCommitTouchedFiles).
       const preFixSha = await this.getHeadSha(checkoutPath);
 
-      // 6. Spawn Claude CLI to address feedback
-      const success = await this.spawnClaudeForFeedback(
+      // 6. Spawn Claude CLI to address feedback.
+      // #1070 T021 / FR-011: destructure the widened SpawnClaudeResult so the
+      // dispatcher below can distinguish timeout (B4/B5/B6) from clean non-zero
+      // exit (B1/B2/B3).
+      const { success, exitCode, timedOut } = await this.spawnClaudeForFeedback(
         checkoutPath,
         prompt,
         workflowId,
@@ -447,10 +494,20 @@ export class PrFeedbackHandler {
           issueNumber,
         );
 
-        if (hasChanges) {
+        // #1070 FR-005 / D-6: split the collapsed log line so the historically
+        // contradictory `msg: "Successfully pushed" success: false` shape
+        // (bug report §Trigger) is unreachable. `success` intentionally dropped
+        // from the happy-path payload — both branches guard on it so the field
+        // is redundant.
+        if (hasChanges && success) {
           this.logger.info(
-            { prNumber, issueNumber, success },
+            { prNumber, issueNumber },
             'Successfully pushed changes to PR branch',
+          );
+        } else if (hasChanges && !success) {
+          this.logger.warn(
+            { prNumber, issueNumber, cliCompleted: false, exitCode },
+            'Pushed partial changes before CLI timed out — retry may follow',
           );
         }
       } catch (error) {
@@ -461,20 +518,72 @@ export class PrFeedbackHandler {
         // Don't throw here — we still need to run the blocked disposition.
       }
 
-      // 7a. Disposition B short-circuit (#883): CLI did not complete cleanly OR
-      // there is no diff. Both mean the loop cannot advance on this cycle —
-      // add `blocked:stuck-feedback-loop` and leave `waiting-for:*` intact so
-      // the operator sees the pause. Do NOT reply, do NOT resolve, do NOT log
-      // success.
+      // 7a. Disposition B/B4/B5/B6 dispatcher (#1070 FR-001).
+      //
+      // The pre-#1070 collapsed `if (!success || !hasChanges)` branch is split
+      // into an explicit four-way switch per data-model.md §4:
+      //
+      //   B4 (timedOut && !hasChanges)             → blocked:fixer-timeout-no-progress (terminal)
+      //   B5 (timedOut && hasChanges && retryAttempt < 2)   → blocked:fixer-timeout (retry-eligible)
+      //   B6 (timedOut && hasChanges && retryAttempt >= 2)  → blocked:fixer-timeout-repeat (terminal)
+      //   B1/B2/B3 (!timedOut && (!success || !hasChanges)) → blocked:stuck-feedback-loop (unchanged)
+      //
+      // FR-012: `waiting-for:address-pr-feedback` MUST stay in place across
+      // every branch — the shared `finally` clears only `agent:in-progress`.
+      // FR-010: every branch flows through the shared `finally` at ~line 665.
+      if (timedOut && !hasChanges) {
+        // B4 — CLI timed out but zero commits landed. Retries would not help.
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            disposition: 'timeout-no-progress',
+            retryAttempt,
+            cliCompleted: false,
+            exitCode,
+          },
+          'CLI timed out without pushing any commit — applying blocked:fixer-timeout-no-progress (terminal)',
+        );
+        await this.addBlockedFixerTimeoutNoProgressLabel(github, owner, repo, issueNumber);
+        return;
+      }
+
+      if (timedOut && hasChanges) {
+        // B5/B6 — CLI timed out with partial push. Retry-eligible unless the
+        // budget (2) is already spent.
+        const budgetExhausted = retryAttempt >= 2;
+        const disposition = budgetExhausted ? 'fixer-timeout-repeat' : 'fixer-timeout';
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            disposition,
+            retryAttempt,
+            cliCompleted: false,
+            exitCode,
+          },
+          budgetExhausted
+            ? 'CLI timed out with partial push after retry budget exhausted — applying blocked:fixer-timeout-repeat (terminal)'
+            : 'CLI timed out with partial push — applying blocked:fixer-timeout (retry eligible)',
+        );
+        if (budgetExhausted) {
+          await this.addBlockedFixerTimeoutRepeatLabel(github, owner, repo, issueNumber);
+        } else {
+          await this.addBlockedFixerTimeoutLabel(github, owner, repo, issueNumber);
+        }
+        return;
+      }
+
+      // B1/B2/B3 — non-timeout failure paths (clean non-zero exit or no diff).
+      // Behavior preserved from pre-#1070 (FR-004): `blocked:stuck-feedback-loop`.
       if (!success || !hasChanges) {
         this.logger.warn(
           {
             prNumber,
             issueNumber,
             trigger: 'unresolvedThreads>0',
+            disposition: !success ? 'push-failed' : 'no-diff',
             reason: !success ? 'cli-did-not-complete' : 'no-diff',
           },
-          'no-diff cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition',
+          'no-diff / push-failed cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition',
         );
         await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
         return;
@@ -681,8 +790,12 @@ Please proceed with addressing the feedback.`;
   /**
    * Spawn Claude CLI to address PR feedback.
    *
-   * Returns true if the CLI completed successfully, false on timeout or failure.
-   * FR-013: On timeout, partial changes are pushed and label is kept for retry.
+   * #1070 FR-011: return shape widened from `boolean` to `SpawnClaudeResult`
+   * so the caller can distinguish CLI-timeout (`timedOut: true`) from a clean
+   * non-zero exit (`timedOut: false, success: false`) — critical for the
+   * four-branch disposition in `handle()` per data-model.md §4.
+   * FR-013: On timeout, partial changes are pushed and the retry-eligible
+   * label is added by the caller (see B5/B6 branches).
    */
   private async spawnClaudeForFeedback(
     checkoutPath: string,
@@ -690,7 +803,7 @@ Please proceed with addressing the feedback.`;
     workflowId: string,
     prNumber: number,
     workflowName: string,
-  ): Promise<boolean> {
+  ): Promise<SpawnClaudeResult> {
     // #814 / Q1→B: pr-feedback resolves `{ provider, model }` against the
     // `implement` phase — pr-feedback revises the code `implement` produced,
     // so the same agent/model that wrote the code should address review on it.
@@ -721,7 +834,7 @@ Please proceed with addressing the feedback.`;
         { error: String(error), cwd: checkoutPath },
         'Failed to spawn Claude CLI process',
       );
-      return false;
+      return { success: false, exitCode: null, timedOut: false };
     }
 
     // Set up output capture for SSE events
@@ -783,18 +896,21 @@ Please proceed with addressing the feedback.`;
       const success = exitCode === 0;
 
       if (timedOut) {
-        // FR-013: Timeout scenario — partial completion strategy
+        // FR-013: Timeout scenario — partial completion strategy.
+        // #1070 FR-011: return the exit code and the timeout flag so the
+        // caller can differentiate B4 (no-progress, terminal) from B5/B6
+        // (retry-eligible or terminal-by-budget).
         this.logger.warn(
           { exitCode, timeoutMs: this.config.phaseTimeoutMs },
-          'CLI timed out — returning false to trigger partial completion strategy (push changes, keep label)',
+          'CLI timed out — returning timedOut=true to trigger partial completion strategy (push changes, keep label)',
         );
-        return false;
+        return { success: false, exitCode, timedOut: true };
       }
 
       if (!success) {
         this.logger.warn(
           { exitCode },
-          'CLI exited with non-zero code — returning false to keep label for retry',
+          'CLI exited with non-zero code — returning success=false to keep label for retry',
         );
       } else {
         this.logger.info(
@@ -803,14 +919,15 @@ Please proceed with addressing the feedback.`;
         );
       }
 
-      return success;
+      return { success, exitCode, timedOut: false };
     } catch (error) {
       clearTimeout(timeoutTimer);
       this.logger.error(
         { error: String(error), timedOut },
-        'Error waiting for CLI process — returning false',
+        'Error waiting for CLI process — returning success=false',
       );
-      return false;
+      // Preserve whatever `timedOut` was set to before the throw.
+      return { success: false, exitCode: null, timedOut };
     }
   }
 
@@ -1048,6 +1165,78 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
       this.logger.warn(
         { error: String(error), issueNumber, label: BLOCKED_STUCK_FEEDBACK_LOOP_LABEL },
         'Failed to add blocked:stuck-feedback-loop label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1070 FR-002: retry-eligible timeout disposition. Monitor will
+   * auto-dispatch the retry on its next poll (up to `retryAttempt < 2`).
+   */
+  private async addBlockedFixerTimeoutLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_FIXER_TIMEOUT_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_FIXER_TIMEOUT_LABEL },
+        'Added blocked:fixer-timeout label (retry-eligible)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_LABEL },
+        'Failed to add blocked:fixer-timeout label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1070 FR-002a: terminal disposition — CLI timed out without pushing any
+   * commit. Retries would not help; human intervention required.
+   */
+  private async addBlockedFixerTimeoutNoProgressLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL },
+        'Added blocked:fixer-timeout-no-progress label (terminal)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL },
+        'Failed to add blocked:fixer-timeout-no-progress label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1070 FR-003: terminal disposition — CLI timed out after the auto-retry
+   * budget (2) was exhausted. Human intervention required.
+   */
+  private async addBlockedFixerTimeoutRepeatLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL },
+        'Added blocked:fixer-timeout-repeat label (terminal, budget exhausted)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL },
+        'Failed to add blocked:fixer-timeout-repeat label — non-fatal, waiting-for label persists',
       );
     }
   }
