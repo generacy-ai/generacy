@@ -105,6 +105,28 @@ export class WorkerDispatcher {
       'Starting worker dispatcher',
     );
 
+    // #1058 / AD-4 / Q2=B — boot sweep for `IN_FLIGHT_KEY` residue armed at
+    // process start. Fire-and-forget so `start()` returns immediately; the
+    // reaperLoop's first regular sweep runs its own tracker check regardless.
+    // Pre-crash residue armed by boot-sweep completion is repaired at the
+    // first regular sweep (~heartbeatCheckIntervalMs).
+    //
+    // Guarded like the reaper-loop's call to `reconcileInFlight` 500 lines
+    // below (#1054 finding 5): `.catch()` handles rejections only, so a
+    // synchronous throw (undefined `reconcileInFlight` on a hand-rolled
+    // `as unknown as QueueManager` test double) would propagate out of
+    // `start()` and prevent `Promise.all([pollLoop, reaperLoop])` from
+    // ever being reached — killing the dispatcher entirely. A boot sweep
+    // is a nice-to-have that buys one cycle of latency on a repair path;
+    // it must never be able to prevent the dispatcher from starting.
+    try {
+      void this.queue.reconcileInFlight().catch((err) => {
+        this.logger.warn({ err }, 'boot reconcileInFlight failed');
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'boot reconcileInFlight unavailable');
+    }
+
     // Run poll loop and reaper loop concurrently
     await Promise.all([
       this.pollLoop(ac.signal),
@@ -606,6 +628,34 @@ export class WorkerDispatcher {
               skippedGraceWindow: report.skippedGraceWindow,
             },
             'Reaper cycle complete (Redis-side)',
+          );
+        }
+
+        // #1058 / AD-5: sequential invocation after `reapOrphanClaims` so the
+        // reconciliation snapshot sees a coherent post-reap state. Same
+        // `.catch()` error envelope pattern — a Redis error must not skip
+        // subsequent cycles.
+        const reconcileReport = await this.queue
+          .reconcileInFlight()
+          .catch((err) => {
+            this.logger.warn({ err }, 'reconcileInFlight failed');
+            return null;
+          });
+        if (
+          reconcileReport &&
+          (reconcileReport.reconciled > 0 ||
+            reconcileReport.skippedAlreadyGone > 0 ||
+            reconcileReport.trackedFirstSeen > 0)
+        ) {
+          this.logger.info(
+            {
+              event: 'reconcile-in-flight',
+              scanned: reconcileReport.scanned,
+              reconciled: reconcileReport.reconciled,
+              skippedAlreadyGone: reconcileReport.skippedAlreadyGone,
+              trackedFirstSeen: reconcileReport.trackedFirstSeen,
+            },
+            'Reconcile cycle complete (in-flight residue)',
           );
         }
       } catch (error) {

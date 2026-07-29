@@ -82,7 +82,34 @@ function createMockRedisWithState() {
       }
       return 0;
     }),
-    scan: vi.fn(async () => ['0', []]),
+    sscan: vi.fn(async (key: string) => {
+      // Simplified: return all matching members in one iteration.
+      if (key === 'orchestrator:queue:in-flight-items') {
+        return ['0', [...state.inFlight]];
+      }
+      return ['0', []];
+    }),
+    hkeys: vi.fn(async (key: string) => {
+      const workerId = key.replace('orchestrator:queue:claimed:', '');
+      const workerMap = state.claimed.get(workerId);
+      if (!workerMap) return [];
+      return [...workerMap.keys()];
+    }),
+    scan: vi.fn(async (_cursor: string, ..._rest: unknown[]) => {
+      // #1058: caller may pass MATCH/COUNT; enumerate live claim-hash keys.
+      const keys: string[] = [];
+      for (const workerId of state.claimed.keys()) {
+        if (state.claimed.get(workerId)!.size > 0) {
+          keys.push(`orchestrator:queue:claimed:${workerId}`);
+        }
+      }
+      return ['0', keys];
+    }),
+    reconcileInFlightItem: vi.fn(async (_inFlightKey: string, itemKey: string) => {
+      if (!state.inFlight.has(itemKey)) return 0;
+      state.inFlight.delete(itemKey);
+      return 1;
+    }),
     defineCommand: vi.fn(),
     // #1060 PR #1065 review findings 5+6 — `enqueue()` and
     // `enqueueIfAbsent()` share the single `enqueueIfAbsent` Lua
@@ -353,5 +380,41 @@ describe.each(HARNESSES)('$name adapter — enqueue() FR-007 parity (#1060 / SC-
       await adapter.enqueueIfAbsent(makeItem({ issueNumber: 1060, queueReason: 'resume' })),
     ).toBe(true);
     expect(await adapter.enqueue(makeItem({ issueNumber: 1060 }))).toBe(false);
+  });
+});
+
+describe.each(HARNESSES)('$name adapter — reconcileInFlight parity (#1058)', ({ make }) => {
+  let logger: ReturnType<typeof createLogger>;
+  let adapter: QueueManager;
+
+  beforeEach(() => {
+    logger = createLogger();
+    adapter = make(logger);
+  });
+
+  it('exists and returns a ReconcileReport shape', async () => {
+    const report = await adapter.reconcileInFlight();
+    expect(report).toEqual(
+      expect.objectContaining({
+        scanned: expect.any(Number),
+        reconciled: expect.any(Number),
+        skippedAlreadyGone: expect.any(Number),
+        trackedFirstSeen: expect.any(Number),
+      }),
+    );
+  });
+
+  it('healthy-state cycle (enqueue → claim → complete) produces zero reconciled', async () => {
+    await adapter.enqueueIfAbsent(makeItem({ issueNumber: 1058 }));
+    const claimed = await adapter.claim('worker-parity');
+    expect(claimed).not.toBeNull();
+    await adapter.complete('worker-parity', claimed!);
+
+    const report = await adapter.reconcileInFlight();
+    expect(report.reconciled).toBe(0);
+    expect(report.skippedAlreadyGone).toBe(0);
+    // Note: `scanned` differs by adapter (Redis reports SSCAN'd count,
+    // in-memory reports set size at call time — both truthful). Wedge-repair
+    // (SC-001) is Redis-only per contract; not asserted here.
   });
 });

@@ -397,6 +397,30 @@ export interface QueueManager extends QueueAdapter {
    */
   reapOrphanClaims(now?: number): Promise<ReapReport>;
   /**
+   * #1058 / FR-001: reconciliation sweep for `orchestrator:queue:in-flight-items`
+   * members that have no matching pending or claim entry (the residue class of
+   * failure that `reapOrphanClaims` cannot see — its sweep is candidate-set-
+   * driven from `claimed:*` keys). Runs on the dispatcher's reaper cadence
+   * immediately after `reapOrphanClaims` (AD-5), plus one boot sweep at
+   * process start (Q2=B).
+   *
+   * Two-sweep confirmation gate (Q1=D): a residue candidate must be observed
+   * as residue in two consecutive sweeps before removal. Cross-sweep state
+   * lives in an in-memory `Map<itemKey, firstSeenSweepId>` on the adapter.
+   * First-sweep observations log at `debug`; second-sweep confirmations
+   * invoke `RECONCILE_IN_FLIGHT_SCRIPT` (single-key atomic `SISMEMBER`+`SREM`).
+   *
+   * On successful `SREM`: `enqueuedAtCache.delete(itemKey)` AND
+   * `dropLogState.delete(itemKey)` fire (AD-6 / Q3=C — full cleanup matches
+   * `complete()`, dead-letter, and successful reclaim semantics).
+   *
+   * Never throws. On transport error mid-sweep: `warn` + returns partial
+   * report so subsequent cycles retry.
+   *
+   * @param now epoch-ms; parameterized for testability (default `Date.now()`)
+   */
+  reconcileInFlight(now?: number): Promise<ReconcileReport>;
+  /**
    * #1054 / FR-006 / FR-007: observability accessor — returns the age in ms
    * of the given itemKey's in-flight entry, or `null` if not in flight OR on
    * transport error. Called by monitor-side drop sites to compute `ageMs`
@@ -441,6 +465,45 @@ export interface ReapReport {
   skippedRaceReappeared: number;
   /** Skipped because claim was within the grace window (FR-005). */
   skippedGraceWindow: number;
+}
+
+/**
+ * #1058 — aggregate result of one `reconcileInFlight` sweep. Consumed by
+ * `WorkerDispatcher.reaperLoop`'s per-cycle log line (info when nonzero).
+ * Log gate: `reconciled > 0 || skippedAlreadyGone > 0 || trackedFirstSeen > 0`.
+ * A fully healthy cycle produces zero log lines.
+ */
+export interface ReconcileReport {
+  /** Number of `IN_FLIGHT_KEY` members examined via `SSCAN`. */
+  scanned: number;
+  /**
+   * Number of `SREM`s successfully issued this cycle (post two-sweep
+   * confirmation, post-Lua atomic re-check). Each corresponds to exactly
+   * one `orphan-in-flight-reconciled` warn line (or contributes to the
+   * aggregate line if `RECONCILE_LOG_CAP` is exceeded).
+   */
+  reconciled: number;
+  /**
+   * Confirmed residue candidates whose `RECONCILE_IN_FLIGHT_SCRIPT`
+   * returned `0` (SISMEMBER == 0 — item was already gone from
+   * `IN_FLIGHT_KEY` at Lua time, i.e. a concurrent
+   * `complete()`/`release()`/`reapOrphanClaims()` fired the `SREM`
+   * between snapshot and Lua). Tracker entry retained; next sweep
+   * re-evaluates. Distinct from `ReapReport.skippedRaceReappeared` —
+   * the two report opposite polarities and the shared root name in
+   * `ReapReport` refers to a heartbeat that _re-appeared_ (opposite of
+   * "gone").
+   */
+  skippedAlreadyGone: number;
+  /**
+   * Number of itemKeys inserted into `reconcileTracker` this cycle
+   * (first-sweep observations). These will be re-evaluated on the next
+   * sweep; if still residue, they graduate to `reconciled` (or
+   * `skippedAlreadyGone` on Lua race). If they re-appear in
+   * pending/claimed before then, they are silently dropped from the
+   * tracker (transient race artifact self-clear).
+   */
+  trackedFirstSeen: number;
 }
 
 /**
