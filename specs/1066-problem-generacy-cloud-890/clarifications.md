@@ -25,7 +25,21 @@ about `frameId`; inside-`data` is the current default).
 - C: Both — inside `data` (payload-native) AND on the envelope (for cheap correlation
   in transport-level logging). Duplication accepted.
 
-**Answer**: *Pending*
+**Answer**: **A — inside `data`**. Verified against merged cloud source at
+`services/api/src/services/relay/message-handler.ts:804`:
+```ts
+const data = (message.data ?? {}) as Record<string, unknown>;
+const subtype = data?.type as string | undefined;
+const frameId = typeof data.frameId === 'string' ? (data.frameId as string) : null;
+```
+The cloud reads `frameId` off `data`. Option B would hoist it to the `EventMessage`
+envelope — precisely where the cloud never looks — so the field would arrive, be
+ignored, and every reply would still carry `frameId: null`. That is shipping a change
+that is inert by construction, which is the exact failure mode this issue exists to
+correct. B is the trap that *sounds* correct: it mirrors `ClusterCockpitReplyMessage`'s
+envelope-level `frameId`, but the reply is a different message type on a different
+path; matching its shape buys nothing and costs the whole feature. C duplicates the
+field with no second consumer.
 
 ### Q2: Handling of explicit `frameId: ""` on the inbound request
 **Context**: FR-004 says an *omitted* `frameId` must produce an absent field on the
@@ -45,7 +59,19 @@ section spells out `z.string().optional()` (no `.min(1)`), so today's spec reads
 - C: Normalize to absent — the route/schema treats `""` as equivalent to omission and
   emits an outbound frame with no `frameId` property.
 
-**Answer**: *Pending*
+**Answer**: **C — normalize `""` to absent**. Not a cosmetic invariant. The cloud's
+guard is `typeof data.frameId === 'string'`, which an empty string **passes**. So
+`""` is accepted as a genuine frameId rather than falling through to `null`, and the
+cloud echoes `frameId: ""` on the reply. Two concurrent gate frames that both carried
+`""` produce two replies both with `frameId: ""`, and the cluster's
+`frameId -> pending-promise` map cannot tell them apart: one promise settles against
+the wrong reply, the other waits for an echo already delivered under the same key.
+That is a correlation collision — the same class of defect as the deterministic
+`gateId` collision in #1053, arriving through the empty string. A ships that
+collision. B (400) is safe but rejecting a request over a field the route can
+normalize in one line is unkind to callers for no gain. C keeps exactly one
+representation of "no correlation available" — which is what FR-004 is asking for
+when it says *not `null`, not `""`, absent*.
 
 ### Q3: `frameId` on retained-then-replayed events
 **Context**: When the relay is offline, `tryEmitOrRetain` enqueues the event into
@@ -67,7 +93,19 @@ should its `frameId` be preserved verbatim, cleared, or re-issued?
 - C: Re-issue on drain — the drain path replaces the retained `frameId` with a fresh
   cluster-side value marking "this is a delayed replay, not the original."
 
-**Answer**: *Pending*
+**Answer**: **A — preserve verbatim across retain/drain**. B falls back to
+`(gateId, frameType)` for replayed frames, and #887 Q1 rejected that pair as a
+correlation key: idempotent retry of `gate-open` for one `gateId` is the *designed*
+pattern, so the pair is not unique. Reintroducing it on the retention path
+reintroduces the ambiguity exactly where frames are most likely to be duplicated —
+a reconnect drain is when retries cluster. C is worse: re-issuing a cluster-side id
+means the echo comes back bearing a value the original caller never saw, so nobody
+can match it — a frameId no one can correlate is strictly less useful than no
+frameId, because it *looks* like correlation. Under A, the natural degradation is
+already correct: if the drain happens long after the caller's pending-promise has
+TTL'd, the echo arrives, matches nothing, and is dropped — a no-op, not a leak. For
+the case that matters (reconnect seconds after the send, caller still waiting),
+correlation works.
 
 ### Q4: Cloud-side up-path ingestion readiness
 **Context**: The Assumptions section claims "Cloud-side `frameId` typing is
@@ -94,4 +132,15 @@ readiness that is not explicitly asserted.
 - C: Unknown — verify against generacy-cloud `main` before merging; block on that
   check.
 
-**Answer**: *Pending*
+**Answer**: **A — the cloud up-path is ready; verified, not assumed**. Plain
+`z.object` strips unknown keys — real hazard, and the spec's assumption was stated
+more confidently than it was evidenced. It does not apply here, and the cloud says
+so in a comment at the read site: *"`frameId` is read off the raw data (opaque; not
+part of the frozen Zod payload schemas)."* `data` is
+`(message.data ?? {}) as Record<string, unknown>` — unparsed — and `frameId` is read
+at `:804`, before `handleGateOpen(data, …)` is called and before any payload schema
+runs. `gateOpenPayloadSchema` / `gateOutcomePayloadSchema` never see the field and
+therefore cannot strip it. The cloud author anticipated this scenario and deliberately
+kept `frameId` outside the frozen contract so it could be added cluster-side without
+a coordinated release. No companion cloud PR required; correlation works end-to-end
+on merge; Success Criteria stand as written.
