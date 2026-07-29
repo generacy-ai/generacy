@@ -10,7 +10,7 @@
 
 ## Phase 1: Wire schema — cockpit package (source of truth)
 
-- [ ] T001 [US1] Add optional `frameId` field to `GateOpenSchema` in `packages/cockpit/src/gates/schema.ts` (around line 53).
+- [X] T001 [US1] Add optional `frameId` field to `GateOpenSchema` in `packages/cockpit/src/gates/schema.ts` (around line 53).
   Shape (verbatim from plan / data-model / research Decision 1):
   ```ts
   frameId: z
@@ -22,13 +22,13 @@
   (per plan §Constitution Check "no comments except for non-obvious 'why'"). Do **not** add
   `.strict()` or `.passthrough()` to the schema — the fix is the new field, not a mode change.
 
-- [ ] T002 [US1] Add the same optional `frameId` field to `GateOutcomeSchema` in
+- [X] T002 [US1] Add the same optional `frameId` field to `GateOutcomeSchema` in
   `packages/cockpit/src/gates/schema.ts` (around line 77).
   Use the exact same union-with-transform shape from T001. One short trailing comment
   ("Same shape and rationale as GateOpenSchema.frameId — #1066") is enough; do not repeat
   the read-site reference.
 
-- [ ] T003 [P] [US1] Extend `GateOpenFixtureOverrides` and `GateOutcomeFixtureOverrides` in
+- [X] T003 [P] [US1] Extend `GateOpenFixtureOverrides` and `GateOutcomeFixtureOverrides` in
   `packages/cockpit/src/gates/wire-fixtures.ts` with an optional `frameId?: string` field.
   Verify the `gateOpenFixture` / `gateOutcomeFixture` builder functions spread overrides
   last so `overrides.frameId` reaches the output when set; if the spread order does not
@@ -38,7 +38,7 @@
 
 ## Phase 2: Cockpit-side unit tests (SC-003)
 
-- [ ] T004 [US1] Add a new `describe('frameId', ...)` block to
+- [X] T004 [US1] Add a new `describe('frameId', ...)` block to
   `packages/cockpit/src/__tests__/gates-schemas.test.ts` covering the 4-cell matrix for
   **both** `GateOpenSchema` and `GateOutcomeSchema`:
     1. non-empty string (`"frm_abc"`) → present on parsed object with the same value.
@@ -53,7 +53,7 @@
 
 ## Phase 3: Orchestrator route + retainer tests (SC-002, SC-004, SC-005)
 
-- [ ] T005 [P] [US1, US2] Extend `packages/orchestrator/src/routes/__tests__/cockpit-gates.test.ts`
+- [X] T005 [P] [US1, US2] Extend `packages/orchestrator/src/routes/__tests__/cockpit-gates.test.ts`
   with the following assertions against both `POST /cockpit/gates` (gate-open) and
   `POST /cockpit/gates/:id/ack` (gate-outcome):
     - Caller supplies `frameId: '<known>'` → outbound frame's `data.frameId === '<known>'`
@@ -67,7 +67,7 @@
   forwards a Zod-*parsed* object (US2 / FR-005). Match the assertion style of the
   neighbouring outbound-shape tests in the same file.
 
-- [ ] T006 [P] [US1] Extend
+- [X] T006 [P] [US1] Extend
   `packages/orchestrator/src/routes/__tests__/retained-cockpit-events.test.ts` with a
   retention → drain assertion (SC-005):
     - Enqueue two events into the retainer: one with `data.frameId = 'frm_kept'`, one without.
@@ -80,7 +80,7 @@
 
 ## Phase 4: Real-WebSocket integration test (SC-001, load-bearing)
 
-- [ ] T007 [US1] Create NEW file
+- [X] T007 [US1] Create NEW file
   `packages/orchestrator/src/__tests__/cockpit-gates-frameid.integration.test.ts`.
   Follow the pattern from `packages/orchestrator/src/__tests__/cockpit-gates-integration.integration.test.ts`
   (#1024 precedent) and `packages/cluster-relay/tests/relay.test.ts` (parent template):
@@ -104,7 +104,7 @@
 
 ## Phase 5: Changeset (CI gate)
 
-- [ ] T008 Create NEW file `.changeset/1066-frame-id-wire.md`. Contents:
+- [X] T008 Create NEW file `.changeset/1066-frame-id-wire.md`. Contents:
   ```markdown
   ---
   "@generacy-ai/cockpit": minor
@@ -123,17 +123,17 @@
 
 ## Phase 6: Verification
 
-- [ ] T009 Run `pnpm --filter @generacy-ai/cockpit test` — must be green (covers T004 / SC-003
+- [X] T009 Run `pnpm --filter @generacy-ai/cockpit test` — must be green (covers T004 / SC-003
   and the pre-existing cockpit suites for SC-004 no-regression).
 
-- [ ] T010 Run `pnpm --filter @generacy-ai/orchestrator test -- cockpit-gates` — must be green
+- [X] T010 Run `pnpm --filter @generacy-ai/orchestrator test -- cockpit-gates` — must be green
   (covers T005 / SC-002, T006 / SC-005, and the pre-existing orchestrator cockpit-gates
   suites for SC-004 no-regression).
 
-- [ ] T011 Run `pnpm --filter @generacy-ai/orchestrator test -- cockpit-gates-frameid.integration`
+- [X] T011 Run `pnpm --filter @generacy-ai/orchestrator test -- cockpit-gates-frameid.integration`
   — must be green (covers T007 / SC-001, the load-bearing wire-level assertion).
 
-- [ ] T012 Sanity-check the changeset gate: verify `.changeset/1066-frame-id-wire.md` is a
+- [X] T012 Sanity-check the changeset gate: verify `.changeset/1066-frame-id-wire.md` is a
   newly *added* file in the diff (not an edit of an existing one — the CI gate greps
   `--diff-filter=A`), lists both `@generacy-ai/cockpit` and `@generacy-ai/orchestrator`, and
   the bumps match Decision 7.

@@ -67,6 +67,14 @@ export const GateOpenSchema = z.object({
   allowFreeText: z.boolean(),
   sessionId: z.string().min(1),
   askedAt: z.string().datetime(),
+  // #1066 — preserved for cloud per-frame reply correlation. Cloud reads at
+  // services/api/src/services/relay/message-handler.ts:804 (raw `data.frameId`,
+  // upstream of the frozen payload schema). Empty string is normalized to
+  // absent so two concurrent frames both bearing `""` cannot collide on the
+  // cluster's `frameId → pending-promise` map.
+  frameId: z
+    .union([z.string().min(1), z.literal('').transform(() => undefined)])
+    .optional(),
 });
 export type GateOpen = z.infer<typeof GateOpenSchema>;
 
@@ -80,6 +88,10 @@ export const GateOutcomeSchema = z.object({
   outcome: z.enum(['applied', 'superseded', 'failed']),
   detail: z.string().optional(),
   at: z.string().datetime(),
+  // Same shape and rationale as GateOpenSchema.frameId — #1066.
+  frameId: z
+    .union([z.string().min(1), z.literal('').transform(() => undefined)])
+    .optional(),
 });
 export type GateOutcome = z.infer<typeof GateOutcomeSchema>;
 
