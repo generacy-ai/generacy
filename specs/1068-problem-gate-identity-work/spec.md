@@ -8,7 +8,14 @@
 
 The run-scoped gate identity work spans three repos. Every individual phase is designed to be a no-op until the last one lands — which is what makes the sequence safe, and also what makes it unverifiable from inside any single repo. Each repo's CI can be fully green while the composed path is silently broken.
 
-This issue is the end-to-end verification that runs after the last phase deploys. It exercises the real WebSocket path with a real cluster against a real cloud instance and asserts seven properties that collectively pin the composed contract.
+This issue is the end-to-end verification that runs after the last phase deploys. It exercises **a real cluster over a real WebSocket against a schema-validated cloud fake** and asserts seven properties that collectively pin the composed contract (see §Clarifications Q1). Cluster↔cloud semantic divergence is NOT detectable by this harness and remains covered only by generacy-cloud's own suite. The harness extends the `WebSocketServer`-based pattern established in `packages/orchestrator/src/__tests__/cockpit-gates/fake-peer.ts` (#1024) and extended in #1077.
+
+### Division of labour with agency (fixed here, not negotiable at plan time)
+
+- **This repo (generacy)**: pins the MCP tool behaviour — `cockpit_gate_open`, `cockpit_gate_status`, `cockpit_gate_list`, `cockpit_gate_ack`, and the pre-draft dedup invariant they collectively guarantee.
+- **agency (`packages/claude-plugin-cockpit/tests/playbook-verification.test.ts`)**: pins that `auto.md` consumes those tools correctly (186 assertions as of agency#471, including `471-12` on the same-generation branch across all six Step-0 blocks).
+
+Neither repo can make both claims. This harness deliberately does not spawn a real `claude` process or the drafting subagent — see §Clarifications Q2.
 
 ## Failure Mode This Exists to Catch
 
@@ -55,8 +62,11 @@ The composed path fails silently in both directions:
 **I want** the drafting subagent to run once per gate, not once per wake,
 **So that** a slow gate does not cause redraft-per-wake amplification.
 
-**Acceptance Criteria**:
-- [ ] Across ≥3 wakes of a single run that hold on the same gate, the drafting subagent is spawned exactly once.
+**Acceptance Criteria** (re-scoped by §Clarifications Q2, Q4 — asserts the pre-draft dedup invariant at the MCP boundary, which is what the drafting single-spawn behaviour actually protects; assertion is stronger than a subagent spawn count because it measures what reaches the operator's inbox):
+- [ ] Across ≥3 wakes of a single run that hold on the same natural gate, `cockpit_gate_status(runId=<current>)` returns `open` or `answered` on wakes 2..N (never `absent`).
+- [ ] Exactly one `cockpit_gate_open` reaches the peer for that gate across the same wake sequence.
+- [ ] Exactly one `'cockpit gate emitted'` log line is emitted per `gateId` (from `packages/orchestrator/src/routes/cockpit-gates.ts` in `tryEmitOrRetain`).
+- [ ] The peer receives exactly one `cluster.cockpit` frame for that `gateId` (post-#1077 each frame carries a distinct `frameId`; two frames = two ids = duplicate emit).
 
 ### US4 (P2): `generation` renders without leaking `runId`
 
@@ -94,32 +104,33 @@ The composed path fails silently in both directions:
 **And** gate docs written before Phase A to still list correctly via the fallback,
 **So that** the rollout is safely resumable and old data remains readable.
 
-**Acceptance Criteria**:
-- [ ] A cluster build without Phase B (no `runId` sent) can open a gate, answer it, and reach `applied` against Phase-A cloud.
-- [ ] A pre-Phase-A gate doc (no `generation` field) still surfaces via `cockpit_gate_list` through the fallback code path.
+**Acceptance Criteria** (realization detail fixed by §Clarifications Q3 — hybrid: FR-008 uses omission of the optional field, FR-009 uses direct-write to the fake's store):
+- [ ] A cluster build without Phase B — realized by **omitting the optional `runId` field** on `cockpit_gate_open` / `cockpit_gate_ack` / `cockpit_gate_status` / `cockpit_gate_list` (no simulation flag; `runId` is already `z.string().min(1).optional()` on every gate schema) — can open a gate, answer it, and reach `applied` against Phase-A cloud.
+- [ ] A pre-Phase-A gate doc — realized by **hand-crafting a doc without the `generation` field directly into the fake cloud's store** — still surfaces via `cockpit_gate_list` through the fallback code path.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Test harness must exercise the real WebSocket relay path — no `vi.fn()` peer, no `MockRelayClient`. | P1 | US5. Pattern: `packages/cluster-relay/tests/relay.test.ts` + `packages/orchestrator/src/__tests__/relay-integration.integration.test.ts` (established WebSocketServer harness). |
+| FR-001 | Test harness must exercise the real WebSocket relay path — no `vi.fn()` peer, no `MockRelayClient`. | P1 | US5. Pattern: `packages/cluster-relay/tests/relay.test.ts` + `packages/orchestrator/src/__tests__/relay-integration.integration.test.ts` (established WebSocketServer harness). Under §Clarifications Q1: extends `packages/orchestrator/src/__tests__/cockpit-gates/fake-peer.ts` (already a real `WebSocketServer` from #1024/#1077). |
 | FR-002 | Assert re-running an `applied` phase in the same `runId` opens a new gate. | P1 | US1. Whole point of the epic. |
 | FR-003 | Assert `cockpit_gate_status(runId=<current>)` returns `open` immediately after gate open, not `absent`. | P1 | US2. Silent `absent` violates `auto.md:283`. |
-| FR-004 | Assert the drafting subagent runs exactly once across N≥3 wakes on the same gate. | P1 | US3. Requires observable emit count from the drafting path. |
+| FR-004 | Assert the pre-draft dedup invariant at the MCP boundary across N≥3 wakes on the same natural gate: `cockpit_gate_status` returns `open`/`answered` on wakes 2..N (never `absent`); exactly one `cockpit_gate_open` reaches the peer; exactly one `'cockpit gate emitted'` log line per `gateId`; exactly one `cluster.cockpit` frame per `gateId` on the wire (distinguishable by distinct `frameId` per #1077). | P1 | US3. Re-scoped from "drafting subagent runs exactly once" per §Clarifications Q2, Q4 — the drafting subagent lives in `auto.md` playbook prose, not code; asserting the invariant it protects at the MCP boundary is both feasible and stronger. Observable via existing `packages/orchestrator/src/routes/cockpit-gates.ts` `tryEmitOrRetain` log line + peer-side frame count. |
 | FR-005 | Assert `cockpit_gate_list` renders `generation` without `runId` suffix for both simple (`P2`) and colon-bearing (`artifact-review:spec-review:<sha>`) generations. | P2 | US4. Rendering is the assertion; internal storage may include `runId`. |
-| FR-006 | Assert `frameId` on a reply matches the `frameId` the cluster emitted, captured over a real socket. | P1 | US5. Load-bearing — this is the specific gap that shipped inert. |
+| FR-006 | Assert `frameId` on a reply matches the `frameId` the cluster emitted, captured over a real socket. Fake peer MUST validate inbound `cluster.cockpit` frame payloads with `GateOpenWireSchema` / `GateOutcomeWireSchema` from generacy `mcp/gates/schemas.ts` (not read fields ad hoc), so a cluster-side shape change fails locally instead of silently diverging. | P1 | US5. Load-bearing — this is the specific gap that shipped inert. `frameId` is opaque and read off raw frame data by the real cloud (`generacy-cloud/services/api/src/services/relay/message-handler.ts:812`); the fake must be equally strict about payload shape. |
 | FR-007 | Assert zero `Invalid relay message, skipping` lines in cluster stdout during a successful gate ingest cycle. | P2 | US6. Regression guard for generacy#1063. |
-| FR-008 | Assert a cluster that omits `runId` still completes a gate cycle against Phase-A cloud (backward compat direction 1). | P1 | US7. |
-| FR-009 | Assert a gate doc with no `generation` field lists via the pre-Phase-A fallback (backward compat direction 2). | P1 | US7. |
+| FR-008 | Assert a cluster that **omits the optional `runId` field** on all four gate tool calls still completes a gate cycle against Phase-A cloud (backward compat direction 1). Realization is not-passing an optional field — NOT a `SIMULATE_PHASE_B_MISSING` flag, and not a pinned old-tarball install (the deployed cluster is source-linked). | P1 | US7. §Clarifications Q3, Q5. |
+| FR-009 | Assert a gate doc with no `generation` field, **hand-crafted directly into the fake cloud's store**, lists via the pre-Phase-A fallback (backward compat direction 2). | P1 | US7. §Clarifications Q3. |
 | FR-010 | Test must fail closed on any of FR-002 through FR-009, with each failure attributable to the specific verification item that broke. | P1 | Prevents "one failure hides the rest" degeneration. |
 | FR-011 | Test must run against a cluster on the new build with workers restarted (not just the orchestrator). | P1 | Precondition — avoids version-skew false positives from stale worker npm packages. |
+| FR-012 | Fault-injection knobs used by SC-002 MUST live in harness/fixture code only. No `SIMULATE_PHASE_*` environment variable, config flag, or code branch may exist in a shipped production code path (orchestrator, control-plane, cluster-relay, MCP server). If any of the seven verification items is un-revertable without touching production code, that item drops to manual attribution (option A of §Clarifications Q5) and is explicitly named in the spec — the production knob is not the escape hatch. | P1 | §Clarifications Q5. A production binary carrying env-var-triggered "behave like the broken version" branches is one misconfiguration away from being the broken version in a real cluster and inverts the meaning of every log line around it. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
 | SC-001 | End-to-end test passes on a cluster with all three phases deployed. | Pass on 3 consecutive runs. | Run the test 3× on a fresh cluster; all pass. |
-| SC-002 | Each of the seven verification items maps to at least one failing test assertion when the corresponding phase is reverted. | 7/7 verification items pinnable. | Reviewer reverts each phase in isolation; harness produces at least one attributable failure for the reverted phase. |
+| SC-002 | Each of the seven verification items maps to at least one failing test assertion when the corresponding phase is reverted, with **attribution** (the failing assertion names the reverted phase's specific behaviour), not just failure. A revert that reddens the whole suite proves coupling, not attribution. Exercised via fault-injection knobs in **harness/fixture code only** (§Clarifications Q5) — under §Clarifications Q1=A most knobs are fake-side config: *Phase A reverted* → fake's store does not persist `generation`; *Phase B reverted* → harness omits `runId` on send (not-a-flag per §Clarifications Q3); *Phase C reverted* → harness does not pass `runId` on open/ack. CI runs healthy + N revert scenarios. | 7/7 verification items pinnable **with per-phase attribution**. | CI runs a healthy matrix cell and one revert cell per phase; each revert cell fails on the assertion matching the reverted phase's behaviour. Any item that cannot be exercised without a production-code knob is dropped to manual attribution and explicitly named in the spec (per FR-012). |
 | SC-003 | Zero `Invalid relay message, skipping` in cluster stdout during a successful cycle. | 0 occurrences. | Grep cluster log output post-cycle. |
 | SC-004 | Draft-once assertion holds across ≥3 wakes. | 1 draft spawn per gate. | Instrumented count on the drafting subagent invocation. |
 | SC-005 | Backward-compat scenarios (no-`runId` cluster + no-`generation` doc) both pass. | 2/2 scenarios pass. | Run both compat tests; both pass. |
@@ -129,9 +140,13 @@ The composed path fails silently in both directions:
 
 1. All three phases (Phase A cloud, Phase B generacy, Phase C agency) have landed on their target channels before this issue is worked. If any phase is missing, this issue blocks — it is not a substitute for the phase work.
 2. `frameId` correlation over a real WebSocket peer is the load-bearing part of FR-006 — echo-mocks are worthless here (that is precisely why the bug shipped).
-3. Structured logs / instrumented emit counts are the observation surface for FR-004 and FR-007. If either surface is missing, this issue must add it as part of the harness rather than substitute a weaker signal.
-4. Test harness sits in `packages/orchestrator/src/__tests__/` alongside the existing `relay-integration.integration.test.ts` — a proven pattern for cross-process integration tests in this repo.
+3. Observation surfaces for FR-004 and FR-007 already exist and are used as-is:
+   - FR-004 uses the existing `'cockpit gate emitted'` log line in `packages/orchestrator/src/routes/cockpit-gates.ts` `tryEmitOrRetain` (structured `{ gateId, type }`) plus peer-side `cluster.cockpit` frame count. This is a **stronger** signal than a drafting-subagent spawn count (one layer closer to the operator) — the assumption is that substituting to a stronger observable, not adding a redundant one, satisfies the "no weaker signal" constraint (§Clarifications Q4).
+   - FR-007 uses cluster stdout grep for the exact `Invalid relay message, skipping` string — the regression-target text from generacy#1063.
+4. Test harness sits in `packages/orchestrator/src/__tests__/cockpit-gates/` and extends `fake-peer.ts` + `cockpit-gates-integration.integration.test.ts` (established by #1024, extended by #1077) rather than creating a parallel harness. The fake peer must be tightened to validate `cluster.cockpit` frame payloads with the frozen wire schemas (`GateOpenWireSchema` / `GateOutcomeWireSchema` from generacy `mcp/gates/schemas.ts`) rather than only the envelope (`RelayMessageSchema`), so that a cluster-side payload-shape change fails locally.
 5. Workers must be restarted after the cluster update. `generacy update` refreshes image digests but does not re-pull `@channel` npm packages; the orchestrator entrypoint does on restart, but worker processes need their own restart.
+6. Cluster-side code is source-linked in this deployment (`generacy` CLI resolves to `/workspaces/generacy/packages/generacy/bin/generacy.js`, running the mounted source tree). Published npm versions are not the distribution mechanism, so version-skew tests cannot be realized by pinning old tarballs — the honest realizations are omitting optional fields on the wire (FR-008) and hand-writing pre-migration docs directly into the fake's store (FR-009). See §Clarifications Q3.
+7. `runId` is optional on every gate MCP schema (`CockpitGateStatusInputSchema`, `CockpitGateListInputSchema`, `GateOpenInputSchema`, `GateAckInputSchema` all declare `runId: z.string().min(1).optional()`). FR-008's "old cluster" realization is field omission on the harness's tool calls — not a config flag, and never a production-side switch (per FR-012).
 
 ## Out of Scope
 
@@ -145,6 +160,16 @@ The composed path fails silently in both directions:
 ## Provenance
 
 Split from generacy#1059, whose acceptance criteria are all end-to-end and therefore land here. Depends on the generacy-cloud Phase A, generacy Phase B, and agency Phase C issues.
+
+## Clarifications
+
+Detailed rationale for each answer lives in `clarifications.md`. Load-bearing decisions summarized here:
+
+- **Q1 → A**: Fake WS peer + fake HTTP cloud, extending `fake-peer.ts` (#1024/#1077). Payload validation via wire schemas is required (see FR-006). Staging cloud (option C) rejected outright — it shares the production Firestore.
+- **Q2 → C**: MCP tool-call driver. Option A (direct call to drafting entry-point) struck as unimplementable — the drafting subagent is `auto.md` playbook prose, not code. FR-004 re-scoped to pin the dedup invariant at the MCP boundary.
+- **Q3 → C (hybrid)**: FR-008 = omit optional `runId` field (no flag). FR-009 = hand-crafted pre-Phase-A doc written directly into the fake's store.
+- **Q4 → C**: Existing `'cockpit gate emitted'` log line + wire-level frame count are the observability surface. Stronger than a drafting-spawn count because it measures what reaches the operator's inbox.
+- **Q5 → B**: Fault-injection knobs in harness/fixture code only. FR-012 forbids `SIMULATE_PHASE_*` switches in shipped code. Items that cannot be exercised without a production knob drop to manual attribution and are named in the spec.
 
 ---
 
