@@ -60,17 +60,24 @@ const GateQueryStringSchema = z
     gateType: GateTypeSchema.optional(),
     generation: z.string().min(1).optional(),
     /**
-     * #1067 — Passive pass-through. Route MUST NOT enforce
-     * "runId ⇒ generation" here — the cloud route enforces it authoritatively
-     * (`services/api/src/routes/clusters/cockpit-gates.ts` .refine). Duplicating
-     * the refinement would mask the cloud's RFC-7807 400 behind a route-side
-     * 'VALIDATION' 400.
+     * #1067 — Accepted for surface parity with the cloud shape. In list mode
+     * the handler drops `runId` before calling `listGates`; in status mode it
+     * forwards `runId` on to the cloud. The `runId ⇒ generation` refine below
+     * is safe to duplicate precisely *because* it can only fire in list mode
+     * (status mode has `generation` present by construction), where the cloud
+     * is never consulted — so there is no RFC-7807 400 for a local 400 to mask.
+     * Status-mode requests still reach the cloud and still surface its
+     * RFC-7807 body unchanged.
      */
     runId: z.string().min(1).optional(),
   })
   .strict()
   .refine((v) => v.generation === undefined || v.gateType !== undefined, {
     message: 'gateType is required when generation is present',
+  })
+  .refine((v) => v.runId === undefined || v.generation !== undefined, {
+    message: 'runId requires generation',
+    path: ['runId'],
   });
 
 /**

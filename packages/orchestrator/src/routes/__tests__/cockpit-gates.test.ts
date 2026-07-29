@@ -706,6 +706,25 @@ describe('cockpit gates routes', () => {
       expect(JSON.parse(res.body).code).toBe('VALIDATION');
     });
 
+    // #1067 review — runId in list mode (generation absent) would silently
+    // return an unfiltered list because listGates is never sent the runId.
+    // The sibling refine closes it locally; the caller sees the same shape
+    // the cloud would reject with in status mode.
+    it('400 when runId is present without generation (list-mode rejects locally)', async () => {
+      const listGates = vi.fn().mockResolvedValue({ gates: [] });
+      const client = makeMockQueryClient({ listGates });
+      wire(client);
+      await server.ready();
+      const res = await server.inject({
+        method: 'GET',
+        url: `/cockpit/gates?issueRef=${encodeURIComponent('gen/rep#1')}&runId=run-abc`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('VALIDATION');
+      // The cloud must not be consulted for a request the local schema rejects.
+      expect(listGates).not.toHaveBeenCalled();
+    });
+
     it('400 on missing issueRef', async () => {
       wire(makeMockQueryClient());
       await server.ready();
