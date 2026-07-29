@@ -5,6 +5,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import { cockpitGateList } from '../tools/cockpit_gate_list.js';
 import { CockpitGateListInputSchema } from '../gates/query-schemas.js';
+import { createGateQueryClient } from '../gates/query-client.js';
+
+// Preserve real `createGateQueryClient` as the default so wire-level tests
+// keep flowing through their `fetchImpl` spies; wrap it in `vi.fn` so the
+// client-seam test can override with `mockImplementationOnce` to spy on the
+// argument passed to `client.listGates` (see #1080).
+vi.mock('../gates/query-client.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../gates/query-client.js')>();
+  return {
+    ...actual,
+    createGateQueryClient: vi.fn(actual.createGateQueryClient),
+  };
+});
 
 function jsonResponse(status: number, body: unknown, text?: string): Response {
   return new Response(text ?? (body === undefined ? '' : JSON.stringify(body)), {
@@ -231,7 +245,7 @@ describe('cockpit_gate_list parity (#1038)', () => {
       expect(codes).toContain('unrecognized_keys');
     });
 
-    it('handler drops runId before the client call — outbound URL never carries runId', async () => {
+    it('outbound list URL never carries runId (wire-level guard)', async () => {
       const spy = vi.fn(async () => jsonResponse(200, { gates: [] }));
       await cockpitGateList(
         {
@@ -244,6 +258,37 @@ describe('cockpit_gate_list parity (#1038)', () => {
       const url = String(spy.mock.calls[0]?.[0]);
       expect(url).not.toContain('runId=');
       expect(url).not.toContain('run_id=');
+    });
+
+    it('handler strips runId before invoking client.listGates (client-seam guard)', async () => {
+      // Complements the wire-level guard above. If a future refactor teaches
+      // `buildListUrl` to serialize `runId`, the wire-level guard fails; if
+      // the handler-side drop is removed but `buildListUrl` still ignores
+      // `runId`, only THIS test fails. Two seams, two distinct regressions.
+      const listGatesSpy = vi.fn(async () => ({ gates: [] }));
+      const getGateStatusSpy = vi.fn(async () => ({
+        gateId: null,
+        status: 'absent' as const,
+      }));
+      vi.mocked(createGateQueryClient).mockImplementationOnce(() => ({
+        listGates: listGatesSpy,
+        getGateStatus: getGateStatusSpy,
+      }));
+
+      const result = await cockpitGateList(
+        {
+          issueRef: 'generacy-ai/generacy#1067',
+          gateType: 'implementation-review',
+          runId: 'auto-cluster-1067-1722243247891',
+        },
+        BASE_DEPS,
+      );
+      expect(result.status).toBe('ok');
+      expect(listGatesSpy).toHaveBeenCalledTimes(1);
+      const arg = listGatesSpy.mock.calls[0]?.[0];
+      expect(arg).not.toHaveProperty('runId');
+      expect(arg).toHaveProperty('issueRef', 'generacy-ai/generacy#1067');
+      expect(arg).toHaveProperty('gateType', 'implementation-review');
     });
   });
 });

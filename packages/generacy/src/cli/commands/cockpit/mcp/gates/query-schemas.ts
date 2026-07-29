@@ -63,14 +63,9 @@ export const CockpitGateListInputSchema = z
     /** Optional — narrow to a single gateType. Absent = all types. */
     gateType: GateTypeSchema.optional(),
     /**
-     * #1067 — Accepted on the MCP surface for parity with `cockpit_gate_status`.
-     * DELIBERATELY DROPPED by the tool handler before calling the cloud client
-     * (see tools/cockpit_gate_list.ts). The deployed cloud contract
-     * (generacy-cloud#892) carries
-     * `.refine((q) => q.runId === undefined || q.generation !== undefined,
-     * { message: 'runId requires generation' })` and list mode has no
-     * `generation` by construction, so forwarding `runId` on list produces a
-     * 400 RFC-7807 and breaks the sweep's primary dedup primitive.
+     * Accepted for MCP-surface parity with `cockpit_gate_status`. Handler
+     * drops it before the cloud call — see `tools/cockpit_gate_list.ts`
+     * for rationale.
      */
     runId: z.string().min(1).optional(),
   })
