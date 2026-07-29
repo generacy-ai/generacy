@@ -330,10 +330,15 @@ describe('Cockpit gates integration', () => {
       );
       expect(openAEvent.data).toMatchObject({ type: 'gate-open', gateId: gateIdA, gateKey: gateKeyA });
 
-      // SC-002 (within-run byte-identical frames): a second POST of the same
-      // Run A body — mimicking a MCP-tool retry after the askedAt hoist —
-      // reaches the peer as a byte-identical second event. Same gateId, same
-      // gateKey, same askedAt. Cloud dedup collapses these to one inbox row.
+      // SC-002 (within-run identical natural-gate identity): a second POST of
+      // the same Run A body — mimicking a MCP-tool retry after the askedAt
+      // hoist — reaches the peer as a second event with the same gateId,
+      // gateKey, and askedAt. Cloud dedup collapses these to one inbox row via
+      // the `gateId` upsert on `organizations/{orgId}/cockpitGates/{gateId}` —
+      // byte-identity is not required for that guarantee. `frameId` is per
+      // emit by design (#1077): two POSTs are two frames with two ids so that
+      // each has its own pending-map entry and the two replies settle
+      // independently. Assert here that they differ, which pins the property.
       const openARetryRes = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
         method: 'POST',
         headers: JSON_HEADERS,
@@ -347,8 +352,16 @@ describe('Cockpit gates integration', () => {
       );
       const runAFrames = cockpitEvents(ctx, gateIdA);
       expect(runAFrames).toHaveLength(2);
-      // Byte-identity: both frames carry the same gateId + gateKey + askedAt.
-      expect(runAFrames[0]!.data).toEqual(runAFrames[1]!.data);
+      // Identical natural-gate identity: both frames carry the same gateId +
+      // gateKey + askedAt. `frameId` is EXCLUDED — #1077 mints one per emit,
+      // so two POSTs of the same body are two frames with two ids by design.
+      // Asserting they DIFFER pins that property here rather than losing it.
+      const { frameId: frameIdA1, ...restA1 } = runAFrames[0]!.data as Record<string, unknown>;
+      const { frameId: frameIdA2, ...restA2 } = runAFrames[1]!.data as Record<string, unknown>;
+      expect(restA1).toEqual(restA2);
+      expect(frameIdA1).toEqual(expect.stringMatching(/^frm_[0-9a-f]{24}$/));
+      expect(frameIdA2).toEqual(expect.stringMatching(/^frm_[0-9a-f]{24}$/));
+      expect(frameIdA1).not.toBe(frameIdA2);
       expect((runAFrames[0]!.data as { askedAt: string }).askedAt).toBe(runAAskedAt);
 
       // Ack Run A to `applied` — this is the terminal state that today's
