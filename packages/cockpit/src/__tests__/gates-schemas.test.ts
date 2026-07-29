@@ -143,17 +143,22 @@ describe('gates wire-contract schemas', () => {
         expect(Object.hasOwn(wire, 'frameId')).toBe(false);
       });
 
-      it('empty string is normalized to absent (wire-level)', () => {
-        const fixture = VALID_FIXTURES.clarification;
-        const parsed = GateOpenSchema.parse({ ...fixture, frameId: '' });
-        expect(parsed.frameId).toBeUndefined();
-        const wire = JSON.parse(JSON.stringify(parsed));
-        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
-      });
+      it.each([
+        ['empty string', ''],
+        ['null', null],
+      ] as const)(
+        '%s is normalized to absent (wire-level)',
+        (_label, value) => {
+          const fixture = VALID_FIXTURES.clarification;
+          const parsed = GateOpenSchema.parse({ ...fixture, frameId: value });
+          expect(parsed.frameId).toBeUndefined();
+          const wire = JSON.parse(JSON.stringify(parsed));
+          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        },
+      );
 
       it.each([
         ['number', 123],
-        ['null', null],
         ['object', {}],
         ['array', []],
       ] as const)('non-string (%s) is rejected', (_label, value) => {
@@ -176,16 +181,21 @@ describe('gates wire-contract schemas', () => {
         expect(Object.hasOwn(wire, 'frameId')).toBe(false);
       });
 
-      it('empty string is normalized to absent (wire-level)', () => {
-        const parsed = GateOutcomeSchema.parse({ ...outcomeBase, frameId: '' });
-        expect(parsed.frameId).toBeUndefined();
-        const wire = JSON.parse(JSON.stringify(parsed));
-        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
-      });
+      it.each([
+        ['empty string', ''],
+        ['null', null],
+      ] as const)(
+        '%s is normalized to absent (wire-level)',
+        (_label, value) => {
+          const parsed = GateOutcomeSchema.parse({ ...outcomeBase, frameId: value });
+          expect(parsed.frameId).toBeUndefined();
+          const wire = JSON.parse(JSON.stringify(parsed));
+          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        },
+      );
 
       it.each([
         ['number', 123],
-        ['null', null],
         ['object', {}],
         ['array', []],
       ] as const)('non-string (%s) is rejected', (_label, value) => {

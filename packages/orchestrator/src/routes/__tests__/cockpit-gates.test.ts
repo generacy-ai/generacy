@@ -260,26 +260,32 @@ describe('cockpit gates routes', () => {
         expect(Object.hasOwn(wire, 'frameId')).toBe(false);
       });
 
-      it('empty-string frameId is normalized to absent on the wire', async () => {
-        const client = makeMockClient();
-        setupCockpitGatesRoute(server, {
-          retainer,
-          getRelayClient: () => client,
-          logger: silentLogger,
-        });
-        await server.ready();
-        const res = await server.inject({
-          method: 'POST',
-          url: '/cockpit/gates',
-          payload: { ...validOpen, frameId: '' },
-        });
-        expect(res.statusCode).toBe(202);
-        const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-          data: Record<string, unknown>;
-        };
-        const wire = JSON.parse(JSON.stringify(call.data));
-        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
-      });
+      it.each([
+        ['empty-string', ''],
+        ['null', null],
+      ] as const)(
+        '%s frameId is normalized to absent on the wire',
+        async (_label, value) => {
+          const client = makeMockClient();
+          setupCockpitGatesRoute(server, {
+            retainer,
+            getRelayClient: () => client,
+            logger: silentLogger,
+          });
+          await server.ready();
+          const res = await server.inject({
+            method: 'POST',
+            url: '/cockpit/gates',
+            payload: { ...validOpen, frameId: value },
+          });
+          expect(res.statusCode).toBe(202);
+          const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+            data: Record<string, unknown>;
+          };
+          const wire = JSON.parse(JSON.stringify(call.data));
+          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        },
+      );
 
       it('non-string frameId (number) → 400 VALIDATION', async () => {
         setupCockpitGatesRoute(server, {
@@ -479,26 +485,32 @@ describe('cockpit gates routes', () => {
         expect(Object.hasOwn(wire, 'frameId')).toBe(false);
       });
 
-      it('empty-string frameId is normalized to absent on the wire', async () => {
-        const client = makeMockClient();
-        setupCockpitGatesRoute(server, {
-          retainer,
-          getRelayClient: () => client,
-          logger: silentLogger,
-        });
-        await server.ready();
-        const res = await server.inject({
-          method: 'POST',
-          url: `/cockpit/gates/${GATE_ID}/ack`,
-          payload: { ...validAckBody, frameId: '' },
-        });
-        expect(res.statusCode).toBe(202);
-        const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-          data: Record<string, unknown>;
-        };
-        const wire = JSON.parse(JSON.stringify(call.data));
-        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
-      });
+      it.each([
+        ['empty-string', ''],
+        ['null', null],
+      ] as const)(
+        '%s frameId is normalized to absent on the wire',
+        async (_label, value) => {
+          const client = makeMockClient();
+          setupCockpitGatesRoute(server, {
+            retainer,
+            getRelayClient: () => client,
+            logger: silentLogger,
+          });
+          await server.ready();
+          const res = await server.inject({
+            method: 'POST',
+            url: `/cockpit/gates/${GATE_ID}/ack`,
+            payload: { ...validAckBody, frameId: value },
+          });
+          expect(res.statusCode).toBe(202);
+          const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+            data: Record<string, unknown>;
+          };
+          const wire = JSON.parse(JSON.stringify(call.data));
+          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        },
+      );
 
       it('non-string frameId (number) → 400 VALIDATION', async () => {
         setupCockpitGatesRoute(server, {
