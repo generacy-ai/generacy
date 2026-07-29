@@ -283,22 +283,43 @@ return {1, attemptCount}
 export const _RELEASE_SCRIPT_FOR_TESTS = RELEASE_SCRIPT;
 
 /**
- * #1058 / FR-001 / FR-002 — atomic `SISMEMBER`+`SREM` for a two-sweep-confirmed
- * residue candidate. The load-bearing race guard is the two-sweep tracker
- * in the adapter (`reconcileTracker`); this script's role is limited to
- * catching the narrow window where an item genuinely re-entered flight
- * between the client-side residue computation and the Lua invocation for
- * this specific candidate.
+ * #1058 / FR-001 / FR-002 — atomic remove + presence-report for a
+ * two-sweep-confirmed residue candidate. NOT a race guard: `SREM` on a
+ * non-member is already a no-op, so `SISMEMBER`+guarded-`SREM` is
+ * behaviourally identical to a bare `SREM`. What the `SISMEMBER` buys is
+ * the distinguishable return value (1 vs 0) so the adapter can report
+ * whether the member was actually present at Lua time.
+ *
+ * Safety of this sweep rests on TWO invariants outside this script:
+ *
+ *   (1) The two-sweep tracker in the adapter (`reconcileTracker`) — it
+ *       makes snapshot-interleaving artifacts self-clear before they can
+ *       reach an `SREM`.
+ *
+ *   (2) The SADD-guard invariant: **every** code path that inserts into
+ *       `IN_FLIGHT_KEY` is itself gated on `SISMEMBER IN_FLIGHT_KEY`
+ *       returning 0 (currently only `ENQUEUE_IF_ABSENT_SCRIPT`, shared
+ *       by `enqueue()` at #1060/PR #1065 and `enqueueIfAbsent()`). A
+ *       residue member is by definition present in `IN_FLIGHT_KEY`, so
+ *       every guarded `SADD` drops rather than inserts for the itemKeys
+ *       this sweep operates on. There is no code path that can re-add a
+ *       residue member during the reconcile window.
+ *
+ *   **If you add an unguarded `SADD` against `IN_FLIGHT_KEY` (e.g. a
+ *   bulk-requeue admin verb), invariant (2) breaks and this sweep can
+ *   `SREM` a live item.** Gate any new `SADD` on the same
+ *   `SISMEMBER == 0` check, or extend this script to re-verify absence
+ *   from pending/claimed inside Lua.
  *
  * KEYS[1] = orchestrator:queue:in-flight-items
  * ARGV[1] = itemKey
  *
  * Returns:
  *   1 = reconciled (SREM fired)
- *   0 = skipped-race-reappeared (item was gone before we could SREM, or a
- *       concurrent `enqueueIfAbsent`/`enqueue` re-added it after our
- *       client-side detection but before this Lua fired — either way,
- *       we do NOT SREM)
+ *   0 = skipped-already-gone (item was absent from the SET at Lua time;
+ *       under invariant (2) above, this can only mean a concurrent
+ *       `complete()`/`release()`/`reapOrphanClaims()` fired the `SREM`
+ *       between snapshot and this Lua invocation)
  *
  * Contains, in strict order (single-source-of-truth for the
  * `redis-queue-adapter.script-wiring.test.ts` static assertion):
@@ -868,7 +889,7 @@ export class RedisQueueAdapter implements QueueManager {
     const report: ReconcileReport = {
       scanned: 0,
       reconciled: 0,
-      skippedRaceReappeared: 0,
+      skippedAlreadyGone: 0,
       trackedFirstSeen: 0,
     };
 
@@ -970,6 +991,11 @@ export class RedisQueueAdapter implements QueueManager {
 
       if (result === 1) {
         // AD-6: full cache cleanup matches complete() / dead-letter / reclaim.
+        // `enqueuedAtCache` is process-local and `IN_FLIGHT_KEY` carries no
+        // timestamps, so residue predating this process (the boot-sweep
+        // repair population) resolves to `undefined` — expected, not a bug.
+        // Omit the field entirely rather than emit `null` so its absence
+        // reads as "not applicable" instead of "lookup failed".
         const enqueuedAtMs = this.enqueuedAtCache.get(itemKey);
         const ageMs = enqueuedAtMs !== undefined ? now - enqueuedAtMs : null;
         this.reconcileTracker.delete(itemKey);
@@ -982,7 +1008,7 @@ export class RedisQueueAdapter implements QueueManager {
             {
               event: 'orphan-in-flight-reconciled',
               itemKey,
-              ageMs,
+              ...(ageMs !== null ? { ageMs } : {}),
               reason: 'in-flight-no-pending-no-claim',
             },
             'Reconciled orphaned in-flight-SET member (no pending, no claim)',
@@ -992,9 +1018,13 @@ export class RedisQueueAdapter implements QueueManager {
           suppressed.push(itemKey);
         }
       } else {
-        // result === 0: item absent from SET at Lua time (concurrent SADD or
-        // already gone). Retain tracker entry; next sweep re-evaluates.
-        report.skippedRaceReappeared += 1;
+        // result === 0: item was absent from `IN_FLIGHT_KEY` at Lua time.
+        // Under the SADD-guard invariant documented on
+        // `RECONCILE_IN_FLIGHT_SCRIPT`, this can only mean a concurrent
+        // `complete()`/`release()`/`reapOrphanClaims()` fired the `SREM`
+        // between snapshot and Lua. Retain tracker entry; next sweep
+        // re-evaluates.
+        report.skippedAlreadyGone += 1;
       }
     }
 

@@ -470,7 +470,7 @@ export interface ReapReport {
 /**
  * #1058 — aggregate result of one `reconcileInFlight` sweep. Consumed by
  * `WorkerDispatcher.reaperLoop`'s per-cycle log line (info when nonzero).
- * Log gate: `reconciled > 0 || skippedRaceReappeared > 0 || trackedFirstSeen > 0`.
+ * Log gate: `reconciled > 0 || skippedAlreadyGone > 0 || trackedFirstSeen > 0`.
  * A fully healthy cycle produces zero log lines.
  */
 export interface ReconcileReport {
@@ -484,17 +484,22 @@ export interface ReconcileReport {
    */
   reconciled: number;
   /**
-   * Confirmed residue candidates whose `RECONCILE_IN_FLIGHT_SCRIPT` returned
-   * `0` (SISMEMBER == 0 — item was already gone or re-added by a concurrent
-   * `enqueueIfAbsent`/`enqueue` between the client-side residue computation
-   * and the Lua invocation). Tracker entry retained; next sweep re-evaluates.
+   * Confirmed residue candidates whose `RECONCILE_IN_FLIGHT_SCRIPT`
+   * returned `0` (SISMEMBER == 0 — item was already gone from
+   * `IN_FLIGHT_KEY` at Lua time, i.e. a concurrent
+   * `complete()`/`release()`/`reapOrphanClaims()` fired the `SREM`
+   * between snapshot and Lua). Tracker entry retained; next sweep
+   * re-evaluates. Distinct from `ReapReport.skippedRaceReappeared` —
+   * the two report opposite polarities and the shared root name in
+   * `ReapReport` refers to a heartbeat that _re-appeared_ (opposite of
+   * "gone").
    */
-  skippedRaceReappeared: number;
+  skippedAlreadyGone: number;
   /**
    * Number of itemKeys inserted into `reconcileTracker` this cycle
    * (first-sweep observations). These will be re-evaluated on the next
    * sweep; if still residue, they graduate to `reconciled` (or
-   * `skippedRaceReappeared` on Lua race). If they re-appear in
+   * `skippedAlreadyGone` on Lua race). If they re-appear in
    * pending/claimed before then, they are silently dropped from the
    * tracker (transient race artifact self-clear).
    */

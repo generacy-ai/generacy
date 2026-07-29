@@ -398,7 +398,7 @@ describe.each(HARNESSES)('$name adapter — reconcileInFlight parity (#1058)', (
       expect.objectContaining({
         scanned: expect.any(Number),
         reconciled: expect.any(Number),
-        skippedRaceReappeared: expect.any(Number),
+        skippedAlreadyGone: expect.any(Number),
         trackedFirstSeen: expect.any(Number),
       }),
     );
@@ -412,7 +412,7 @@ describe.each(HARNESSES)('$name adapter — reconcileInFlight parity (#1058)', (
 
     const report = await adapter.reconcileInFlight();
     expect(report.reconciled).toBe(0);
-    expect(report.skippedRaceReappeared).toBe(0);
+    expect(report.skippedAlreadyGone).toBe(0);
     // Note: `scanned` differs by adapter (Redis reports SSCAN'd count,
     // in-memory reports set size at call time — both truthful). Wedge-repair
     // (SC-001) is Redis-only per contract; not asserted here.

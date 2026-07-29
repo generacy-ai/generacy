@@ -110,9 +110,22 @@ export class WorkerDispatcher {
     // reaperLoop's first regular sweep runs its own tracker check regardless.
     // Pre-crash residue armed by boot-sweep completion is repaired at the
     // first regular sweep (~heartbeatCheckIntervalMs).
-    void this.queue.reconcileInFlight().catch((err) => {
-      this.logger.warn({ err }, 'boot reconcileInFlight failed');
-    });
+    //
+    // Guarded like the reaper-loop's call to `reconcileInFlight` 500 lines
+    // below (#1054 finding 5): `.catch()` handles rejections only, so a
+    // synchronous throw (undefined `reconcileInFlight` on a hand-rolled
+    // `as unknown as QueueManager` test double) would propagate out of
+    // `start()` and prevent `Promise.all([pollLoop, reaperLoop])` from
+    // ever being reached — killing the dispatcher entirely. A boot sweep
+    // is a nice-to-have that buys one cycle of latency on a repair path;
+    // it must never be able to prevent the dispatcher from starting.
+    try {
+      void this.queue.reconcileInFlight().catch((err) => {
+        this.logger.warn({ err }, 'boot reconcileInFlight failed');
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'boot reconcileInFlight unavailable');
+    }
 
     // Run poll loop and reaper loop concurrently
     await Promise.all([
@@ -631,7 +644,7 @@ export class WorkerDispatcher {
         if (
           reconcileReport &&
           (reconcileReport.reconciled > 0 ||
-            reconcileReport.skippedRaceReappeared > 0 ||
+            reconcileReport.skippedAlreadyGone > 0 ||
             reconcileReport.trackedFirstSeen > 0)
         ) {
           this.logger.info(
@@ -639,7 +652,7 @@ export class WorkerDispatcher {
               event: 'reconcile-in-flight',
               scanned: reconcileReport.scanned,
               reconciled: reconcileReport.reconciled,
-              skippedRaceReappeared: reconcileReport.skippedRaceReappeared,
+              skippedAlreadyGone: reconcileReport.skippedAlreadyGone,
               trackedFirstSeen: reconcileReport.trackedFirstSeen,
             },
             'Reconcile cycle complete (in-flight residue)',

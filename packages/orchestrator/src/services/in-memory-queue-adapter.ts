@@ -204,7 +204,7 @@ export class InMemoryQueueAdapter implements QueueManager {
     return {
       scanned: this.inFlightSet.size,
       reconciled: 0,
-      skippedRaceReappeared: 0,
+      skippedAlreadyGone: 0,
       trackedFirstSeen: 0,
     };
   }

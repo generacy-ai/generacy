@@ -137,7 +137,7 @@ describeReal('RedisQueueAdapter.reconcileInFlight — FR-008 regression suite (#
     let report = await adapter.reconcileInFlight();
     expect(report.reconciled).toBe(0);
     expect(report.trackedFirstSeen).toBe(0);
-    expect(report.skippedRaceReappeared).toBe(0);
+    expect(report.skippedAlreadyGone).toBe(0);
 
     const claimed = await adapter.claim('worker-healthy');
     expect(claimed).not.toBeNull();
@@ -205,7 +205,7 @@ describeReal('RedisQueueAdapter.reconcileInFlight — FR-008 regression suite (#
   // (d) SC-003 — TOCTOU safety via Lua atomic re-check
   // ============================================================
 
-  it('(d) SC-003 Lua atomic re-check: a race that removes the SET member between snapshot and Lua returns skippedRaceReappeared, no SREM', async () => {
+  it('(d) SC-003 Lua atomic re-check: a race that removes the SET member between snapshot and Lua returns skippedAlreadyGone, no SREM', async () => {
     const logger = createLogger();
     const adapter = new RedisQueueAdapter(redis, logger);
 
@@ -290,7 +290,7 @@ describeReal('RedisQueueAdapter.reconcileInFlight — FR-008 regression suite (#
   // (f) FR-004 log-shape assertion
   // ============================================================
 
-  it('(f) FR-004 log shape: orphan-in-flight-reconciled warn has { event, itemKey, ageMs, reason: "in-flight-no-pending-no-claim" }', async () => {
+  it('(f) FR-004 log shape: orphan-in-flight-reconciled warn has { event, itemKey, reason: "in-flight-no-pending-no-claim" } (ageMs omitted when unknown)', async () => {
     const logger = createLogger();
     const adapter = new RedisQueueAdapter(redis, logger);
 
@@ -308,8 +308,11 @@ describeReal('RedisQueueAdapter.reconcileInFlight — FR-008 regression suite (#
     expect(fields.event).toBe('orphan-in-flight-reconciled');
     expect(fields.itemKey).toBe(LOG_KEY);
     expect(fields.reason).toBe('in-flight-no-pending-no-claim');
-    // ageMs is `null` when there's no cache hit (this test never populated cache).
-    expect(fields.ageMs).toBeNull();
+    // `ageMs` is omitted (not `null`) when the process-local
+    // `enqueuedAtCache` has no entry for this itemKey — the expected shape
+    // for boot-sweep residue that outlived the previous process. Absence
+    // reads as "not applicable" rather than "lookup failed".
+    expect(fields).not.toHaveProperty('ageMs');
   });
 
   // ============================================================

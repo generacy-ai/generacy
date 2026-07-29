@@ -54,7 +54,7 @@ describe('InMemoryQueueAdapter.reconcileInFlight — #1058 no-op contract', () =
     expect(report).toEqual({
       scanned: 0,
       reconciled: 0,
-      skippedRaceReappeared: 0,
+      skippedAlreadyGone: 0,
       trackedFirstSeen: 0,
     });
   });
@@ -65,7 +65,7 @@ describe('InMemoryQueueAdapter.reconcileInFlight — #1058 no-op contract', () =
     expect(report.scanned).toBe(1);
     // No SREM ever happens: reconciled must stay zero throughout.
     expect(report.reconciled).toBe(0);
-    expect(report.skippedRaceReappeared).toBe(0);
+    expect(report.skippedAlreadyGone).toBe(0);
     expect(report.trackedFirstSeen).toBe(0);
   });
 
@@ -96,7 +96,7 @@ describe('InMemoryQueueAdapter.reconcileInFlight — #1058 no-op contract', () =
     expect(report).toEqual({
       scanned: 0,
       reconciled: 0,
-      skippedRaceReappeared: 0,
+      skippedAlreadyGone: 0,
       trackedFirstSeen: 0,
     });
   });
