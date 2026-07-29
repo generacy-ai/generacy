@@ -614,13 +614,19 @@ export class PrFeedbackHandler {
       // #1073 FR-007/FR-008/FR-008a: distinct info line when the CLI committed
       // and pushed its own work. `preFixSha` + `postFixSha` in the payload make
       // the head-advance claim auditable (research.md § D-2).
-      if (cliSelfCommitted && !hasChanges) {
+      //
+      // Fires on every CLI-self-commit cycle regardless of whether the handler
+      // committed afterwards (PR #1075 review). `handlerCommitted` distinguishes
+      // the three shapes — CLI-only, handler-only (this line does not fire),
+      // both — from a single grep on `disposition: 'cli-self-committed'`.
+      if (cliSelfCommitted) {
         this.logger.info(
           {
             prNumber,
             issueNumber,
             source: 'cli',
             disposition: 'cli-self-committed',
+            handlerCommitted: hasChanges,
             preFixSha,
             postFixSha: postCliSha,
           },
@@ -662,25 +668,17 @@ export class PrFeedbackHandler {
       const resolveFailures = outcomes.filter(o => !o.resolveResult.ok);
 
       if (resolveSuccesses === 0) {
-        // #1073 FR-013: split by head-advance signal. A cycle where the branch
-        // HEAD moved (via CLI-self-commit OR handler-commit) but zero threads
-        // resolved is a GitHub-API-shaped failure, not a fixer wedge —
-        // `blocked:resolve-failed` names that distinctly.
-        const headAdvanced = cliSelfCommitted || hasChanges;
-        if (headAdvanced) {
-          this.logger.warn(
-            { prNumber, issueNumber, outcomes, preFixSha, postFixSha: postCliSha },
-            'commit pushed but resolve batch had zero successes — entering blocked:resolve-failed disposition (#1073)',
-          );
-          await this.addBlockedResolveFailedLabel(github, owner, repo, issueNumber);
-        } else {
-          // FR-006 tail — commit landed but no thread transitioned.
-          this.logger.warn(
-            { prNumber, issueNumber, outcomes },
-            'commit pushed but resolve batch had zero successes — persisting trigger, entering blocked-stuck-feedback-loop disposition',
-          );
-          await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
-        }
+        // #1073 FR-013: reaching 7b implies `cliSelfCommitted || (success &&
+        // hasChanges)` (see guard at ~line 599), so the branch HEAD has
+        // necessarily advanced by construction — a zero-resolve cycle here is
+        // always a GitHub-API-shaped failure, never a fixer wedge. Narrows the
+        // meaning of `blocked:stuck-feedback-loop`: it no longer originates
+        // from the zero-resolve path (PR #1075 review).
+        this.logger.warn(
+          { prNumber, issueNumber, outcomes, preFixSha, postFixSha: postCliSha },
+          'commit pushed but resolve batch had zero successes — entering blocked:resolve-failed disposition (#1073)',
+        );
+        await this.addBlockedResolveFailedLabel(github, owner, repo, issueNumber);
         return;
       }
 
