@@ -128,6 +128,11 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
     description: 'PR-feedback CLI timed out; auto-retry budget (2) exhausted — human intervention required (#1070).',
   },
   {
+    name: 'blocked:resolve-failed',
+    color: 'D73A4A',
+    description: 'Code landed but thread reply/resolve failed — check GitHub API responses (#1073).',
+  },
+  {
     name: 'blocked:stuck-validate-fix',
     color: 'D73A4A',
     description: 'Validate-fix paused (#892): duplicate evidence, no-diff, or sibling overlap. Remove to retry.',

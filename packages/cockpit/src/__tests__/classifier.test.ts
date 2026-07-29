@@ -320,6 +320,17 @@ describe('classify()', () => {
     });
   });
 
+  describe('#1073: blocked:resolve-failed precedence in the waiting tier', () => {
+    it('D-4: blocked:resolve-failed (terminal) outranks waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:resolve-failed']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:resolve-failed',
+      });
+    });
+  });
+
   describe('#943: blocked:* labels in the error tier', () => {
     it('blocked:stuck-merge-conflicts alone classifies as error', () => {
       expect(classify(['blocked:stuck-merge-conflicts'])).toEqual({

@@ -983,7 +983,7 @@ describe('PrFeedbackHandler', () => {
       expect(mockGitHub.addLabels).not.toHaveBeenCalled();
     });
 
-    it('zero-resolve cycle (all fail) → Disposition B, no label removal', async () => {
+    it('zero-resolve cycle (all fail, head advanced) → blocked:resolve-failed (#1073 FR-013)', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -1001,7 +1001,7 @@ describe('PrFeedbackHandler', () => {
         untracked: [],
       });
 
-      // All resolves fail → R = 0 → FR-006 tail
+      // All resolves fail → R = 0 → #1073 headAdvanced (hasChanges: true) branch.
       mockGitHub.resolveReviewThread = vi.fn().mockRejectedValue(new Error('API error'));
 
       await handler.handle(item, checkoutPath);
@@ -1025,12 +1025,13 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // Should add blocked:stuck-feedback-loop
+      // #1073 FR-013: head advanced (hasChanges: true) + zero resolves →
+      // blocked:resolve-failed (not blocked:stuck-feedback-loop).
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
-        ['blocked:stuck-feedback-loop'],
+        ['blocked:resolve-failed'],
       );
     });
   });
@@ -1679,10 +1680,11 @@ describe('PrFeedbackHandler', () => {
       );
     });
 
-    it('blocked-stuck via zero-resolve tail (FR-006 tail at ~line 337): same post-state as CLI-failure disposition', async () => {
-      // Second blocked-stuck exit path — commit landed but every resolve
-      // failed. Same SC-004 assertion as the previous test but via the
-      // ~line 337 return, not the ~line 302 return.
+    it('blocked-resolve-failed via zero-resolve tail (#1073 FR-013): same SC-004 post-state as CLI-failure disposition', async () => {
+      // Second exit path with zero-resolve tail — commit landed
+      // (hasChanges: true → headAdvanced) but every resolve failed. #1073
+      // retargets this to blocked:resolve-failed; the SC-004 invariant
+      // (waiting-for retained, agent:in-progress cleared) is unchanged.
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
@@ -1703,7 +1705,7 @@ describe('PrFeedbackHandler', () => {
         'test-owner',
         'test-repo',
         42,
-        ['blocked:stuck-feedback-loop'],
+        ['blocked:resolve-failed'],
       );
     });
 
