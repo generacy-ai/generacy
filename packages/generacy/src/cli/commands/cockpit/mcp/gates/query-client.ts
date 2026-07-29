@@ -100,6 +100,12 @@ function buildStatusUrl(baseUrl: string, input: CockpitGateStatusInput): string 
   url.searchParams.set('issueRef', input.issueRef);
   url.searchParams.set('gateType', input.gateType);
   url.searchParams.set('generation', String(input.generation));
+  // #1067 — parameter key MUST be exactly `runId` (camelCase), pinned by the
+  // deployed cloud contract at generacy-cloud@192fca7c. Do NOT rename to
+  // `run_id` or the cloud rejects with `unknown key: run_id`.
+  if (input.runId !== undefined) {
+    url.searchParams.set('runId', input.runId);
+  }
   return url.toString();
 }
 

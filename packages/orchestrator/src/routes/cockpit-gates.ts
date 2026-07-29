@@ -59,6 +59,14 @@ const GateQueryStringSchema = z
     issueRef: z.string().min(1),
     gateType: GateTypeSchema.optional(),
     generation: z.string().min(1).optional(),
+    /**
+     * #1067 — Passive pass-through. Route MUST NOT enforce
+     * "runId ⇒ generation" here — the cloud route enforces it authoritatively
+     * (`services/api/src/routes/clusters/cockpit-gates.ts` .refine). Duplicating
+     * the refinement would mask the cloud's RFC-7807 400 behind a route-side
+     * 'VALIDATION' 400.
+     */
+    runId: z.string().min(1).optional(),
   })
   .strict()
   .refine((v) => v.generation === undefined || v.gateType !== undefined, {
@@ -228,7 +236,7 @@ export function setupCockpitGatesRoute(
         });
       }
 
-      const { issueRef, gateType, generation } = parsed.data;
+      const { issueRef, gateType, generation, runId } = parsed.data;
       const mode: 'status' | 'list' = generation !== undefined ? 'status' : 'list';
 
       try {
@@ -237,6 +245,7 @@ export function setupCockpitGatesRoute(
             issueRef,
             gateType: gateType!,
             generation: generation!,
+            ...(runId !== undefined ? { runId } : {}),
           });
           const body = mapStatus(raw);
           options.logger.info(

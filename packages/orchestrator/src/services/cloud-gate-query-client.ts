@@ -63,6 +63,15 @@ export interface GetGateStatusInput {
   issueRef: string;
   gateType: GateType;
   generation: string;
+  /**
+   * #1067 — Optional per-run discriminator. Forwarded to the cloud as a
+   * `runId=<value>` query-string parameter on
+   * `GET /api/clusters/:id/cockpit/gates`. The cloud route accepts this only
+   * when `generation` is also present
+   * (`.refine((q) => q.runId === undefined || q.generation !== undefined)`).
+   * When omitted, the outbound URL is byte-identical to the pre-#1067 shape.
+   */
+  runId?: string;
 }
 
 /** Raw cloud response for status mode — pre-collapse (7 cloud statuses). */
@@ -345,6 +354,7 @@ export function createCloudGateQueryClient(
           issueRef: input.issueRef,
           gateType: input.gateType,
           generation: input.generation,
+          runId: input.runId,
         },
         'status',
       )) as unknown;
