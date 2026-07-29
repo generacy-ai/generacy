@@ -38,23 +38,37 @@
  * See `specs/1024-part-cockpit-remote-gates/data-model.md` §"ScenarioContext".
  */
 import type { AddressInfo } from 'node:net';
+import type http from 'node:http';
+import type https from 'node:https';
+import { Readable } from 'node:stream';
 import { mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { URL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ClusterRelayClient } from '@generacy-ai/cluster-relay';
-import { DEFAULT_WIRE_EPIC_REF } from '@generacy-ai/cockpit';
+import { DEFAULT_WIRE_EPIC_REF, type GateType } from '@generacy-ai/cockpit';
 import type { ClusterRelayClient as ClusterRelayClientType } from '../../types/relay.js';
 import { setupCockpitGatesRoute } from '../../routes/cockpit-gates.js';
 import { setupCockpitAnswersRoute } from '../../routes/cockpit-answers.js';
 import { createRetainedCockpitEvents } from '../../routes/retained-cockpit-events.js';
 import { CockpitAnswersWriter } from '../../services/cockpit-answers-writer.js';
+import {
+  createCloudGateQueryClient,
+  type HttpsRequestImpl,
+} from '../../services/cloud-gate-query-client.js';
 import { startFakePeer, type FakePeer } from './fake-peer.js';
 import {
   createDoorbellDriver,
   type DoorbellDriver,
   type DoorbellDriverOptions,
 } from './doorbell-driver.js';
+import {
+  createFakeCloudStore,
+  type FakeCloudStore,
+  type FakeCloudStoreOptions,
+} from './fake-cloud-store.js';
+import { createMcpToolDriver, type McpToolDriver } from './mcp-tool-driver.js';
 
 /** Epic ref the harness binds the doorbell + answer scope to. Matches
  *  `DEFAULT_WIRE_SCOPE` in `@generacy-ai/cockpit` so `answerLineFixture()`
@@ -67,6 +81,160 @@ const SILENT_LOGGER = {
   error: () => undefined,
   debug: () => undefined,
 };
+
+/**
+ * #1068 — replacement for `SILENT_LOGGER` that captures structured log calls
+ * for later assertion. Used by `startFakeCloud` scenarios to prove:
+ *   - FR-004: exactly one `'cockpit gate emitted'` info per gateId.
+ *   - FR-007: zero warns containing `'Invalid relay message, skipping'`.
+ */
+export interface CountingLogger {
+  info(msg: string): void;
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+  error(msg: string): void;
+  error(obj: Record<string, unknown>, msg: string): void;
+  debug(msg: string): void;
+  debug(obj: Record<string, unknown>, msg: string): void;
+  readonly records: ReadonlyArray<{
+    level: 'info' | 'warn' | 'error' | 'debug';
+    obj?: Record<string, unknown>;
+    msg: string;
+  }>;
+}
+
+function createCountingLogger(): CountingLogger {
+  const records: Array<{
+    level: 'info' | 'warn' | 'error' | 'debug';
+    obj?: Record<string, unknown>;
+    msg: string;
+  }> = [];
+  const capture = (level: 'info' | 'warn' | 'error' | 'debug') =>
+    ((...args: [Record<string, unknown> | string, string?]) => {
+      const [first, second] = args;
+      if (typeof first === 'string') {
+        records.push({ level, msg: first });
+      } else {
+        records.push({ level, obj: first, msg: second ?? '' });
+      }
+    }) as CountingLogger[typeof level];
+  return {
+    info: capture('info'),
+    warn: capture('warn'),
+    error: capture('error'),
+    debug: capture('debug'),
+    records,
+  } as CountingLogger;
+}
+
+/**
+ * #1068 — Extract `'cockpit gate emitted'` info lines from a CountingLogger's
+ * records. Each line's `obj` carries `{ gateId, type }` per
+ * `routes/cockpit-gates.ts:190-193`.
+ */
+function selectGateEmittedLines(
+  logger: CountingLogger,
+): Array<{ gateId: string; type: string }> {
+  const result: Array<{ gateId: string; type: string }> = [];
+  for (const r of logger.records) {
+    if (r.level !== 'info') continue;
+    if (r.msg !== 'cockpit gate emitted') continue;
+    const obj = r.obj as { gateId?: unknown; type?: unknown } | undefined;
+    if (obj == null || typeof obj.gateId !== 'string' || typeof obj.type !== 'string') continue;
+    result.push({ gateId: obj.gateId, type: obj.type });
+  }
+  return result;
+}
+
+/**
+ * #1068 — Build an `httpRequestImpl`-shaped shim that services
+ * `GET /api/clusters/<clusterId>/cockpit/gates?...` from a `FakeCloudStore`,
+ * exactly matching the URL shape that `cloud-gate-query-client.ts:200-219`
+ * emits.
+ *
+ * Two response modes:
+ *   - status mode (`generation` present) → `{ gateId, status }` or `{ gateId: null, status: null }`.
+ *   - list mode   (`generation` absent)  → `{ gates: [{ gateId, gateType, generation, status }] }`.
+ *
+ * Pre-Phase-A docs (`generation === undefined`) surface in list mode as
+ * `generation: '<pre-phase-a>'` sentinel per contracts/fake-cloud-store.md.
+ */
+function buildFakeCloudHttpImpl(
+  fakeCloud: FakeCloudStore,
+): HttpsRequestImpl {
+  const impl: HttpsRequestImpl = (options, callback) => {
+    const method = ((options as { method?: string }).method ?? 'GET').toUpperCase();
+    const path = (options as { path?: string }).path ?? '/';
+    const parsed = new URL(path, 'http://fake');
+
+    // Fake IncomingMessage — Readable subclass with `statusCode` glued on.
+    // Client at cloud-gate-query-client.ts:243 does `chunks.push(c as Buffer)`
+    // then `Buffer.concat(chunks)`, so the stream MUST emit Buffer chunks.
+    const respond = (statusCode: number, body: unknown): void => {
+      const stream = Readable.from([Buffer.from(JSON.stringify(body), 'utf8')]);
+      (stream as unknown as { statusCode: number }).statusCode = statusCode;
+      if (typeof callback === 'function') {
+        // Defer so caller-side listener wiring (which happens after
+        // `httpRequestImpl(...)` returns) is in place.
+        setImmediate(() => callback(stream as unknown as http.IncomingMessage));
+      }
+    };
+
+    // Minimal ClientRequest stub — `.on('error', ...)` and `.end()` are what
+    // `performGet` uses; wire them as no-ops so error listeners never fire on
+    // the happy path.
+    const req = {
+      on: (_evt: string, _listener: (...args: unknown[]) => void) => req,
+      end: () => undefined,
+      write: (_chunk: unknown) => undefined,
+    } as unknown as http.ClientRequest;
+
+    if (method !== 'GET') {
+      respond(405, { error: 'method-not-allowed' });
+      return req;
+    }
+    if (!parsed.pathname.startsWith('/api/clusters/') || !parsed.pathname.endsWith('/cockpit/gates')) {
+      respond(404, { error: 'not-found' });
+      return req;
+    }
+    const issueRef = parsed.searchParams.get('issueRef');
+    if (issueRef == null || issueRef.length === 0) {
+      respond(400, { error: 'missing issueRef' });
+      return req;
+    }
+    const gateType = parsed.searchParams.get('gateType') as GateType | null;
+    const generation = parsed.searchParams.get('generation');
+    const runId = parsed.searchParams.get('runId') ?? undefined;
+
+    if (generation != null) {
+      // status mode
+      if (gateType == null) {
+        respond(400, { error: 'gateType is required when generation is present' });
+        return req;
+      }
+      const doc = fakeCloud.getByKey(issueRef, gateType, generation, runId);
+      if (doc == null) {
+        respond(200, { gateId: null, status: null });
+        return req;
+      }
+      respond(200, { gateId: doc.gateId, status: doc.status });
+      return req;
+    }
+
+    // list mode
+    const docs = fakeCloud.listByIssueRef(issueRef, gateType ?? undefined);
+    const gates = docs.map((doc) => ({
+      gateId: doc.gateId,
+      gateType: doc.gateType,
+      generation: doc.generation ?? '<pre-phase-a>',
+      status: doc.status,
+    }));
+    respond(200, { gates });
+    return req;
+  };
+  return impl;
+}
 
 export interface ScenarioContext {
   peer: FakePeer;
@@ -83,6 +251,14 @@ export interface ScenarioContext {
   orchestratorUrl: string;
   /** Epic ref the doorbell is bound to (`HARNESS_EPIC_REF`). */
   epicRef: string;
+  /** #1068 — in-memory fake cloud, set when `setupScenario({ startFakeCloud: true })`. */
+  fakeCloud: FakeCloudStore | null;
+  /** #1068 — direct-import MCP tool driver, set when `startFakeCloud: true`. */
+  mcp: McpToolDriver | null;
+  /** #1068 — captured `'cockpit gate emitted'` log lines from the light orchestrator (FR-004). */
+  gateEmittedLogLines: ReadonlyArray<{ gateId: string; type: string }>;
+  /** #1068 — the full log record buffer from the light orchestrator (FR-007). */
+  loggerRecords: CountingLogger['records'];
   cleanup: () => Promise<void>;
 }
 
@@ -96,6 +272,19 @@ export interface ScenarioSetupOptions {
   /** Base reconnect delay for the relay client (ms). Small so S1b's
    *  disconnect→reconnect completes quickly. Default 200. */
   relayReconnectMs?: number;
+  /**
+   * #1068 — wire an in-memory `FakeCloudStore` into the fake-peer's payload
+   * validator and build a fake HTTP shim that `CloudGateQueryClient` reaches
+   * for `GET /cockpit/gates`. Also swaps `SILENT_LOGGER` for a `CountingLogger`
+   * and constructs a direct-import `McpToolDriver`.
+   * Default: false (existing sibling scenarios keep today's shape).
+   */
+  startFakeCloud?: boolean;
+  /**
+   * #1068 — options passed to `createFakeCloudStore`. `persistGeneration: false`
+   * simulates a Phase-A revert (cloud does not persist `generation`).
+   */
+  fakeCloudOptions?: FakeCloudStoreOptions;
 }
 
 const CONNECT_TIMEOUT_MS = 5000;
@@ -129,7 +318,50 @@ export async function setupScenario(
   const previousAnswersFileEnv = process.env['COCKPIT_ANSWERS_FILE'];
   process.env['COCKPIT_ANSWERS_FILE'] = answersFilePath;
 
-  const peer = await startFakePeer();
+  // --- #1068: fake cloud store + logger. Constructed before the peer so the
+  //     peer's `onValidatedFrame` callback can route into the store on receipt.
+  let fakeCloud: FakeCloudStore | null = null;
+  let countingLogger: CountingLogger | null = null;
+  const previousApiUrlEnv = process.env['GENERACY_API_URL'];
+  // Test-only side channel for runId recovery. Wire schemas strip `runId`, so
+  // the fake-cloud store can't recover it from the frame alone; the driver
+  // records it here on every gateOpen and the fake-peer callback consults it.
+  const runIdByGateId = new Map<string, string>();
+  if (opts.startFakeCloud === true) {
+    fakeCloud = createFakeCloudStore(opts.fakeCloudOptions);
+    countingLogger = createCountingLogger();
+    // `CloudGateQueryClient.buildUrl` requires GENERACY_API_URL to be set. The
+    // shim short-circuits before dialing, so any value is fine.
+    process.env['GENERACY_API_URL'] = 'http://127.0.0.1:1';
+  }
+  const activeLogger = countingLogger ?? SILENT_LOGGER;
+  const capturedFakeCloud = fakeCloud;
+
+  const peer = await startFakePeer(
+    capturedFakeCloud != null
+      ? {
+          onValidatedFrame: (frame) => {
+            if (frame.type === 'gate-open') {
+              const mapped = runIdByGateId.get(frame.data.gateId);
+              // Frame.data.runId may already be present if some other test
+              // path passes it explicitly; prefer that. Otherwise use the map.
+              const runId = frame.data.runId ?? mapped;
+              capturedFakeCloud.putGateFromWireFrame(
+                runId !== undefined
+                  ? { ...frame.data, runId }
+                  : frame.data,
+              );
+            } else {
+              capturedFakeCloud.applyOutcome(
+                frame.data.gateId,
+                frame.data.outcome,
+                frame.data.detail,
+              );
+            }
+          },
+        }
+      : {},
+  );
 
   // --- Light orchestrator: real gate modules on a bare Fastify instance. ----
   const orchestrator = Fastify({ logger: false });
@@ -149,10 +381,32 @@ export async function setupScenario(
   // reads it lazily so a POST that arrives before the client connects retains
   // instead of dropping.
   let relayClientRef: ClusterRelayClientType | null = null;
+
+  // #1068 — real CloudGateQueryClient backed by the fake HTTP shim over the
+  // fake cloud store. Only wired when `startFakeCloud: true`.
+  const cloudQueryClient = capturedFakeCloud != null
+    ? createCloudGateQueryClient({
+        clusterId: 'test-cluster',
+        httpRequestImpl: buildFakeCloudHttpImpl(capturedFakeCloud),
+        httpsRequestImpl: buildFakeCloudHttpImpl(capturedFakeCloud),
+        // `apiKeyPath` — the client reads a key from disk before every call.
+        // Point it at a file that exists (any file with content); its value is
+        // ignored by the shim.
+        apiKeyPath: '/etc/hostname',
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+        },
+      })
+    : null;
+
   setupCockpitGatesRoute(orchestrator, {
     retainer,
     getRelayClient: () => relayClientRef,
-    logger: SILENT_LOGGER,
+    logger: activeLogger,
+    ...(cloudQueryClient != null
+      ? { getCloudGateQueryClient: () => cloudQueryClient }
+      : {}),
   });
   setupCockpitAnswersRoute(orchestrator, { writer, logger: SILENT_LOGGER });
 
@@ -214,6 +468,15 @@ export async function setupScenario(
     await doorbell.start();
   }
 
+  // #1068 — build the direct-import MCP driver against the light orchestrator.
+  const mcp = capturedFakeCloud != null
+    ? createMcpToolDriver({
+        baseUrl: orchestratorUrl,
+        fetchImpl: fetch,
+        runIdByGateId,
+      })
+    : null;
+
   let cleanedUp = false;
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
@@ -255,6 +518,13 @@ export async function setupScenario(
     } else {
       process.env['COCKPIT_ANSWERS_FILE'] = previousAnswersFileEnv;
     }
+    if (opts.startFakeCloud === true) {
+      if (previousApiUrlEnv == null) {
+        delete process.env['GENERACY_API_URL'];
+      } else {
+        process.env['GENERACY_API_URL'] = previousApiUrlEnv;
+      }
+    }
   };
 
   return {
@@ -266,8 +536,19 @@ export async function setupScenario(
     tempDir,
     orchestratorUrl,
     epicRef,
+    fakeCloud,
+    mcp,
+    // Getter: `gateEmittedLogLines` reflects the CURRENT state of the logger
+    // buffer at each read. Scenarios can `expect(ctx.gateEmittedLogLines)` at
+    // any point and see all lines captured up to that moment.
+    get gateEmittedLogLines() {
+      return countingLogger != null ? selectGateEmittedLines(countingLogger) : [];
+    },
+    get loggerRecords() {
+      return countingLogger != null ? countingLogger.records : [];
+    },
     cleanup,
-  };
+  } as ScenarioContext;
 }
 
 /**
