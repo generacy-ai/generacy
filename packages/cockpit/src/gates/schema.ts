@@ -67,6 +67,20 @@ export const GateOpenSchema = z.object({
   allowFreeText: z.boolean(),
   sessionId: z.string().min(1),
   askedAt: z.string().datetime(),
+  // #1066 — preserved for cloud per-frame reply correlation. Cloud reads at
+  // services/api/src/services/relay/message-handler.ts:804 (raw `data.frameId`,
+  // upstream of the frozen payload schema). Three encodings of "no correlation"
+  // are normalized to absent: omitted, `""`, and `null`. `null` matches the
+  // cloud's own vocabulary (see `packages/cluster-relay/src/messages.ts:154`
+  // + `:387` — reply `frameId: string | null`), so a caller doing
+  // `?? null` round-trips without a 400.
+  frameId: z
+    .union([
+      z.string().min(1),
+      z.literal('').transform(() => undefined),
+      z.null().transform(() => undefined),
+    ])
+    .optional(),
 });
 export type GateOpen = z.infer<typeof GateOpenSchema>;
 
@@ -80,6 +94,14 @@ export const GateOutcomeSchema = z.object({
   outcome: z.enum(['applied', 'superseded', 'failed']),
   detail: z.string().optional(),
   at: z.string().datetime(),
+  // Same shape and rationale as GateOpenSchema.frameId — #1066.
+  frameId: z
+    .union([
+      z.string().min(1),
+      z.literal('').transform(() => undefined),
+      z.null().transform(() => undefined),
+    ])
+    .optional(),
 });
 export type GateOutcome = z.infer<typeof GateOutcomeSchema>;
 

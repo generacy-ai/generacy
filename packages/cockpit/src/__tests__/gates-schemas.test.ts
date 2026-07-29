@@ -119,4 +119,89 @@ describe('gates wire-contract schemas', () => {
       expect(() => GateOpenSchema.parse(extended)).not.toThrow();
     });
   });
+
+  // #1066 — optional frameId, preserved end-to-end for cloud per-frame reply
+  // correlation. Same shape on both gate-open and gate-outcome: non-empty
+  // string kept; omitted stays omitted; "" normalized to absent; non-string
+  // rejected. See services/api/src/services/relay/message-handler.ts:804.
+  describe('frameId', () => {
+    const outcomeBase = VALID_ACK_FIXTURES.applied;
+
+    describe('GateOpenSchema', () => {
+      it('non-empty string is preserved on parsed object', () => {
+        const fixture = VALID_FIXTURES.clarification;
+        const parsed = GateOpenSchema.parse({ ...fixture, frameId: 'frm_abc' });
+        expect(parsed.frameId).toBe('frm_abc');
+      });
+
+      it('omitted → absent on parsed object (wire-level)', () => {
+        const fixture = VALID_FIXTURES.clarification;
+        const parsed = GateOpenSchema.parse(fixture);
+        expect(parsed.frameId).toBeUndefined();
+        // JSON round-trip strips `undefined` — this is what the cloud sees.
+        const wire = JSON.parse(JSON.stringify(parsed));
+        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+      });
+
+      it.each([
+        ['empty string', ''],
+        ['null', null],
+      ] as const)(
+        '%s is normalized to absent (wire-level)',
+        (_label, value) => {
+          const fixture = VALID_FIXTURES.clarification;
+          const parsed = GateOpenSchema.parse({ ...fixture, frameId: value });
+          expect(parsed.frameId).toBeUndefined();
+          const wire = JSON.parse(JSON.stringify(parsed));
+          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        },
+      );
+
+      it.each([
+        ['number', 123],
+        ['object', {}],
+        ['array', []],
+      ] as const)('non-string (%s) is rejected', (_label, value) => {
+        const fixture = VALID_FIXTURES.clarification;
+        const r = GateOpenSchema.safeParse({ ...fixture, frameId: value });
+        expect(r.success).toBe(false);
+      });
+    });
+
+    describe('GateOutcomeSchema', () => {
+      it('non-empty string is preserved on parsed object', () => {
+        const parsed = GateOutcomeSchema.parse({ ...outcomeBase, frameId: 'frm_xyz' });
+        expect(parsed.frameId).toBe('frm_xyz');
+      });
+
+      it('omitted → absent on parsed object (wire-level)', () => {
+        const parsed = GateOutcomeSchema.parse(outcomeBase);
+        expect(parsed.frameId).toBeUndefined();
+        const wire = JSON.parse(JSON.stringify(parsed));
+        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+      });
+
+      it.each([
+        ['empty string', ''],
+        ['null', null],
+      ] as const)(
+        '%s is normalized to absent (wire-level)',
+        (_label, value) => {
+          const parsed = GateOutcomeSchema.parse({ ...outcomeBase, frameId: value });
+          expect(parsed.frameId).toBeUndefined();
+          const wire = JSON.parse(JSON.stringify(parsed));
+          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        },
+      );
+
+      it.each([
+        ['number', 123],
+        ['object', {}],
+        ['array', []],
+      ] as const)('non-string (%s) is rejected', (_label, value) => {
+        const r = GateOutcomeSchema.safeParse({ ...outcomeBase, frameId: value });
+        expect(r.success).toBe(false);
+      });
+    });
+  });
 });

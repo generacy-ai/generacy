@@ -143,6 +143,43 @@ describe('createRetainedCockpitEvents', () => {
     expect(retainer.size()).toEqual({ count: 2, bytes: 100 });
   });
 
+  // #1066 — retain path is a byte-for-byte pass-through. `frameId` (or any
+  // caller-supplied field) already survives, but pin it against future
+  // refactors that might filter or reshape `data` on drain.
+  it('#1066 retention preserves frameId across enqueue → drain byte-for-byte', () => {
+    const retainer = createRetainedCockpitEvents({
+      maxCount: 100,
+      maxBytes: 10_000,
+    });
+    const withFrameId: RetainedEvent = {
+      event: 'cluster.cockpit',
+      data: { seq: 0, type: 'gate-open', gateId: 'a'.repeat(24), frameId: 'frm_kept' },
+      timestamp: '2026-07-21T00:00:00.000Z',
+      approxBytes: 100,
+    };
+    const withoutFrameId: RetainedEvent = {
+      event: 'cluster.cockpit',
+      data: { seq: 1, type: 'gate-open', gateId: 'b'.repeat(24) },
+      timestamp: '2026-07-21T00:00:01.000Z',
+      approxBytes: 100,
+    };
+    retainer.enqueue(withFrameId);
+    retainer.enqueue(withoutFrameId);
+
+    const client = makeMockClient();
+    const result = retainer.drainInto(client);
+    expect(result).toEqual({ sent: 2, failed: 0 });
+
+    const sends = (client.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call) => (call[0] as { data: Record<string, unknown> }).data,
+    );
+    // Byte-for-byte equality against the enqueued `data` object references.
+    expect(sends[0]).toEqual(withFrameId.data);
+    expect(sends[1]).toEqual(withoutFrameId.data);
+    // The event that had no frameId still has no frameId on the wire.
+    expect(Object.hasOwn(sends[1] as object, 'frameId')).toBe(false);
+  });
+
   it('clear() empties the queue', () => {
     const retainer = createRetainedCockpitEvents({
       maxCount: 100,

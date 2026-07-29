@@ -77,6 +77,7 @@ export interface GateOpenFixtureOverrides {
   allowFreeText?: boolean;
   sessionId?: string;
   askedAt?: string;
+  frameId?: string;
 }
 
 /**
@@ -105,6 +106,7 @@ export function gateOpenFixture(overrides: GateOpenFixtureOverrides = {}): GateO
     allowFreeText: overrides.allowFreeText ?? true,
     sessionId: overrides.sessionId ?? DEFAULT_SESSION_ID,
     askedAt: overrides.askedAt ?? DEFAULT_ASKED_AT,
+    ...(overrides.frameId !== undefined ? { frameId: overrides.frameId } : {}),
   };
   return GateOpenSchema.parse(body);
 }
@@ -114,6 +116,7 @@ export interface GateOutcomeFixtureOverrides {
   outcome?: GateOutcome['outcome'];
   detail?: string;
   at?: string;
+  frameId?: string;
 }
 
 /**
@@ -128,6 +131,7 @@ export function gateOutcomeFixture(overrides: GateOutcomeFixtureOverrides = {}):
     outcome: overrides.outcome ?? 'applied',
     ...(overrides.detail !== undefined ? { detail: overrides.detail } : {}),
     at: overrides.at ?? DEFAULT_OUTCOME_AT,
+    ...(overrides.frameId !== undefined ? { frameId: overrides.frameId } : {}),
   };
   return GateOutcomeSchema.parse(body);
 }
