@@ -13,6 +13,7 @@
  *   - any file whose path contains `retain`
  * Enforced by `../__tests__/observer-independence.test.ts` static import-scan.
  */
+import { getLogger } from '../../../../utils/logger.js';
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import {
   CockpitGateStatusInputSchema,
@@ -45,11 +46,18 @@ export function cockpitGateStatus(
 
     // The MCP-boundary schema allows `generation: string | number`; the query
     // client wire is JSON so it coerces via `String()` before serializing.
+    // #1067 — thread optional runId through to the query client; it becomes a
+    // `runId=<value>` query-string parameter on the outbound URL.
     const queryInput = {
       issueRef: parsed.data.issueRef,
       gateType: parsed.data.gateType,
       generation: parsed.data.generation,
+      ...(parsed.data.runId !== undefined ? { runId: parsed.data.runId } : {}),
     };
+    // #1067 — data-model E5: label the SOURCE of the runId ('explicit' | 'unset');
+    // the runId VALUE is never logged (auto-run ids embed cluster/repo/issue/timestamp).
+    const runIdSource: 'explicit' | 'unset' =
+      parsed.data.runId !== undefined ? 'explicit' : 'unset';
 
     const options = resolveGateOptions(deps);
     const client = createGateQueryClient(options);
@@ -60,8 +68,34 @@ export function cockpitGateStatus(
         schedule: QUERY_RETRY_SCHEDULE,
         shouldRetry: isRetryableGateQueryError,
       });
+      getLogger().info(
+        {
+          event: 'cockpit_gate_status.runid-source',
+          runIdSource,
+          mode: 'status',
+          gateType: parsed.data.gateType,
+          issueRef: parsed.data.issueRef,
+          resolvedStatus: data.status,
+          gateId: data.gateId,
+        },
+        `gate-status runId source: ${runIdSource}`,
+      );
       return { status: 'ok', data };
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      getLogger().info(
+        {
+          event: 'cockpit_gate_status.runid-source',
+          runIdSource,
+          mode: 'status',
+          gateType: parsed.data.gateType,
+          issueRef: parsed.data.issueRef,
+          resolvedStatus: 'error',
+          gateId: null,
+          error: errMsg,
+        },
+        `gate-status runId source: ${runIdSource}`,
+      );
       if (err instanceof QueryInvalidArgsError) {
         return { status: 'error', class: 'invalid-args', detail: err.message };
       }
@@ -76,8 +110,7 @@ export function cockpitGateStatus(
           hint: 'query gate status after connectivity is restored',
         };
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      return { status: 'error', class: 'internal', detail: msg };
+      return { status: 'error', class: 'internal', detail: errMsg };
     }
   });
 }

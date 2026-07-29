@@ -2,7 +2,9 @@
  * Parity tests for `cockpit_gate_list` (#1038).
  */
 import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
 import { cockpitGateList } from '../tools/cockpit_gate_list.js';
+import { CockpitGateListInputSchema } from '../gates/query-schemas.js';
 
 function jsonResponse(status: number, body: unknown, text?: string): Response {
   return new Response(text ?? (body === undefined ? '' : JSON.stringify(body)), {
@@ -178,5 +180,70 @@ describe('cockpit_gate_list parity (#1038)', () => {
     expect(result.status).toBe('error');
     if (result.status !== 'error') return;
     expect(result.class).toBe('internal');
+  });
+
+  // -------------------------------------------------------------------
+  // #1067 — runId widening on CockpitGateListInputSchema (US1, US5).
+  // Accepted on the MCP surface for parity with cockpit_gate_status;
+  // DROPPED by the handler before the client call (see cockpit_gate_list.ts).
+  // -------------------------------------------------------------------
+  describe('#1067 — CockpitGateListInputSchema runId widening', () => {
+    it('SC-006: inputSchema stays a flat z.object with non-empty properties (not z.intersection)', () => {
+      expect(CockpitGateListInputSchema).toBeInstanceOf(z.ZodObject);
+      const shape = (CockpitGateListInputSchema as z.ZodObject<z.ZodRawShape>).shape;
+      const keys = Object.keys(shape);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys).toContain('issueRef');
+    });
+
+    it('widened-shape acceptance: {issueRef, gateType?, runId?} validates', () => {
+      const parsed = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1067',
+        gateType: 'implementation-review',
+        runId: 'auto-cluster-1067-1722243247891',
+      });
+      expect(parsed.success).toBe(true);
+    });
+
+    it('SC-002 legacy byte-compat: {issueRef, gateType?} validates and parsed data has no runId property', () => {
+      const parsed = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1067',
+        gateType: 'implementation-review',
+      });
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) return;
+      expect('runId' in parsed.data).toBe(false);
+      expect(parsed.data).toEqual({
+        issueRef: 'generacy-ai/generacy#1067',
+        gateType: 'implementation-review',
+      });
+    });
+
+    it('typo-guard: {..., run_id: "oops"} is rejected with unrecognized_keys (.strict() boundary preserved)', () => {
+      const parsed = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1067',
+        gateType: 'implementation-review',
+        run_id: 'oops',
+      });
+      expect(parsed.success).toBe(false);
+      if (parsed.success) return;
+      const codes = parsed.error.issues.map((i) => i.code);
+      expect(codes).toContain('unrecognized_keys');
+    });
+
+    it('handler drops runId before the client call — outbound URL never carries runId', async () => {
+      const spy = vi.fn(async () => jsonResponse(200, { gates: [] }));
+      await cockpitGateList(
+        {
+          issueRef: 'generacy-ai/generacy#1067',
+          gateType: 'implementation-review',
+          runId: 'auto-cluster-1067-1722243247891',
+        },
+        { ...BASE_DEPS, fetchImpl: spy as unknown as typeof fetch },
+      );
+      const url = String(spy.mock.calls[0]?.[0]);
+      expect(url).not.toContain('runId=');
+      expect(url).not.toContain('run_id=');
+    });
   });
 });

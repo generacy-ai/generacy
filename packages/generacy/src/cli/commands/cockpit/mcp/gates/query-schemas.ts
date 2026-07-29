@@ -25,6 +25,13 @@ export const CockpitGateStatusInputSchema = z
     gateType: GateTypeSchema,
     /** gateType-specific discriminator (batchId hash, head SHA, phase, ...). */
     generation: z.union([z.string().min(1), z.number()]),
+    /**
+     * #1067 — Optional per-run discriminator. When supplied, forwarded to the
+     * cloud as the 4th `gateKey` segment so a re-run under a new `runId` sees
+     * a fresh gate. Omitted → cloud derives with pre-#1053 3-tuple shape
+     * (byte-identical to today).
+     */
+    runId: z.string().min(1).optional(),
   })
   .strict();
 export type CockpitGateStatusInput = z.infer<typeof CockpitGateStatusInputSchema>;
@@ -55,6 +62,17 @@ export const CockpitGateListInputSchema = z
     issueRef: z.string().min(1),
     /** Optional — narrow to a single gateType. Absent = all types. */
     gateType: GateTypeSchema.optional(),
+    /**
+     * #1067 — Accepted on the MCP surface for parity with `cockpit_gate_status`.
+     * DELIBERATELY DROPPED by the tool handler before calling the cloud client
+     * (see tools/cockpit_gate_list.ts). The deployed cloud contract
+     * (generacy-cloud#892) carries
+     * `.refine((q) => q.runId === undefined || q.generation !== undefined,
+     * { message: 'runId requires generation' })` and list mode has no
+     * `generation` by construction, so forwarding `runId` on list produces a
+     * 400 RFC-7807 and breaks the sweep's primary dedup primitive.
+     */
+    runId: z.string().min(1).optional(),
   })
   .strict();
 export type CockpitGateListInput = z.infer<typeof CockpitGateListInputSchema>;
