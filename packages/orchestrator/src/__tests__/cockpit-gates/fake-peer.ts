@@ -26,6 +26,27 @@ import {
   type HandshakeMessage,
   type RelayMessage,
 } from '@generacy-ai/cluster-relay';
+import {
+  GateOpenWireSchema,
+  GateOutcomeWireSchema,
+  type GateOpenWire,
+  type GateOutcomeWire,
+} from '../../../../generacy/src/cli/commands/cockpit/mcp/gates/schemas.js';
+
+/** #1068 — parsed payload for cluster.cockpit frames whose payload schema passes.
+ *  `runId` is stripped by `GateOpenWireSchema` (the frozen wire has no such
+ *  field); the fake-peer copies it from the raw payload before invoking the
+ *  callback so the fake-cloud store can key by it. */
+export type ValidatedCockpitFrame =
+  | { type: 'gate-open'; data: GateOpenWire & { runId?: string } }
+  | { type: 'gate-outcome'; data: GateOutcomeWire };
+
+/** #1068 — payload-validator violation record. */
+export interface PayloadViolation {
+  frameType: 'gate-open' | 'gate-outcome' | 'unknown';
+  gateId?: string;
+  issues: unknown;
+}
 
 export interface FakePeerOptions {
   /** WebSocket port; default 0 (random). */
@@ -37,6 +58,13 @@ export interface FakePeerOptions {
   apiRequestHandler?: (
     req: Extract<RelayMessage, { type: 'api_request' }>,
   ) => Promise<Partial<ApiResponseMessage>>;
+  /**
+   * #1068 — invoked on every `cluster.cockpit` frame whose payload passes the
+   * frozen wire-schema check. Used by the #1068 harness to route validated
+   * frames into a `FakeCloudStore`. Errors thrown by the callback are logged
+   * but never crash the peer.
+   */
+  onValidatedFrame?: (frame: ValidatedCockpitFrame) => void;
 }
 
 export interface FakePeer {
@@ -49,6 +77,14 @@ export interface FakePeer {
     apiResponses: ApiResponseMessage[];
     handshakes: HandshakeMessage[];
   };
+
+  /**
+   * #1068 — payload-validator violations on cluster.cockpit frames. Frames that
+   * fail `GateOpenWireSchema` / `GateOutcomeWireSchema.safeParse` are tracked
+   * here AND deliberately excluded from `received.events`. The peer stays
+   * connected on failure so unrelated tests in the same file keep running.
+   */
+  readonly payloadViolations: ReadonlyArray<PayloadViolation>;
 
   /**
    * Wait until an event on the named channel arrives (or reject on timeout).
@@ -121,6 +157,10 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
     handshakes: [],
   };
 
+  // #1068 — payload-validator violations. Mutable internally; exposed as
+  // readonly on the FakePeer surface.
+  const payloadViolations: PayloadViolation[] = [];
+
   // correlationId → resolver for outbound api_request awaits
   const pendingApiRequests = new Map<
     string,
@@ -164,6 +204,90 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
         return;
       }
       if (msg.type === 'event') {
+        // #1068 — payload-shape validation for the cluster.cockpit channel.
+        // The envelope validator (RelayMessageSchema) only requires `data` to
+        // be present; it does NOT inspect the payload. Real cloud parses via
+        // GateOpenPayloadSchema / GateOutcomePayloadSchema and warn-drops on
+        // failure — we mirror that here so a cluster-side wire drift (the
+        // class of bug that shipped `frameId` inert) fails locally rather than
+        // silently passing.
+        if (msg.event === 'cluster.cockpit') {
+          const dataObj = msg.data as { type?: unknown; gateId?: unknown } | null;
+          const dataType =
+            dataObj != null && typeof dataObj === 'object'
+              ? dataObj.type
+              : undefined;
+
+          if (dataType === 'gate-open') {
+            const parsedPayload = GateOpenWireSchema.safeParse(msg.data);
+            if (!parsedPayload.success) {
+              payloadViolations.push({
+                frameType: 'gate-open',
+                ...(typeof dataObj?.gateId === 'string'
+                  ? { gateId: dataObj.gateId }
+                  : {}),
+                issues: parsedPayload.error.issues,
+              });
+              return; // deliberately NOT pushed to received.events
+            }
+            received.events.push(msg);
+            if (opts.onValidatedFrame != null) {
+              try {
+                // Preserve `runId` from the raw payload — the wire schema
+                // strips it (there is no runId field on GateOpenWireSchema)
+                // but the fake-cloud store needs it to key correctly.
+                const rawRunId = (dataObj as { runId?: unknown }).runId;
+                const augmented: GateOpenWire & { runId?: string } =
+                  typeof rawRunId === 'string' && rawRunId.length > 0
+                    ? { ...parsedPayload.data, runId: rawRunId }
+                    : parsedPayload.data;
+                opts.onValidatedFrame({ type: 'gate-open', data: augmented });
+              } catch (err) {
+                // Test-only: log and continue; the peer never crashes on callback failure.
+                // eslint-disable-next-line no-console
+                console.warn('[fake-peer] onValidatedFrame threw on gate-open:', err);
+              }
+            }
+            return;
+          }
+
+          if (dataType === 'gate-outcome') {
+            const parsedPayload = GateOutcomeWireSchema.safeParse(msg.data);
+            if (!parsedPayload.success) {
+              payloadViolations.push({
+                frameType: 'gate-outcome',
+                ...(typeof dataObj?.gateId === 'string'
+                  ? { gateId: dataObj.gateId }
+                  : {}),
+                issues: parsedPayload.error.issues,
+              });
+              return;
+            }
+            received.events.push(msg);
+            if (opts.onValidatedFrame != null) {
+              try {
+                opts.onValidatedFrame({ type: 'gate-outcome', data: parsedPayload.data });
+              } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn('[fake-peer] onValidatedFrame threw on gate-outcome:', err);
+              }
+            }
+            return;
+          }
+
+          // Non-string / absent `type` — track as unknown, do NOT push.
+          if (typeof dataType !== 'string') {
+            payloadViolations.push({
+              frameType: 'unknown',
+              issues: [
+                { message: 'cluster.cockpit frame data missing a string `type` discriminator' },
+              ],
+            });
+            return;
+          }
+          // Some other string `type` — fall through to preserve today's behaviour.
+        }
+
         received.events.push(msg);
         return;
       }
@@ -187,6 +311,7 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
   const peer: FakePeer = {
     url,
     received,
+    payloadViolations,
 
     async waitForEvent(channel, matcher, timeoutMs = DEFAULT_TIMEOUT_MS) {
       const match = (e: EventMessage): boolean =>

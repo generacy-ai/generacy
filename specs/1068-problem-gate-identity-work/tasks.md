@@ -10,19 +10,19 @@
 
 ## Phase 1: Setup / preconditions
 
-- [ ] T001 Run the sibling harness to establish a green baseline:
+- [X] T001 Run the sibling harness to establish a green baseline:
   `pnpm --filter @generacy-ai/orchestrator test cockpit-gates-integration.integration.test.ts`
   and `pnpm --filter @generacy-ai/orchestrator test cockpit-gates-frameid.integration.test.ts`.
   Both must pass before starting; the new file extends the same scaffolding (plan §Approach, research §Implementation patterns).
 
-- [ ] T002 Resolve D-2 (MCP tool driver import path). Attempt D-2-a (direct TypeScript import
+- [X] T002 Resolve D-2 (MCP tool driver import path). Attempt D-2-a (direct TypeScript import
   from `packages/generacy/src/cli/commands/cockpit/mcp/tools/cockpit_gate_*.ts` inside a test
   under `packages/orchestrator/src/__tests__/`) with a throwaway one-liner test. If
   `pnpm --filter @generacy-ai/orchestrator test` resolves the imports, record "D-2-a" in a comment
   atop `mcp-tool-driver.ts`. If not, fall back to D-2-b (Node subprocess mirroring the doorbell
   driver). Decision must be pinned before T006. (research §D-2, contracts/mcp-tool-driver.md §Implementation)
 
-- [ ] T003 Resolve D-3 (`GateOpenWireSchema` / `GateOutcomeWireSchema` import location).
+- [X] T003 Resolve D-3 (`GateOpenWireSchema` / `GateOutcomeWireSchema` import location).
   Attempt D-3-a (test-time import from `packages/generacy/src/cli/commands/cockpit/mcp/gates/schemas.ts`)
   first — zero cost if the workspace resolver accepts it. If not, apply D-3-b (duplicate the two
   schemas inline in `fake-peer.ts`, ~30 LOC, matches the mirror-pattern the cluster-side schemas
@@ -34,7 +34,7 @@
 
 <!-- Phase boundary: T001–T003 must land before Phase 2. Phase 2 helpers unblock every Phase 3 test. -->
 
-- [ ] T004 [P] Create `packages/orchestrator/src/__tests__/cockpit-gates/fake-cloud-store.ts` — new file.
+- [X] T004 [P] Create `packages/orchestrator/src/__tests__/cockpit-gates/fake-cloud-store.ts` — new file.
   Implements `createFakeCloudStore({ persistGeneration? })` returning a `FakeCloudStore` with
   `putGateFromWireFrame(payload)`, `applyOutcome(gateId, outcome, detail?)`, `putRaw(doc)`,
   `getByKey(issueRef, gateType, generation, runId?)`, `listByIssueRef(issueRef, gateType?)`,
@@ -45,7 +45,7 @@
   in `listByIssueRef` — the orchestrator route applies its own collapse. (data-model §E1, §E2,
   contracts/fake-cloud-store.md)
 
-- [ ] T005 Extend `packages/orchestrator/src/__tests__/cockpit-gates/fake-peer.ts` — modify existing file.
+- [X] T005 Extend `packages/orchestrator/src/__tests__/cockpit-gates/fake-peer.ts` — modify existing file.
   Add payload validation inside the `msg.type === 'event' && msg.event === 'cluster.cockpit'`
   branch (currently `fake-peer.ts:148-158`): dispatch on `msg.data.type`, running
   `GateOpenWireSchema.safeParse(msg.data)` for `'gate-open'` and `GateOutcomeWireSchema.safeParse(msg.data)`
@@ -56,7 +56,7 @@
   `onValidatedFrame?: (frame) => void`. Schema import per T003 decision.
   (data-model §E3, contracts/fake-peer-payload-schema.md)
 
-- [ ] T006 [P] Create `packages/orchestrator/src/__tests__/cockpit-gates/mcp-tool-driver.ts` — new file.
+- [X] T006 [P] Create `packages/orchestrator/src/__tests__/cockpit-gates/mcp-tool-driver.ts` — new file.
   Implements `createMcpToolDriver({ baseUrl, fetchImpl? })` returning a `McpToolDriver` with
   `gateOpen`, `gateAck`, `gateStatus`, `gateList` methods. Each delegates to the corresponding
   handler (`cockpitGateOpen`, `cockpitGateAck`, `cockpitGateStatus`, `cockpitGateList`) with
@@ -65,7 +65,7 @@
   check `.status === 'ok'` before reading `.data`. No retry, no MCP protocol, no `claude` process.
   (data-model §E4, contracts/mcp-tool-driver.md)
 
-- [ ] T007 Extend `packages/orchestrator/src/__tests__/cockpit-gates/scenario-helpers.ts` — modify existing file.
+- [X] T007 Extend `packages/orchestrator/src/__tests__/cockpit-gates/scenario-helpers.ts` — modify existing file.
   Add `startFakeCloud?: boolean` and `fakeCloudOptions?: FakeCloudStoreOptions` to `setupScenario`'s
   options. When `startFakeCloud: true`:
   1. Instantiate `fakeCloud = createFakeCloudStore(opts.fakeCloudOptions)`.
@@ -90,7 +90,7 @@
 
 <!-- Phase boundary: T004–T007 must land before Phase 3. Each Phase 3 test uses setupScenario({ startFakeCloud: true }). -->
 
-- [ ] T008 Create `packages/orchestrator/src/__tests__/cockpit-gates-runid.integration.test.ts` — new file
+- [X] T008 Create `packages/orchestrator/src/__tests__/cockpit-gates-runid.integration.test.ts` — new file
   with the top-level scaffolding: `describe.each` matrix from `contracts/revert-scenarios.md §CI matrix realization`
   with three cells (`healthy`, `phase-A-reverted`, `phase-B-reverted`; phase-C omitted per the doc's rationale),
   per-scenario `beforeEach` calling `setupScenario({ startFakeCloud: true, ...cell.opts })` and
@@ -99,7 +99,7 @@
   across revert cells (FR-006, FR-007, FR-010, FR-011). Every subsequent Phase 3 test body
   lands INSIDE this file. (plan §Approach 5, contracts/revert-scenarios.md)
 
-- [ ] T009 [US1] Add FR-002 test bodies to `cockpit-gates-runid.integration.test.ts`:
+- [X] T009 [US1] Add FR-002 test bodies to `cockpit-gates-runid.integration.test.ts`:
   two `mcp.gateOpen` calls with same `(issueRef, gateType, generation)` and distinct `runId`
   values; ack the first to `applied` before opening the second. Assert both `gateId`s differ,
   peer received two distinct `cluster.cockpit` frames with those ids, and
@@ -109,7 +109,7 @@
   `FR-002 (Phase B reverted): re-run collides with terminal-state applied gate`.
   (plan §Approach 4 FR-002, quickstart §FR-002, contracts/revert-scenarios.md §Revert cell #2)
 
-- [ ] T010 [US2] Add FR-003 test body: `gateOpen({ ..., runId: 'rid-x' })` → `waitFor` on
+- [X] T010 [US2] Add FR-003 test body: `gateOpen({ ..., runId: 'rid-x' })` → `waitFor` on
   `fakeCloud.getByKey(...)` returning non-null → `mcp.gateStatus({ ..., runId: 'rid-x' })`.
   Assert `.status === 'ok'`, `.data.status === 'open'`, `.data.gateId === openResult.data.gateId`.
   Also assert `mcp.gateList({ issueRef })` returns an entry with the same `gateId`. Under
@@ -117,7 +117,7 @@
   `generation`); name test accordingly. Under Phase-B-reverted cell, expect same failure via
   the FR-002 collision cascade. (plan §Approach 4 FR-003, quickstart §FR-003, contracts/revert-scenarios.md)
 
-- [ ] T011 [US3] Add FR-004 test body: single `gateOpen({ ..., runId: 'rid-wakes' })`, then loop
+- [X] T011 [US3] Add FR-004 test body: single `gateOpen({ ..., runId: 'rid-wakes' })`, then loop
   three "wakes" of `mcp.gateStatus(...)`. Assert every wake returns `data.status ∈ {open, answered}`
   (never `absent`). Assert the peer received exactly one `cluster.cockpit` frame filtered on
   `data.type === 'gate-open' && data.gateId === openId`. Assert
@@ -126,7 +126,7 @@
   three revert cells (dedup is independent of runId). (plan §Approach 4 FR-004, quickstart §FR-004,
   research §Q4=C)
 
-- [ ] T012 [US4] Add FR-005 test body: `gateOpen({ generation: 'P2', runId: 'rid-1' })` and
+- [X] T012 [US4] Add FR-005 test body: `gateOpen({ generation: 'P2', runId: 'rid-1' })` and
   `gateOpen({ generation: 'artifact-review:spec-review:abc123', runId: 'rid-2' })` (colon-bearing
   generation). Then `mcp.gateList({ issueRef })`. Assert each returned entry's `.generation`
   equals the input string byte-for-byte, no `:<runId>` suffix, no re-parsing artifacts. Under
@@ -134,19 +134,19 @@
   name test `FR-005 (Phase A reverted): generation renders as fallback`.
   (plan §Approach 4 FR-005, contracts/fake-cloud-store.md §Note on `generation`, contracts/revert-scenarios.md)
 
-- [ ] T013 [US5] Add FR-006 test body (healthy-path-only block — no revert-cell variants):
+- [X] T013 [US5] Add FR-006 test body (healthy-path-only block — no revert-cell variants):
   `gateOpen(...)`, capture the route-returned `frameId`, capture the corresponding
   peer-received `data.frameId`, assert byte-equal. Also assert `ctx.peer.payloadViolations.length === 0`
   (defence-in-depth from T005's payload validator). This is the load-bearing test that would have
   caught the `frameId`-shipped-inert bug. (plan §Approach 4 FR-006, spec §US5, contracts/fake-peer-payload-schema.md)
 
-- [ ] T014 [US6] Add FR-007 test body: run a full `gateOpen → gateAck({ outcome: 'applied' })`
+- [X] T014 [US6] Add FR-007 test body: run a full `gateOpen → gateAck({ outcome: 'applied' })`
   cycle. Assert the `CountingLogger.records` contain zero entries whose `msg.includes('Invalid relay message, skipping')`.
   Also assert the fake-peer stdout / captured log does not emit the same string (it uses
   a different phrase today — `dropping frame that failed …` — so a genuine post-#1063 regression
   guard). (plan §Approach 4 FR-007, spec §US6, data-model §E6)
 
-- [ ] T015 [US7] Add FR-008 test body: `gateOpen({ ...commonArgs })` WITHOUT `runId` field
+- [X] T015 [US7] Add FR-008 test body: `gateOpen({ ...commonArgs })` WITHOUT `runId` field
   (not `runId: undefined`, actual omission). Assert `.status === 'ok'`, then
   `gateAck({ gateId, outcome: 'applied' })`. Assert
   `fakeCloud.getByKey(issueRef, gateType, generation, undefined)?.status === 'applied'`. This is
@@ -154,14 +154,14 @@
   `runId: z.string().min(1).optional()` so no simulation flag is needed (Q3=C rationale,
   FR-012 constraint). (plan §Approach 4 FR-008, quickstart §FR-008)
 
-- [ ] T016 [US7] Add FR-009 test body: `ctx.fakeCloud!.putRaw({ ...gateDocWithNoGeneration })` —
+- [X] T016 [US7] Add FR-009 test body: `ctx.fakeCloud!.putRaw({ ...gateDocWithNoGeneration })` —
   hand-crafted pre-Phase-A doc with `generation: undefined` and a `gateKey` shape
   `owner/repo#N:phase-queue` (no generation segment). Then `mcp.gateList({ issueRef })`.
   Assert the doc surfaces via the pre-Phase-A fallback, with `.generation === '<pre-phase-a>'`
   sentinel per contracts/fake-cloud-store.md's decision. Verifies the list-mode fallback code
   path. (plan §Approach 4 FR-009, quickstart §FR-009)
 
-- [ ] T017 [P] Create `packages/orchestrator/src/__tests__/cockpit-gates/no-simulate-phase-in-src.test.ts` —
+- [X] T017 [P] Create `packages/orchestrator/src/__tests__/cockpit-gates/no-simulate-phase-in-src.test.ts` —
   new file with a single `it('FR-012: no SIMULATE_PHASE_* switches in shipped code paths', ...)`
   that runs
   `grep -rE 'SIMULATE_PHASE_[A-Z]+' packages/{orchestrator,control-plane,cluster-relay}/src packages/generacy/src/cli/commands/cockpit packages/cockpit/src --exclude-dir={__tests__,tests} --exclude=*.{test,spec}.ts || true`
@@ -173,7 +173,7 @@
 
 <!-- Phase boundary: Phase 3 tests must be green before Phase 4. -->
 
-- [ ] T018 Regression check: re-run the two sibling harnesses and confirm the T005 extension
+- [X] T018 Regression check: re-run the two sibling harnesses and confirm the T005 extension
   did not regress them —
   `pnpm --filter @generacy-ai/orchestrator test cockpit-gates-integration.integration.test.ts`
   and `pnpm --filter @generacy-ai/orchestrator test cockpit-gates-frameid.integration.test.ts`.
@@ -181,13 +181,13 @@
   `gateOpenFixture` / `gateOutcomeFixture` (schema-compliant by construction), so
   `payloadViolations` should stay empty across their runs. (contracts/fake-peer-payload-schema.md §Backwards compatibility)
 
-- [ ] T019 Runtime budget check: `time pnpm --filter @generacy-ai/orchestrator test cockpit-gates-runid.integration.test.ts`.
+- [X] T019 Runtime budget check: `time pnpm --filter @generacy-ai/orchestrator test cockpit-gates-runid.integration.test.ts`.
   Assert local runtime under 90 s (SC-006 median budget). Sibling `.integration.test.ts` files
   run 15–25 s; expected 30–60 s. If over budget, first check for missing `ctx.cleanup()` in
   `afterEach` or a raised `relayReconnectMs`. Do NOT bypass by raising the budget — sibling
   timing is the lower-bound reference.
 
-- [ ] T020 Verify no non-test files touched during implementation:
+- [X] T020 Verify no non-test files touched during implementation:
   `git diff --name-only develop.. -- 'packages/*/src/**' | grep -v -E '(\.test\.ts|\.spec\.ts|__tests__/)'`.
   Expected empty output → the CLAUDE.md test-only exemption applies and NO `.changeset/*.md`
   is required. If NON-empty (e.g. T003's D-3-c fallback introduced a re-export in
