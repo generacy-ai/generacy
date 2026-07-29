@@ -4,6 +4,7 @@ import {
   _ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS as ENQUEUE_IF_ABSENT_SCRIPT,
   _REQUEUE_FOR_RESUME_SCRIPT_FOR_TESTS as REQUEUE_FOR_RESUME_SCRIPT,
   _RELEASE_SCRIPT_FOR_TESTS as RELEASE_SCRIPT,
+  _RECONCILE_IN_FLIGHT_SCRIPT_FOR_TESTS as RECONCILE_IN_FLIGHT_SCRIPT,
 } from '../redis-queue-adapter.js';
 import type { QueueItem } from '../../types/index.js';
 
@@ -398,5 +399,58 @@ describe('RedisQueueAdapter — defineCommand wiring for new scripts (#1069)', (
     expect(releaseItem.mock.calls[0][4]).toBe('orchestrator:queue:in-flight-items');
     // ARGV[1] = itemKey
     expect(releaseItem.mock.calls[0][5]).toBe('generacy-ai/generacy#1069');
+  });
+});
+
+describe('RECONCILE_IN_FLIGHT_SCRIPT wire shape (#1058)', () => {
+  it('runs SISMEMBER then SREM in order (single-source-of-truth for the two-command shape)', () => {
+    const body = RECONCILE_IN_FLIGHT_SCRIPT;
+    const sismember = body.indexOf("redis.call('SISMEMBER'");
+    const srem = body.indexOf("redis.call('SREM'");
+    expect(sismember, 'SISMEMBER present').toBeGreaterThanOrEqual(0);
+    expect(srem, 'SREM strictly after SISMEMBER').toBeGreaterThan(sismember);
+  });
+
+  it('SISMEMBER checks KEYS[1] (the in-flight SET) with ARGV[1] (itemKey)', () => {
+    expect(RECONCILE_IN_FLIGHT_SCRIPT).toMatch(
+      /SISMEMBER'?\s*,\s*KEYS\[1\]\s*,\s*ARGV\[1\]/,
+    );
+  });
+
+  it('SREM removes from KEYS[1] (the in-flight SET) with ARGV[1]', () => {
+    expect(RECONCILE_IN_FLIGHT_SCRIPT).toMatch(
+      /SREM'?\s*,\s*KEYS\[1\]\s*,\s*ARGV\[1\]/,
+    );
+  });
+
+  it('returns 0 early when SISMEMBER reports the itemKey is absent (skipped-race-reappeared)', () => {
+    // The load-bearing race guard: a concurrent re-add between client-side
+    // residue detection and Lua invocation must NOT be SREM'd. Without this
+    // branch, a live item transiently absent from the tracker snapshot would
+    // be removed → next enqueueIfAbsent's SISMEMBER passes → two ZSET
+    // members → the exact failure mode #1054 / #1060 exist to prevent.
+    expect(RECONCILE_IN_FLIGHT_SCRIPT).toMatch(/exists\s*==\s*0[\s\S]*return\s*0/);
+  });
+
+  it('registers with numberOfKeys: 1 (CROSSSLOT-safe by construction under Redis Cluster)', async () => {
+    const defineCommand = vi.fn();
+    const redis: Record<string, unknown> = {
+      defineCommand,
+      sscan: vi.fn().mockResolvedValue(['0', []]),
+      zrange: vi.fn().mockResolvedValue([]),
+      scan: vi.fn().mockResolvedValue(['0', []]),
+      hkeys: vi.fn().mockResolvedValue([]),
+    };
+    const adapter = new RedisQueueAdapter(redis as unknown as import('ioredis').Redis, {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    });
+    await adapter.reconcileInFlight();
+    expect(defineCommand).toHaveBeenCalledWith('reconcileInFlightItem', {
+      numberOfKeys: 1,
+      lua: RECONCILE_IN_FLIGHT_SCRIPT,
+    });
   });
 });

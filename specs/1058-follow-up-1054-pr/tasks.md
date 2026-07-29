@@ -12,7 +12,7 @@
 
 ## Phase 1: Interface widening (types contract)
 
-- [ ] T001 [US1][US2][US3][US4] Add `ReconcileReport` exported interface and widen `QueueManager` with
+- [X] T001 [US1][US2][US3][US4] Add `ReconcileReport` exported interface and widen `QueueManager` with
   `reconcileInFlight(now?: number): Promise<ReconcileReport>` in
   `packages/orchestrator/src/types/monitor.ts` (co-locate method with `reapOrphanClaims` around `:398`;
   place `ReconcileReport` after `ReapReport` around `:435-444`). Follow the JSDoc shapes verbatim from
@@ -26,7 +26,7 @@
 <!-- Depends on Phase 1 (interface must exist before implementation). Tasks T002 and T003 both
      touch `redis-queue-adapter.ts`, so they run sequentially. -->
 
-- [ ] T002 [US1][US3] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, add module-level
+- [X] T002 [US1][US3] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, add module-level
   constants BEFORE the class body:
   - `RECONCILE_IN_FLIGHT_SCRIPT` — the Lua body from `contracts/reconcile-in-flight-script.md § Wire shape`
     (SISMEMBER→early-return-0 else SREM→return 1), with JSDoc mirroring the shape at `:41-52` / `:86-99`.
@@ -34,7 +34,7 @@
   - `export const _RECONCILE_IN_FLIGHT_SCRIPT_FOR_TESTS = RECONCILE_IN_FLIGHT_SCRIPT` with `@internal`
     JSDoc for the script-wiring static-assertion test.
 
-- [ ] T003 [US1][US3] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, add three private
+- [X] T003 [US1][US3] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, add three private
   fields on `RedisQueueAdapter` (near existing `dropLogState` at `:328` / `enqueuedAtCache` at `:338`):
   - `private readonly reconcileTracker = new Map<string, number>()` — itemKey → firstSeenSweepId (JSDoc
     per data-model.md § `RedisQueueAdapter` new private fields).
@@ -45,7 +45,7 @@
   { numberOfKeys: 1, lua: RECONCILE_IN_FLIGHT_SCRIPT })`. Command name uses `Item` suffix so it does not
   shadow the class method name (same convention as `ensureRequeueForResumeCommand`).
 
-- [ ] T004 [US1][US2][US3] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, implement
+- [X] T004 [US1][US2][US3] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, implement
   `public async reconcileInFlight(now = Date.now()): Promise<ReconcileReport>`. Follow the shape from
   `contracts/queue-manager-additions.md § RedisQueueAdapter.reconcileInFlight` and
   `contracts/reconcile-in-flight-script.md § Client-side pre-computation`:
@@ -76,7 +76,7 @@
      and return the partial `report` so subsequent cycles retry.
   8. Never throw. Return the `ReconcileReport`.
 
-- [ ] T005 [US2] In the same `reconcileInFlight` method body, implement FR-004 log-cap accounting:
+- [X] T005 [US2] In the same `reconcileInFlight` method body, implement FR-004 log-cap accounting:
   - Track `emittedCount` and a `suppressed: string[]` list per cycle.
   - For each successful `SREM`, if `emittedCount < RECONCILE_LOG_CAP`: emit `logger.warn({ event:
     'orphan-in-flight-reconciled', itemKey, ageMs, reason: 'in-flight-no-pending-no-claim' })` and
@@ -86,7 +86,7 @@
   - Cycle summary line is emitted by the DISPATCHER, not by the adapter (see T009) — per data-model.md
     the summary lives at the reaperLoop callsite alongside `reap-orphan-claims`.
 
-- [ ] T006 [US1] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, update the
+- [X] T006 [US1] In `packages/orchestrator/src/services/redis-queue-adapter.ts`, update the
   `#1054 finding 6 — KNOWN RESIDUE` docstring on `reapOrphanClaims` at `:566-571` per FR-007: state that
   the residue is now closed by `reconcileInFlight` and cross-reference the new method. Preserve historical
   context — future readers may want to know why the two-directional sweep exists rather than a single
@@ -98,7 +98,7 @@
 
 <!-- Depends on Phase 1 (interface). Independent of Phase 2 — can run in parallel with T002-T006. -->
 
-- [ ] T007 [P] [US4] In `packages/orchestrator/src/services/in-memory-queue-adapter.ts`, add
+- [X] T007 [P] [US4] In `packages/orchestrator/src/services/in-memory-queue-adapter.ts`, add
   `public async reconcileInFlight(_now?: number): Promise<ReconcileReport>` returning
   `{ scanned: this.inFlightSet.size, reconciled: 0, skippedRaceReappeared: 0, trackedFirstSeen: 0 }`.
   Add one-line JSDoc per contracts/queue-manager-additions.md § InMemoryQueueAdapter — explains that
@@ -114,13 +114,13 @@
 <!-- Depends on Phase 2 (RedisQueueAdapter.reconcileInFlight must exist) AND Phase 3 (InMemory must
      exist so both adapter shapes satisfy the QueueManager interface the dispatcher depends on). -->
 
-- [ ] T008 [US4] In `packages/orchestrator/src/services/worker-dispatcher.ts`, add the boot sweep per
+- [X] T008 [US4] In `packages/orchestrator/src/services/worker-dispatcher.ts`, add the boot sweep per
   AD-4 / Q2=B. In `WorkerDispatcher.start()` at `:100-120`, BEFORE spawning `reaperLoop(ac.signal)` at
   `:111`, fire fire-and-forget: `void this.queue.reconcileInFlight().catch((err) => this.logger.warn(
   { err }, 'boot reconcileInFlight failed'))`. `start()` returns immediately; the loop's first regular
   sweep runs its own tracker check regardless.
 
-- [ ] T009 [US2][US4] In `packages/orchestrator/src/services/worker-dispatcher.ts::reaperLoop` at
+- [X] T009 [US2][US4] In `packages/orchestrator/src/services/worker-dispatcher.ts::reaperLoop` at
   `:569-615`, wire `reconcileInFlight` sequentially AFTER `reapOrphanClaims` (AD-5). Follow the
   `worker-dispatcher.ts:588-593` pattern for the `.catch(...)` error envelope. Add the per-cycle summary
   log at the same site as `reap-orphan-claims` at `:600-609`:
@@ -135,7 +135,7 @@
 <!-- Depends on Phases 1-4 (all implementation must exist). T010, T011, T012, T013 touch four
      independent test files → all four can run in parallel. -->
 
-- [ ] T010 [P] [US1][US2][US3][US5] NEW file
+- [X] T010 [P] [US1][US2][US3][US5] NEW file
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.reconcile-in-flight.integration.test.ts`.
   Real-Redis integration suite mirroring `redis-queue-adapter.reclaim-lua.test.ts` and
   `redis-queue-adapter.orphan-reclaim.test.ts` patterns. Cases covering FR-008 (a-h):
@@ -171,13 +171,13 @@
   Test cases prefixed with FR-###/SC-### tags in `it()` names per convention in
   `redis-queue-adapter.orphan-reclaim.test.ts`.
 
-- [ ] T011 [P] [US4][US5] NEW file
+- [X] T011 [P] [US4][US5] NEW file
   `packages/orchestrator/src/services/__tests__/in-memory-queue-adapter.reconcile-in-flight.test.ts`.
   Asserts the in-memory adapter's no-op contract: `reconcileInFlight` never `SREM`s anything, always
   returns `{ reconciled: 0, skippedRaceReappeared: 0, trackedFirstSeen: 0 }`, and `scanned` matches
   `inFlightSet.size` before and after a healthy `enqueue → claim → complete` cycle.
 
-- [ ] T012 [P] [US4][US5] MODIFIED
+- [X] T012 [P] [US4][US5] MODIFIED
   `packages/orchestrator/src/services/__tests__/queue-adapter-parity.test.ts`. Add a parameterized
   `describe.each` block per `contracts/queue-manager-additions.md § Cross-adapter parity contract`:
   - `it('exists and returns a ReconcileReport shape', ...)` — asserts both adapters return
@@ -186,7 +186,7 @@
     complete`, then `reconcileInFlight`, asserts `report.reconciled === 0` on both adapters.
   Wedge-repair (SC-001) is Redis-only per contract — do NOT add a wedge case here.
 
-- [ ] T013 [P] [US1][US5] MODIFIED
+- [X] T013 [P] [US1][US5] MODIFIED
   `packages/orchestrator/src/services/__tests__/redis-queue-adapter.script-wiring.test.ts`. Add a
   `describe('RECONCILE_IN_FLIGHT_SCRIPT wire shape', ...)` block per
   `contracts/reconcile-in-flight-script.md § Script-wiring static assertion`:
@@ -203,7 +203,7 @@
 <!-- Depends on all implementation phases — changeset must be a NEW file added in this PR per CLAUDE.md
      `.github/workflows/changeset-bot.yml` gate. -->
 
-- [ ] T014 [US1][US2][US3][US4][US5] NEW file `.changeset/1058-reconcile-in-flight.md`. `patch` bump for
+- [X] T014 [US1][US2][US3][US4][US5] NEW file `.changeset/1058-reconcile-in-flight.md`. `patch` bump for
   `@generacy-ai/orchestrator` — internal contract between adapter and dispatcher; `QueueManager` is not
   re-exported from `packages/orchestrator/src/index.ts` per CLAUDE.md's "New exports that are not
   re-exported from the package's public `index.ts` are internal surface, not API — still `patch`."

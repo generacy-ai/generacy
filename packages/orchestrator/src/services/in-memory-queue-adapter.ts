@@ -3,6 +3,7 @@ import type {
   QueueItemWithScore,
   QueueManager,
   ReapReport,
+  ReconcileReport,
   SerializedQueueItem,
 } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
@@ -185,6 +186,26 @@ export class InMemoryQueueAdapter implements QueueManager {
       reclaimed: [],
       skippedRaceReappeared: 0,
       skippedGraceWindow: 0,
+    };
+  }
+
+  /**
+   * #1058 / FR-005 — no-op for the in-memory adapter. In-memory `pending`,
+   * `claimed`, and `inFlightSet` are first-class fields in the same process
+   * that cannot diverge without a bug in this class (caught by
+   * `in-memory-queue-adapter.enqueue-invariant.test.ts` and siblings).
+   * Returns an empty report so `WorkerDispatcher.reaperLoop` can call this
+   * unconditionally without a Redis-vs-in-memory branch.
+   *
+   * `scanned` returns the set size rather than 0 so a call site logging
+   * `scanned` sees a truthful "sweep did examine the set" signal.
+   */
+  async reconcileInFlight(_now?: number): Promise<ReconcileReport> {
+    return {
+      scanned: this.inFlightSet.size,
+      reconciled: 0,
+      skippedRaceReappeared: 0,
+      trackedFirstSeen: 0,
     };
   }
 

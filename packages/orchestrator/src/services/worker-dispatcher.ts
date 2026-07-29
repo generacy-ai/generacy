@@ -105,6 +105,15 @@ export class WorkerDispatcher {
       'Starting worker dispatcher',
     );
 
+    // #1058 / AD-4 / Q2=B — boot sweep for `IN_FLIGHT_KEY` residue armed at
+    // process start. Fire-and-forget so `start()` returns immediately; the
+    // reaperLoop's first regular sweep runs its own tracker check regardless.
+    // Pre-crash residue armed by boot-sweep completion is repaired at the
+    // first regular sweep (~heartbeatCheckIntervalMs).
+    void this.queue.reconcileInFlight().catch((err) => {
+      this.logger.warn({ err }, 'boot reconcileInFlight failed');
+    });
+
     // Run poll loop and reaper loop concurrently
     await Promise.all([
       this.pollLoop(ac.signal),
@@ -606,6 +615,34 @@ export class WorkerDispatcher {
               skippedGraceWindow: report.skippedGraceWindow,
             },
             'Reaper cycle complete (Redis-side)',
+          );
+        }
+
+        // #1058 / AD-5: sequential invocation after `reapOrphanClaims` so the
+        // reconciliation snapshot sees a coherent post-reap state. Same
+        // `.catch()` error envelope pattern — a Redis error must not skip
+        // subsequent cycles.
+        const reconcileReport = await this.queue
+          .reconcileInFlight()
+          .catch((err) => {
+            this.logger.warn({ err }, 'reconcileInFlight failed');
+            return null;
+          });
+        if (
+          reconcileReport &&
+          (reconcileReport.reconciled > 0 ||
+            reconcileReport.skippedRaceReappeared > 0 ||
+            reconcileReport.trackedFirstSeen > 0)
+        ) {
+          this.logger.info(
+            {
+              event: 'reconcile-in-flight',
+              scanned: reconcileReport.scanned,
+              reconciled: reconcileReport.reconciled,
+              skippedRaceReappeared: reconcileReport.skippedRaceReappeared,
+              trackedFirstSeen: reconcileReport.trackedFirstSeen,
+            },
+            'Reconcile cycle complete (in-flight residue)',
           );
         }
       } catch (error) {

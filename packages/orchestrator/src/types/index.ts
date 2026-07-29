@@ -105,6 +105,7 @@ export {
   type GitHubPrReviewWebhookPayload,
   type ReapReport,
   type ReclaimedItem,
+  type ReconcileReport,
 } from './monitor.js';
 
 // SSE Types

@@ -5,6 +5,7 @@ import type {
   QueueManager,
   ReapReport,
   ReclaimedItem,
+  ReconcileReport,
   SerializedQueueItem,
 } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
@@ -281,6 +282,54 @@ return {1, attemptCount}
  */
 export const _RELEASE_SCRIPT_FOR_TESTS = RELEASE_SCRIPT;
 
+/**
+ * #1058 / FR-001 / FR-002 — atomic `SISMEMBER`+`SREM` for a two-sweep-confirmed
+ * residue candidate. The load-bearing race guard is the two-sweep tracker
+ * in the adapter (`reconcileTracker`); this script's role is limited to
+ * catching the narrow window where an item genuinely re-entered flight
+ * between the client-side residue computation and the Lua invocation for
+ * this specific candidate.
+ *
+ * KEYS[1] = orchestrator:queue:in-flight-items
+ * ARGV[1] = itemKey
+ *
+ * Returns:
+ *   1 = reconciled (SREM fired)
+ *   0 = skipped-race-reappeared (item was gone before we could SREM, or a
+ *       concurrent `enqueueIfAbsent`/`enqueue` re-added it after our
+ *       client-side detection but before this Lua fired — either way,
+ *       we do NOT SREM)
+ *
+ * Contains, in strict order (single-source-of-truth for the
+ * `redis-queue-adapter.script-wiring.test.ts` static assertion):
+ *   1. SISMEMBER KEYS[1] ARGV[1]
+ *   2. SREM KEYS[1] ARGV[1]        (guarded by the SISMEMBER result)
+ *
+ * `numberOfKeys: 1` — CROSSSLOT-safe by construction under Redis Cluster.
+ */
+const RECONCILE_IN_FLIGHT_SCRIPT = `
+local exists = redis.call('SISMEMBER', KEYS[1], ARGV[1])
+if exists == 0 then
+  return 0
+end
+redis.call('SREM', KEYS[1], ARGV[1])
+return 1
+`;
+
+/**
+ * Exported for the script-wiring static-assertion tests only. Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _RECONCILE_IN_FLIGHT_SCRIPT_FOR_TESTS = RECONCILE_IN_FLIGHT_SCRIPT;
+
+/**
+ * #1058 / FR-004 / Q4=B — max individual `orphan-in-flight-reconciled` warn
+ * lines per reconcileInFlight cycle. Beyond this cap, suppress and emit one
+ * aggregate `orphan-in-flight-reconciled-batch` warn with sample keys.
+ */
+const RECONCILE_LOG_CAP = 100;
+
 interface Logger {
   info(msg: string): void;
   info(obj: Record<string, unknown>, msg: string): void;
@@ -320,6 +369,31 @@ export class RedisQueueAdapter implements QueueManager {
   private reclaimOrphanCommandDefined = false;
   private requeueForResumeCommandDefined = false;
   private releaseCommandDefined = false;
+  /**
+   * #1058 / FR-001 — Lua command registration guard, mirrors the existing
+   * `ensureXCommand()` pattern (e.g. `ensureReclaimOrphanCommand()`).
+   */
+  private reconcileInFlightCommandDefined = false;
+  /**
+   * #1058 / FR-001 / Q1=D — two-sweep tracker for residue candidates. Keyed
+   * by itemKey; value is the sweep-id at which the candidate was first
+   * observed as residue. On the next sweep, if the itemKey is still
+   * residue AND `firstSeenSweepId < currentSweepId`, the atomic
+   * `RECONCILE_IN_FLIGHT_SCRIPT` fires.
+   *
+   * Bounded by residue population: entries insert on first-sweep,
+   * delete on successful `SREM` OR when the itemKey re-appears in
+   * pending/claimed (transient race artifact self-clears). AD-2: lives
+   * in process-local memory, not Redis — a dispatcher crash re-arms via
+   * the boot sweep.
+   */
+  private readonly reconcileTracker = new Map<string, number>();
+  /**
+   * #1058 / FR-001 — monotonically increasing sweep counter. Incremented
+   * once per `reconcileInFlight()` invocation to distinguish first-sweep
+   * from subsequent-sweep sightings.
+   */
+  private reconcileSweepCounter = 0;
   /**
    * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
    * drop-log transition-edge decision. Cleared on `complete()` (R6 mitigation)
@@ -398,6 +472,18 @@ export class RedisQueueAdapter implements QueueManager {
       lua: RELEASE_SCRIPT,
     });
     this.releaseCommandDefined = true;
+  }
+
+  private ensureReconcileInFlightCommand(): void {
+    if (this.reconcileInFlightCommandDefined) return;
+    // Command name uses the `Item` suffix so it does not shadow this
+    // class's own `reconcileInFlight` method on the ioredis client object
+    // (same convention as `ensureRequeueForResumeCommand`, `ensureReleaseCommand`).
+    this.redis.defineCommand('reconcileInFlightItem', {
+      numberOfKeys: 1,
+      lua: RECONCILE_IN_FLIGHT_SCRIPT,
+    });
+    this.reconcileInFlightCommandDefined = true;
   }
 
   async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
@@ -563,12 +649,18 @@ export class RedisQueueAdapter implements QueueManager {
    * Never throws. On transport error mid-sweep: `warn` + return the
    * partial report so subsequent cycles retry.
    *
-   * #1054 finding 6 — KNOWN RESIDUE: the sweep is candidate-set-driven by
-   * `claimed:*` keys, so an in-flight-SET member whose backing claim hash
-   * was evicted / HDEL'd without a paired SREM is unreachable from here.
-   * The chosen direction is right for the reported incident (heartbeat-
-   * ABSENT candidates), but a periodic `in-flight-items \ (pending ∪
-   * claimed)` reconciliation would close the residual gap. Tracked in #1058.
+   * #1054 finding 6 — KNOWN RESIDUE (now closed by #1058): the sweep is
+   * candidate-set-driven by `claimed:*` keys, so an in-flight-SET member
+   * whose backing claim hash was evicted / HDEL'd without a paired SREM
+   * is unreachable from this direction. The chosen direction is right for
+   * the reported incident (heartbeat-ABSENT candidates), and the two-
+   * directional sweep is intentionally split (rather than unified) because
+   * `reapOrphanClaims` and `reconcileInFlight` guard different failure
+   * classes with different atomicity primitives: this method re-checks
+   * live heartbeat state inside Lua; `reconcileInFlight` uses a two-sweep
+   * in-memory tracker plus a minimal single-key atomic `SISMEMBER`+`SREM`
+   * (see `RECONCILE_IN_FLIGHT_SCRIPT`). See `reconcileInFlight` for the
+   * residue-repair path.
    */
   async reapOrphanClaims(now: number = Date.now()): Promise<ReapReport> {
     this.ensureReclaimOrphanCommand();
@@ -746,6 +838,181 @@ export class RedisQueueAdapter implements QueueManager {
       this.logger.warn(
         { err: error },
         'Redis error in reapOrphanClaims sweep, returning partial report',
+      );
+    }
+
+    return report;
+  }
+
+  /**
+   * #1058 / FR-001 — reconciliation sweep for `IN_FLIGHT_KEY` residue
+   * (members with no matching pending or claim). Two-sweep confirmation
+   * gate (Q1=D): a candidate must be observed as residue in two
+   * consecutive sweeps before `SREM` fires. Cross-sweep state lives in
+   * the process-local `reconcileTracker` Map (AD-2).
+   *
+   * Cadence: called from `WorkerDispatcher.reaperLoop` immediately after
+   * `reapOrphanClaims` (AD-5), plus one boot sweep at process start (Q2=B).
+   *
+   * Never throws. Transport error during snapshot: `warn` + return partial
+   * report so subsequent cycles retry. Per-candidate Lua error: `warn`,
+   * continue, retain tracker entry for next cycle.
+   *
+   * @param now epoch-ms; parameterized for testability (default `Date.now()`)
+   */
+  async reconcileInFlight(now: number = Date.now()): Promise<ReconcileReport> {
+    this.reconcileSweepCounter += 1;
+    const sweepId = this.reconcileSweepCounter;
+    this.ensureReconcileInFlightCommand();
+
+    const report: ReconcileReport = {
+      scanned: 0,
+      reconciled: 0,
+      skippedRaceReappeared: 0,
+      trackedFirstSeen: 0,
+    };
+
+    const inFlightSet = new Set<string>();
+    const pendingSet = new Set<string>();
+    const claimedSet = new Set<string>();
+
+    try {
+      // (1) Snapshot in-flight via SSCAN batches.
+      let cursor = '0';
+      do {
+        const [nextCursor, batch] = await this.redis.sscan(
+          IN_FLIGHT_KEY,
+          cursor,
+          'COUNT',
+          100,
+        );
+        cursor = nextCursor;
+        for (const key of batch) inFlightSet.add(key);
+      } while (cursor !== '0');
+      report.scanned = inFlightSet.size;
+
+      // (2) Snapshot pending itemKeys via ZRANGE + JSON.parse.
+      const pendingMembers = await this.redis.zrange(PENDING_KEY, 0, -1);
+      for (const member of pendingMembers) {
+        try {
+          const parsed: SerializedQueueItem = JSON.parse(member);
+          if (parsed.itemKey) pendingSet.add(parsed.itemKey);
+        } catch {
+          // Malformed member — separate correctness concern per spec Out of Scope.
+        }
+      }
+
+      // (3) Snapshot claimed itemKeys via SCAN claimed:* + HKEYS per hash.
+      let claimedCursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          claimedCursor,
+          'MATCH',
+          `${CLAIMED_KEY_PREFIX}*`,
+          'COUNT',
+          100,
+        );
+        claimedCursor = nextCursor;
+        for (const claimedKey of keys) {
+          const fields = await this.redis.hkeys(claimedKey);
+          for (const itemKey of fields) claimedSet.add(itemKey);
+        }
+      } while (claimedCursor !== '0');
+    } catch (error) {
+      this.logger.warn(
+        { err: error, event: 'reconcile-in-flight-snapshot-error' },
+        'Redis error during reconcileInFlight snapshot, returning partial report',
+      );
+      return report;
+    }
+
+    // (4) Client-side set-difference → residue candidates.
+    const residue = new Set<string>();
+    for (const itemKey of inFlightSet) {
+      if (!pendingSet.has(itemKey) && !claimedSet.has(itemKey)) {
+        residue.add(itemKey);
+      }
+    }
+
+    // (5) Two-sweep gate.
+    let emittedCount = 0;
+    const suppressed: string[] = [];
+
+    for (const itemKey of residue) {
+      const firstSeenSweepId = this.reconcileTracker.get(itemKey);
+      if (firstSeenSweepId === undefined) {
+        this.reconcileTracker.set(itemKey, sweepId);
+        this.logger.debug(
+          { event: 'orphan-in-flight-tracked', itemKey, firstSeenSweepId: sweepId },
+          'Residue candidate observed (first sweep) — armed for two-sweep confirmation',
+        );
+        report.trackedFirstSeen += 1;
+        continue;
+      }
+      if (firstSeenSweepId >= sweepId) {
+        // Defensive: only fire on strictly-earlier first sighting.
+        continue;
+      }
+
+      let result: number;
+      try {
+        result = (await (this.redis as any).reconcileInFlightItem(
+          IN_FLIGHT_KEY,
+          itemKey,
+        )) as number;
+      } catch (error) {
+        this.logger.warn(
+          { err: error, event: 'orphan-in-flight-lua-error', itemKey },
+          'Redis error in RECONCILE_IN_FLIGHT_SCRIPT, retaining tracker entry for next cycle',
+        );
+        continue;
+      }
+
+      if (result === 1) {
+        // AD-6: full cache cleanup matches complete() / dead-letter / reclaim.
+        const enqueuedAtMs = this.enqueuedAtCache.get(itemKey);
+        const ageMs = enqueuedAtMs !== undefined ? now - enqueuedAtMs : null;
+        this.reconcileTracker.delete(itemKey);
+        this.enqueuedAtCache.delete(itemKey);
+        this.dropLogState.delete(itemKey);
+        report.reconciled += 1;
+        // FR-004 / Q4=B — per-cycle log cap.
+        if (emittedCount < RECONCILE_LOG_CAP) {
+          this.logger.warn(
+            {
+              event: 'orphan-in-flight-reconciled',
+              itemKey,
+              ageMs,
+              reason: 'in-flight-no-pending-no-claim',
+            },
+            'Reconciled orphaned in-flight-SET member (no pending, no claim)',
+          );
+          emittedCount += 1;
+        } else {
+          suppressed.push(itemKey);
+        }
+      } else {
+        // result === 0: item absent from SET at Lua time (concurrent SADD or
+        // already gone). Retain tracker entry; next sweep re-evaluates.
+        report.skippedRaceReappeared += 1;
+      }
+    }
+
+    // Transient race artifact self-clear: tracker entries not in current residue.
+    for (const itemKey of this.reconcileTracker.keys()) {
+      if (!residue.has(itemKey)) {
+        this.reconcileTracker.delete(itemKey);
+      }
+    }
+
+    if (suppressed.length > 0) {
+      this.logger.warn(
+        {
+          event: 'orphan-in-flight-reconciled-batch',
+          count: suppressed.length,
+          sampledItemKeys: suppressed.slice(0, 10),
+        },
+        'Reconciled orphaned in-flight-SET members (batch — cap exceeded)',
       );
     }
 
