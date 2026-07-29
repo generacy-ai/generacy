@@ -1,6 +1,6 @@
 # Feature Specification: PR-feedback handler mislabels a successful CLI self-commit cycle as no-diff
 
-**Branch**: `1073-problem-when-pr-feedback` | **Date**: 2026-07-29 | **Status**: Draft
+**Branch**: `1073-problem-when-pr-feedback` | **Date**: 2026-07-29 | **Status**: Clarified
 **Source**: [generacy-ai/generacy#1073](https://github.com/generacy-ai/generacy/issues/1073)
 
 ## Summary
@@ -74,8 +74,8 @@ Same disposition dispatcher, adjacent cause. #1070 (merged as `63436bff`) split 
 **So that** the recovery action is scoped to the reply/resolve failure and does not borrow the semantically-wrong `blocked:stuck-feedback-loop` label.
 
 **Acceptance Criteria**:
-- [ ] Existing `handleThreadOutcomes` failure paths from the handler-commit success branch (`:606-619+`) apply identically on the CLI-self-commit path.
-- [ ] No new failure label vocabulary is introduced unless clarification confirms it is needed. [NEEDS CLARIFICATION: does the current success-path thread-outcome handling already do this, or does US4 require a new label distinct from `blocked:stuck-feedback-loop`?]
+- [ ] Existing `handleThreadOutcomes` failure paths from the handler-commit success branch (`:606-619+`) apply identically on the CLI-self-commit path, **except** that the head-advanced-but-resolve-failed case applies a new `blocked:resolve-failed` label rather than reusing `blocked:stuck-feedback-loop`.
+- [ ] New label `blocked:resolve-failed` is added to `workflow-engine`'s label vocabulary (minor bump) and applied by the `resolveSuccesses === 0` branch when the branch HEAD advanced during the cycle. `blocked:stuck-feedback-loop` continues to apply on that branch only when the head did NOT advance. Resolved per clarification Q1 → B.
 
 ## Functional Requirements
 
@@ -87,13 +87,14 @@ Same disposition dispatcher, adjacent cause. #1070 (merged as `63436bff`) split 
 | FR-004 | When `cliSelfCommitted === true`, `hasChanges` semantics for downstream logic (e.g., `shortSha` derivation at `:593`, `commitTouchedFiles` at `:656-657`) MUST reflect the CLI's commit, not the handler's no-op commit step. | P1 | `getHeadShortSha()` already reads HEAD; the diff range `<preFixSha>..HEAD` already spans the CLI commit. |
 | FR-005 | Preserve `blocked:stuck-feedback-loop` behavior verbatim when `cliSelfCommitted === false && !success` OR `cliSelfCommitted === false && !hasChanges`. | P1 | US2. |
 | FR-006 | Preserve `blocked:fixer-timeout*` behavior verbatim (branches B4/B5/B6 at `:534-573`). Timeout branches fire before the FR-002 check. | P1 | Composition with #1070. |
-| FR-007 | The happy-path log line ("Successfully pushed changes to PR branch" at `:503-506`) MUST be adjusted or augmented so a self-commit cycle is not silently reported as a handler-commit cycle. Options: distinct log line, or extra `source: 'cli' \| 'handler'` field. | P2 | US3. Exact shape covered by clarify phase. |
-| FR-008 | The disposition dispatcher's `disposition:` field values SHOULD gain a `'cli-self-committed'` value (or equivalent) so the field is a complete taxonomy of B-branch outcomes. | P2 | Log grep target for SC-003. |
+| FR-007 | The happy-path log line ("Successfully pushed changes to PR branch" at `:503-506`) MUST emit a **distinct log message** on the CLI-self-commit path (e.g., `'CLI self-committed changes — proceeding to reply/resolve'`) AND both paths MUST include a structured `source: 'cli' \| 'handler'` field. Adding `source: 'handler'` to the existing handler-commit line is load-bearing — a taxonomy that only tags one side of a binary is not queryable. Resolved per clarification Q3 → A. | P2 | US3. |
+| FR-008 | The disposition dispatcher's `disposition:` field on the CLI-self-commit branch MUST be the exact string `'cli-self-committed'` (matches SC-003 and existing cause-oriented sibling values `'no-diff'`, `'push-failed'`, `'timeout-no-progress'`, etc.). Resolved per clarification Q4 → A. | P2 | Log grep target for SC-003. |
+| FR-008a | The CLI-self-commit log payload MUST include both `preFixSha` and `postFixSha` (or short forms) so a reader can verify the head-advance claim without running `git log`. This is load-bearing: the code *detects* "head advanced" but *infers* "the CLI committed" — those come apart when a human pushes mid-cycle. Making the claim auditable is cheaper than adding an authorship check today. Resolved per clarification Q4 caveat. | P2 | Log audit target. |
 | FR-009 | Regression test in `packages/orchestrator/src/worker/__tests__/` (colocated with existing `pr-feedback-handler.test.ts`) covering the CLI-self-commit path: fixture where `spawnClaudeForFeedback` returns `{ success: true, ... }` AND `commitAndPushChanges` returns `false` AND post-CLI HEAD SHA differs from `preFixSha`. Asserts no `blocked:*` label call. | P1 | Explicit issue acceptance criterion. |
 | FR-010 | Regression test complement: genuine no-diff cycle (post-CLI HEAD equals `preFixSha`, handler `hasChanges` false, CLI success) still calls `addBlockedStuckFeedbackLoopLabel`. | P1 | Guards US2 against over-relaxation. |
 | FR-011 | No changes to `PrFeedbackMonitorService`, the `blocked:*` short-circuit at `pr-feedback-monitor-service.ts:373-389`, `PrFeedbackMetadata`, `QueueItem`, or the retry-counter machinery introduced by #1070. | P1 | This is a producer-side fix; consumer semantics are unchanged. |
-| FR-012 | No changes to the fixer prompt, the CLI-side commit policy, or the CLI's default behavior. [NEEDS CLARIFICATION: the issue explicitly raises "worth auditing whether the CLI *should* be committing on its own here at all" — is that in scope for #1073 or a follow-up?] | P1 | Default assumption: out of scope. |
-| FR-013 | No new label vocabulary in `workflow-engine` on the happy path (US1 uses the existing success path). If US4 (head-advanced-but-resolve-failed) requires a new label, add it via a separate FR and matching changeset bump. | P1 | See US4 clarification. |
+| FR-012 | No changes to the fixer prompt, the CLI-side commit policy, or the CLI's default behavior. The CLI-side "should it commit at all" audit is filed as a follow-up (not #1073). Resolved per clarification Q2 → A. | P1 | Out of scope. |
+| FR-013 | The head-advanced-but-resolve-failed case (US4) MUST apply a **new** `blocked:resolve-failed` label rather than reusing `blocked:stuck-feedback-loop`. This requires adding the label to `packages/workflow-engine/src/actions/github/label-definitions.ts` and bumping `@generacy-ai/workflow-engine` to **minor** in the changeset. Existing `resolveSuccesses === 0` branch at `pr-feedback-handler.ts:625-633` is retargeted: `head advanced && resolveSuccesses === 0 → blocked:resolve-failed`; `head unchanged && resolveSuccesses === 0 → blocked:stuck-feedback-loop` (existing behavior). Resolved per clarification Q1 → B. This intentionally breaches SC-006. | P1 | See US4. |
 
 ## Success Criteria
 
@@ -104,7 +105,7 @@ Same disposition dispatcher, adjacent cause. #1070 (merged as `63436bff`) split 
 | SC-003 | `grep 'disposition: 'cli-self-committed'' <worker log>` (or the equivalent field name settled in clarify) yields exactly one line per self-commit cycle. | 1 line/cycle | Log-line audit assertion in FR-009 test. |
 | SC-004 | The historically observed contradiction (`msg: "No changes to commit"` + `msg: "no-diff cycle — ... blocked-stuck-feedback-loop disposition"` sequence on a cycle that actually pushed a commit) is unreachable. | Zero occurrences post-fix | Assertion in FR-009 test — the `no-diff cycle` warn line MUST NOT fire when `postCliSha !== preFixSha`. |
 | SC-005 | The reply-and-resolve loop at `:606-619+` runs identically on the CLI-self-commit path and the handler-commit path (same inputs, same outputs). | Behavioral parity | FR-009 assertion + code-audit (no divergent branches inside the happy-path loop). |
-| SC-006 | Zero changes under `packages/workflow-engine/src/` (unless US4 clarification introduces a new label). | Zero lines changed | `git diff --stat packages/workflow-engine/src/`. |
+| SC-006 | Changes under `packages/workflow-engine/src/` are scoped to **label vocabulary only** — adding `blocked:resolve-failed` to `label-definitions.ts` and any minimal type widening required to accept it. No changes to workflow-engine action logic, GitHub client, or schemas. Resolved per clarification Q1 → B (SC-006 breach is intentional and bounded). | Only `label-definitions.ts` (± thin type file) changed in `packages/workflow-engine/src/` | `git diff --stat packages/workflow-engine/src/`. |
 | SC-007 | Existing #1070 timeout-disposition test coverage passes unmodified. | 100% pass | `pnpm --filter @generacy-ai/orchestrator test pr-feedback-handler` green. |
 
 ## Assumptions
@@ -114,7 +115,7 @@ Same disposition dispatcher, adjacent cause. #1070 (merged as `63436bff`) split 
 3. The CLI legitimately committing its own work is expected behavior in the current pipeline, not an artifact to be suppressed. FR-012 tracks the "should it?" question as a distinct clarification.
 4. `commitAndPushChanges` at `:939+` is idempotent when the working tree is clean — it returns `false` without side effects. Verified by existing `"No changes to commit — skipping commit/push"` log line in the observed trace.
 5. The `blocked:stuck-feedback-loop` label vocabulary is unchanged. This spec redirects when the label is applied, not what the label means.
-6. All four `blocked:*` sibling labels (`stuck-feedback-loop`, `fixer-timeout`, `fixer-timeout-no-progress`, `fixer-timeout-repeat`) already exist in `workflow-engine` (added by #1070 minor bump). No new label vocabulary needed for US1/US2/US3.
+6. Four `blocked:*` sibling labels (`stuck-feedback-loop`, `fixer-timeout`, `fixer-timeout-no-progress`, `fixer-timeout-repeat`) already exist in `workflow-engine` (added by #1070 minor bump). US1/US2/US3 need no new label vocabulary. US4 adds one new label (`blocked:resolve-failed`) per clarification Q1 → B.
 7. #1051's `evaluatePushGuard` at `:474-485` runs before the disposition dispatcher and is unaffected — a refused push exits early via `handlePushRefused` and never reaches the SHA-comparison branch. This spec does not touch the guard.
 8. Composition with #1047's body-finding gate at `:596-605` and Disposition C at `:566-591` (per the CLAUDE.md pointer): the head-advanced check runs BEFORE Disposition C's marker-comment gate, so a self-commit cycle that also addressed body findings takes the happy path without falling into the Disposition C branch.
 9. The handler is called once per queue item (verified by monitor's `enqueueIfAbsent` dedupe from #1060/#1069) — no need to worry about concurrent invocations mutating HEAD between the pre- and post-CLI SHA reads.
@@ -123,7 +124,7 @@ Same disposition dispatcher, adjacent cause. #1070 (merged as `63436bff`) split 
 
 1. Auditing / changing whether the CLI *should* commit on its own. Flagged by the issue as "worth auditing" but is a policy question requiring separate clarification (FR-012 marker).
 2. Any change to `PrFeedbackMonitorService`, the `blocked:*` short-circuit, `PrFeedbackMetadata`, or `QueueItem` (FR-011).
-3. Any change to the `blocked:stuck-feedback-loop` label vocabulary or its consumer semantics — this fix redirects the *decision* to apply the label, not the label's meaning.
+3. Any change to the `blocked:stuck-feedback-loop` label vocabulary or its consumer semantics — this fix redirects the *decision* to apply the label, not the label's meaning. (One new sibling label `blocked:resolve-failed` is added per Q1 → B, but that is additive, not a redefinition of `stuck-feedback-loop`.)
 4. Any change to the timeout-disposition branches (B4/B5/B6) introduced by #1070 (FR-006).
 5. Any change to #1047's review-body-finding flow, `blocked:body-finding-unaddressed` label, or the ack-parser.
 6. Any change to #1051's push guard (`evaluatePushGuard`, `handlePushRefused`, `pushRefused` field on `CommitResult`).
@@ -131,12 +132,14 @@ Same disposition dispatcher, adjacent cause. #1070 (merged as `63436bff`) split 
 8. Retrospective cleanup of any PRs currently wearing an incorrectly-applied `blocked:stuck-feedback-loop` label — operator-driven, not part of the code fix.
 9. Backporting to older worker versions — this is a forward-only fix on `develop`.
 
-## Open Clarifications
+## Resolved Clarifications
 
-- **CL-1** (US4 / FR-013): does the current happy-path reply-and-resolve loop (`:606-619+`) already handle the "head advanced but resolve failed" case in a way that is *distinguishable* from the CLI-self-commit success case, or does it silently succeed and log-line-only? If distinguishable → US4 lands with no new label. If not distinguishable AND operators need to see the case surfaced → US4 needs a new label vocabulary (workflow-engine minor bump).
-- **CL-2** (FR-012 / Suggested-direction bullet 4): is the CLI-side commit policy in scope for #1073, or filed as a separate follow-up? Default: out of scope (this spec is a producer-side detection fix).
-- **CL-3** (FR-007 / US3): exact log-line shape for the self-commit disposition — new message text, or an additional field on the existing "Successfully pushed changes to PR branch" line?
-- **CL-4** (SC-003 / FR-008): exact string value for the `disposition:` field on the CLI-self-commit branch — `'cli-self-committed'` proposed; `'cli-committed'`, `'head-advanced'`, `'self-commit-success'` alternatives.
+All four open questions resolved in Batch 1 (see `clarifications.md`, 2026-07-29). Summary:
+
+- **CL-1 → Q1 → B**: Add new label `blocked:resolve-failed` for the head-advanced-but-resolve-failed case. Landed in FR-013 (updated). Intentional SC-006 breach (bounded to `label-definitions.ts`).
+- **CL-2 → Q2 → A**: CLI-side commit policy is **out of scope** for #1073. Filed as separate follow-up. FR-012 updated accordingly.
+- **CL-3 → Q3 → A**: Distinct log message on CLI-self-commit path (`'CLI self-committed changes — proceeding to reply/resolve'`) AND both paths gain a `source: 'cli' | 'handler'` field. Adding `source: 'handler'` to the existing line is load-bearing. FR-007 updated.
+- **CL-4 → Q4 → A**: `disposition:` field value is exactly `'cli-self-committed'`. FR-008 updated. Load-bearing caveat added as new **FR-008a**: log payload MUST include both `preFixSha` and `postFixSha` so the head-advance claim is auditable rather than asserted.
 
 ## Provenance
 
