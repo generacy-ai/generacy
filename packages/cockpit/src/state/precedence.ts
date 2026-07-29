@@ -33,6 +33,11 @@ export const WAITING_PIPELINE_ORDER: string[] = [
   // `blocked:stuck-feedback-loop` precedent above).
   'blocked:fixer-timeout-no-progress',
   'blocked:fixer-timeout-repeat',
+  // #1073 D-4: terminal `blocked:resolve-failed` (CLI-self-commit or
+  // handler-commit landed but reply/resolve batch had zero successes) outranks
+  // `waiting-for:address-pr-feedback` — no auto-retry window exists for a
+  // resolve failure, so the cluster is not still "waiting-for:address-pr-feedback".
+  'blocked:resolve-failed',
   // #926: `waiting-for:address-pr-feedback` outranks every waiting-for:*
   // gate — an actively-rewriting-code state is more-specific than any
   // passive gate it can coexist with (Q1→A, following #883's precedent).
