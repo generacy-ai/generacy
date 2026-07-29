@@ -181,6 +181,100 @@ describe('createRetainedCockpitEvents', () => {
     expect(Object.hasOwn(sends[1] as object, 'frameId')).toBe(false);
   });
 
+  // #1077 review — drainInto must re-arm the pending-frame TTL at send time.
+  // The accept-time entry may have already expired during the outage that
+  // caused the retain, and the getRelayClient()===null accept-time path never
+  // registered an entry at all.
+  it('#1077 drainInto re-arms pending-frame TTL for entries with a frameId', () => {
+    const retainer = createRetainedCockpitEvents({
+      maxCount: 100,
+      maxBytes: 10_000,
+    });
+    retainer.enqueue({
+      event: 'cluster.cockpit',
+      data: {
+        type: 'gate-open',
+        gateId: 'g'.repeat(24),
+        frameId: 'frm_drain_open',
+      },
+      timestamp: '2026-07-21T00:00:00.000Z',
+      approxBytes: 100,
+    });
+    retainer.enqueue({
+      event: 'cluster.cockpit',
+      data: {
+        type: 'gate-outcome',
+        gateId: 'h'.repeat(24),
+        frameId: 'frm_drain_ack',
+      },
+      timestamp: '2026-07-21T00:00:01.000Z',
+      approxBytes: 100,
+    });
+
+    const client = makeMockClient();
+    const result = retainer.drainInto(client);
+    expect(result).toEqual({ sent: 2, failed: 0 });
+
+    const registerCalls = (
+      client.registerPendingFrame as ReturnType<typeof vi.fn>
+    ).mock.calls;
+    expect(registerCalls).toHaveLength(2);
+    expect(registerCalls[0]).toEqual([
+      'frm_drain_open',
+      { frameType: 'gate-open', gateId: 'g'.repeat(24) },
+    ]);
+    expect(registerCalls[1]).toEqual([
+      'frm_drain_ack',
+      { frameType: 'gate-outcome', gateId: 'h'.repeat(24) },
+    ]);
+
+    // Re-arm MUST precede send for each entry so the entry is present when the
+    // reply comes back.
+    const sendCalls = (client.send as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sendCalls).toHaveLength(2);
+    const register0Order = (
+      client.registerPendingFrame as ReturnType<typeof vi.fn>
+    ).mock.invocationCallOrder[0];
+    const send0Order = (
+      client.send as ReturnType<typeof vi.fn>
+    ).mock.invocationCallOrder[0];
+    expect(register0Order).toBeLessThan(send0Order);
+  });
+
+  it('#1077 drainInto skips re-arm for entries without a valid frameId', () => {
+    const retainer = createRetainedCockpitEvents({
+      maxCount: 100,
+      maxBytes: 10_000,
+    });
+    retainer.enqueue({
+      event: 'cluster.cockpit',
+      data: { type: 'gate-open', gateId: 'a'.repeat(24) },
+      timestamp: '2026-07-21T00:00:00.000Z',
+      approxBytes: 100,
+    });
+    retainer.enqueue({
+      event: 'cluster.cockpit',
+      data: { type: 'gate-open', gateId: 'b'.repeat(24), frameId: '' },
+      timestamp: '2026-07-21T00:00:01.000Z',
+      approxBytes: 100,
+    });
+    retainer.enqueue({
+      event: 'cluster.cockpit',
+      data: {
+        type: 'unknown-subtype',
+        gateId: 'c'.repeat(24),
+        frameId: 'frm_wrong_type',
+      },
+      timestamp: '2026-07-21T00:00:02.000Z',
+      approxBytes: 100,
+    });
+
+    const client = makeMockClient();
+    retainer.drainInto(client);
+    expect(client.registerPendingFrame).not.toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledTimes(3);
+  });
+
   it('clear() empties the queue', () => {
     const retainer = createRetainedCockpitEvents({
       maxCount: 100,

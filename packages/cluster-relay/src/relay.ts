@@ -278,8 +278,16 @@ export class ClusterRelay {
     const entry = this.pendingFrames.get(frameId);
     if (!entry) return;
     this.pendingFrames.delete(frameId);
+    // Carry the stored frameType/gateId onto the eviction log — this is the
+    // one path where the reply never arrives, so the entry's own copy is the
+    // only source available for joining the evicted frameId back to the gate.
     this.logger.debug(
-      { frameId, ageMs: Date.now() - entry.registeredAt },
+      {
+        frameId,
+        frameType: entry.frameType,
+        gateId: entry.gateId,
+        ageMs: Date.now() - entry.registeredAt,
+      },
       'cluster.cockpit pending frame evicted on TTL',
     );
   }
@@ -401,6 +409,22 @@ export class ClusterRelay {
             const entry = this.pendingFrames.get(frameId)!;
             clearTimeout(entry.ttlHandle);
             this.pendingFrames.delete(frameId);
+            // Integrity cross-check: the cloud echoes the reply off the raw
+            // frame payload, so a disagreement between the entry we stored at
+            // registerPendingFrame time and the entry the cloud derived from
+            // the same frame implies a frameId collision or a cloud-side mixup.
+            if (entry.gateId !== message.gateId) {
+              this.logger.warn(
+                {
+                  frameId,
+                  storedGateId: entry.gateId,
+                  replyGateId: message.gateId,
+                  storedFrameType: entry.frameType,
+                  replyFrameType: message.frameType,
+                },
+                'cluster.cockpit.reply gateId disagrees with pending entry',
+              );
+            }
             this.logger.info(
               {
                 frameId,

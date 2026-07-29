@@ -987,13 +987,135 @@ describe('ClusterRelay', () => {
         vi.advanceTimersByTime(30_000);
 
         expect(relay._pendingFramesSizeForTests()).toBe(0);
+        // Eviction log includes stored frameType and gateId — the only path
+        // where the reply never arrives, so the entry's own copy is the only
+        // source available for joining the frameId back to a gate.
         expect(logger.debug).toHaveBeenCalledWith(
           expect.objectContaining({
             frameId: 'frm_ttl_1',
+            frameType: 'gate-open',
+            gateId: 'gate-ttl-1',
             ageMs: expect.any(Number),
           }),
           'cluster.cockpit pending frame evicted on TTL',
         );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settle logs a warn when stored gateId disagrees with the reply gateId', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+            setTimeout(() => {
+              ws.send(
+                JSON.stringify({
+                  type: 'cluster.cockpit.reply',
+                  timestamp: '2026-07-28T00:00:00.000Z',
+                  frameId: 'frm_gate_mismatch',
+                  frameType: 'gate-open',
+                  gateId: 'gate-reply-side',
+                  accepted: true,
+                }),
+              );
+            }, 20);
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), logger);
+      relay.registerPendingFrame('frm_gate_mismatch', {
+        frameType: 'gate-open',
+        gateId: 'gate-stored-side',
+      });
+      const connectPromise = relay.connect();
+
+      await waitFor(
+        () =>
+          logger.info.mock.calls.some(
+            (call) => call[1] === 'cluster.cockpit.reply settled pending frame',
+          ),
+        3000,
+      );
+
+      const warnCalls = logger.warn.mock.calls.filter(
+        (call) =>
+          call[1] === 'cluster.cockpit.reply gateId disagrees with pending entry',
+      );
+      expect(warnCalls).toHaveLength(1);
+      expect(warnCalls[0][0]).toMatchObject({
+        frameId: 'frm_gate_mismatch',
+        storedGateId: 'gate-stored-side',
+        replyGateId: 'gate-reply-side',
+      });
+
+      await relay.disconnect();
+      await connectPromise;
+    });
+
+    // #1077 review — drain-time re-arm (retained-cockpit-events.drainInto)
+    // relies on registerPendingFrame() being idempotent: the accept-time entry
+    // may have already been evicted during the outage that caused the retain
+    // (reconnect backoff crosses 30s from the third retry). Re-arm must
+    // reinstate the entry with a fresh TTL so the reply lands in the settle
+    // branch and not the quiet-drop branch.
+    it('re-registering after TTL eviction reinstates the entry with a fresh timer', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      vi.useFakeTimers();
+      try {
+        relay = new ClusterRelay(createConfig(port), logger);
+
+        // Accept-time register — starts the 30s TTL clock at t=0.
+        relay.registerPendingFrame('frm_retain_1', {
+          frameType: 'gate-open',
+          gateId: 'gate-retain-1',
+        });
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        // Simulate the outage: enough time elapses for the accept-time TTL
+        // to fire. Entry is now gone.
+        vi.advanceTimersByTime(30_000);
+        expect(relay._pendingFramesSizeForTests()).toBe(0);
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            frameId: 'frm_retain_1',
+            frameType: 'gate-open',
+            gateId: 'gate-retain-1',
+          }),
+          'cluster.cockpit pending frame evicted on TTL',
+        );
+
+        // Drain-time re-register (what retained-cockpit-events.drainInto now
+        // does) — reinstates the entry with a fresh 30s TTL.
+        relay.registerPendingFrame('frm_retain_1', {
+          frameType: 'gate-open',
+          gateId: 'gate-retain-1',
+        });
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        // Advance just under 30s from the re-register — entry still present.
+        vi.advanceTimersByTime(29_999);
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        // Tip past the fresh TTL — entry evicts.
+        vi.advanceTimersByTime(2);
+        expect(relay._pendingFramesSizeForTests()).toBe(0);
       } finally {
         vi.useRealTimers();
       }

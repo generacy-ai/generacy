@@ -173,6 +173,67 @@ describe('#1066 + #1077 wire-level frameId placement and reply correlation', () 
     expect(relay._pendingFramesSizeForTests()).toBe(beforeReply);
   });
 
+  // #1077 review — retain → reconnect → drain → echo → settle. Disconnects the
+  // peer to force retention, POSTs a gate-open (retained), reconnects, then
+  // echoes the reply once the peer sees the drained frame. Asserts the pending
+  // map settles — proves the drain-time re-arm reaches the pending map even
+  // when the accept-time entry would have expired.
+  it('retain → reconnect → drain → echo settles the pending frame (#1077 review)', async () => {
+    const relay = ctx.relayClient as unknown as ClusterRelay;
+    const GID_RETAIN = gid('f10680dd');
+
+    // Force retention: disconnect the peer and wait for the client to notice.
+    await ctx.peer.disconnectAllClients();
+    await waitFor(
+      () => relay.isConnected === false,
+      3000,
+      'client did not observe the disconnect',
+    );
+
+    const body = gateOpenFixture({ gateId: GID_RETAIN });
+    const res = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    });
+    expect(res.status).toBe(202);
+    const { frameId, retained } = (await res.json()) as {
+      frameId: string;
+      retained: boolean;
+    };
+    expect(retained).toBe(true);
+
+    // Wait for the client to reconnect on its own (scenario helper's
+    // 'connected' handler runs drainInto(client), which — with the review fix —
+    // re-arms the pending-frame TTL against the fresh client.)
+    await waitFor(
+      () => relay.isConnected === true,
+      5000,
+      'client did not reconnect to the peer',
+    );
+
+    // Peer sees the drained frame.
+    await ctx.peer.waitForEvent(
+      'cluster.cockpit',
+      (d) => (d as { gateId?: string }).gateId === GID_RETAIN,
+    );
+
+    // Peer echoes the reply. Settle should shrink the pending map.
+    const sizeBefore = relay._pendingFramesSizeForTests();
+    sendReplyToCluster(ctx.peer, {
+      frameId,
+      frameType: 'gate-open',
+      gateId: GID_RETAIN,
+      accepted: true,
+    });
+
+    await waitFor(
+      () => relay._pendingFramesSizeForTests() < sizeBefore,
+      3000,
+      'pending map did not shrink after retain → drain → echo → settle',
+    );
+  });
+
   it('gate-outcome POST + peer echo settles the pending frame (#1077)', async () => {
     const relay = ctx.relayClient as unknown as ClusterRelay;
     const ackBody = gateOutcomeFixture({ gateId: GID_ACK });

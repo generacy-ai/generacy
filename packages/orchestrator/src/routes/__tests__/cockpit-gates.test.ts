@@ -414,6 +414,42 @@ describe('cockpit gates routes', () => {
         };
         expect(call.data.frameId).toBe(frameId);
       });
+
+      // #1077 review — retain → reconnect → drain re-arms the pending-frame
+      // TTL against the drain-time client. Accept-time registration is
+      // impossible (getRelayClient() returned null) so without re-arm at
+      // drain, the echoed reply would land in the quiet-drop branch.
+      it('retain (null client) → drain re-arms pending-frame TTL on the drain client', async () => {
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => null,
+          logger: silentLogger,
+        });
+        await server.ready();
+        const res = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        expect(res.statusCode).toBe(202);
+        const { frameId } = JSON.parse(res.body) as { frameId: string };
+
+        const drainClient = makeMockClient();
+        retainer.drainInto(drainClient);
+
+        expect(drainClient.registerPendingFrame).toHaveBeenCalledWith(frameId, {
+          frameType: 'gate-open',
+          gateId: GATE_ID,
+        });
+        // Re-arm precedes send so the entry exists when the reply arrives.
+        const registerOrder = (
+          drainClient.registerPendingFrame as ReturnType<typeof vi.fn>
+        ).mock.invocationCallOrder[0];
+        const sendOrder = (
+          drainClient.send as ReturnType<typeof vi.fn>
+        ).mock.invocationCallOrder[0];
+        expect(registerOrder).toBeLessThan(sendOrder);
+      });
     });
 
     it('order preserved when multiple posts arrive during a disconnect', async () => {
