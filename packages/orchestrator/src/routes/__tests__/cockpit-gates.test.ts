@@ -21,6 +21,7 @@ function makeMockClient(overrides: Partial<ClusterRelayClient> = {}): ClusterRel
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
     send: vi.fn(),
+    registerPendingFrame: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
     isConnected: true,
@@ -88,12 +89,15 @@ describe('cockpit gates routes', () => {
         payload: validOpen,
       });
       expect(res.statusCode).toBe(202);
-      expect(JSON.parse(res.body)).toEqual({ accepted: true, retained: false });
+      const body = JSON.parse(res.body);
+      expect(body.accepted).toBe(true);
+      expect(body.retained).toBe(false);
+      expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
 
       const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
         type: string;
         event: string;
-        data: { type: string; gateId: string; gateType: string };
+        data: { type: string; gateId: string; gateType: string; frameId?: string };
         timestamp: string;
       };
       expect(call.type).toBe('event');
@@ -102,6 +106,8 @@ describe('cockpit gates routes', () => {
       expect(call.data).toMatchObject(validOpen);
       expect(call.data.type).toBe('gate-open');
       expect(typeof call.timestamp).toBe('string');
+      // The minted frameId is inside `data`.
+      expect(call.data.frameId).toBe(body.frameId);
     });
 
     it('happy path disconnected — enqueues, returns retained:true + retainQueue', async () => {
@@ -217,9 +223,9 @@ describe('cockpit gates routes', () => {
       expect(warn).toHaveBeenCalled();
     });
 
-    // #1066 — caller-supplied frameId flows into outbound `data.frameId`.
-    describe('#1066 frameId threading', () => {
-      it('supplied non-empty frameId is forwarded on outbound data', async () => {
+    // #1066 caller-supplied frameId + #1077 route-mint precedence.
+    describe('frameId threading (#1066 + #1077)', () => {
+      it('supplied non-empty frameId overrides the mint on outbound data', async () => {
         const client = makeMockClient();
         setupCockpitGatesRoute(server, {
           retainer,
@@ -233,13 +239,18 @@ describe('cockpit gates routes', () => {
           payload: { ...validOpen, frameId: 'frm_open_known' },
         });
         expect(res.statusCode).toBe(202);
+        expect(JSON.parse(res.body).frameId).toBe('frm_open_known');
         const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
           data: { frameId?: string };
         };
         expect(call.data.frameId).toBe('frm_open_known');
+        expect(client.registerPendingFrame).toHaveBeenCalledWith('frm_open_known', {
+          frameType: 'gate-open',
+          gateId: GATE_ID,
+        });
       });
 
-      it('omitted frameId → wire body does not carry the key', async () => {
+      it('omitted frameId → route mints one and stamps it on the wire', async () => {
         const client = makeMockClient();
         setupCockpitGatesRoute(server, {
           retainer,
@@ -253,18 +264,23 @@ describe('cockpit gates routes', () => {
           payload: validOpen,
         });
         expect(res.statusCode).toBe(202);
+        const body = JSON.parse(res.body);
+        expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
         const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-          data: Record<string, unknown>;
+          data: { frameId?: string };
         };
-        const wire = JSON.parse(JSON.stringify(call.data));
-        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        expect(call.data.frameId).toBe(body.frameId);
+        expect(client.registerPendingFrame).toHaveBeenCalledWith(body.frameId, {
+          frameType: 'gate-open',
+          gateId: GATE_ID,
+        });
       });
 
       it.each([
         ['empty-string', ''],
         ['null', null],
       ] as const)(
-        '%s frameId is normalized to absent on the wire',
+        '%s frameId is normalized to absent by the schema, then route mints',
         async (_label, value) => {
           const client = makeMockClient();
           setupCockpitGatesRoute(server, {
@@ -279,13 +295,79 @@ describe('cockpit gates routes', () => {
             payload: { ...validOpen, frameId: value },
           });
           expect(res.statusCode).toBe(202);
+          const body = JSON.parse(res.body);
+          expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
           const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-            data: Record<string, unknown>;
+            data: { frameId?: string };
           };
-          const wire = JSON.parse(JSON.stringify(call.data));
-          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+          expect(call.data.frameId).toBe(body.frameId);
         },
       );
+
+      it('two consecutive posts with identical bodies mint distinct frameIds', async () => {
+        const client = makeMockClient();
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => client,
+          logger: silentLogger,
+        });
+        await server.ready();
+
+        const res1 = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        const res2 = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        expect(res1.statusCode).toBe(202);
+        expect(res2.statusCode).toBe(202);
+        const id1 = JSON.parse(res1.body).frameId;
+        const id2 = JSON.parse(res2.body).frameId;
+        expect(id1).toMatch(/^frm_[a-f0-9]{24}$/);
+        expect(id2).toMatch(/^frm_[a-f0-9]{24}$/);
+        expect(id1).not.toBe(id2);
+      });
+
+      it('null relay client → 202 still carries a minted frameId; no register call', async () => {
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => null,
+          logger: silentLogger,
+        });
+        await server.ready();
+        const res = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        expect(res.statusCode).toBe(202);
+        const body = JSON.parse(res.body);
+        expect(body.retained).toBe(true);
+        expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
+      });
+
+      it('retained response body carries the minted frameId', async () => {
+        const client = makeMockClient({ isConnected: false });
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => client,
+          logger: silentLogger,
+        });
+        await server.ready();
+        const res = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        expect(res.statusCode).toBe(202);
+        const body = JSON.parse(res.body);
+        expect(body.retained).toBe(true);
+        expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
+      });
 
       it('non-string frameId (number) → 400 VALIDATION', async () => {
         setupCockpitGatesRoute(server, {
@@ -301,6 +383,72 @@ describe('cockpit gates routes', () => {
         });
         expect(res.statusCode).toBe(400);
         expect(JSON.parse(res.body).code).toBe('VALIDATION');
+      });
+
+      // #1077 SC-005 — route mint under a null relay client → retainer enqueue
+      // → drain into a fresh client → drained frame's data.frameId equals the
+      // id echoed on the 202. Guards FR-008 (retained-frame frameId
+      // preservation) against future filters or reshapes.
+      it('drained retained frame preserves the id echoed on the 202', async () => {
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => null,
+          logger: silentLogger,
+        });
+        await server.ready();
+        const res = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        expect(res.statusCode).toBe(202);
+        const { frameId } = JSON.parse(res.body) as { frameId: string };
+        expect(frameId).toMatch(/^frm_[a-f0-9]{24}$/);
+        expect(retainer.size().count).toBe(1);
+
+        const drainClient = makeMockClient();
+        const result = retainer.drainInto(drainClient);
+        expect(result.sent).toBe(1);
+        const call = (drainClient.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+          data: { frameId?: string };
+        };
+        expect(call.data.frameId).toBe(frameId);
+      });
+
+      // #1077 review — retain → reconnect → drain re-arms the pending-frame
+      // TTL against the drain-time client. Accept-time registration is
+      // impossible (getRelayClient() returned null) so without re-arm at
+      // drain, the echoed reply would land in the quiet-drop branch.
+      it('retain (null client) → drain re-arms pending-frame TTL on the drain client', async () => {
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => null,
+          logger: silentLogger,
+        });
+        await server.ready();
+        const res = await server.inject({
+          method: 'POST',
+          url: '/cockpit/gates',
+          payload: validOpen,
+        });
+        expect(res.statusCode).toBe(202);
+        const { frameId } = JSON.parse(res.body) as { frameId: string };
+
+        const drainClient = makeMockClient();
+        retainer.drainInto(drainClient);
+
+        expect(drainClient.registerPendingFrame).toHaveBeenCalledWith(frameId, {
+          frameType: 'gate-open',
+          gateId: GATE_ID,
+        });
+        // Re-arm precedes send so the entry exists when the reply arrives.
+        const registerOrder = (
+          drainClient.registerPendingFrame as ReturnType<typeof vi.fn>
+        ).mock.invocationCallOrder[0];
+        const sendOrder = (
+          drainClient.send as ReturnType<typeof vi.fn>
+        ).mock.invocationCallOrder[0];
+        expect(registerOrder).toBeLessThan(sendOrder);
       });
     });
 
@@ -442,9 +590,9 @@ describe('cockpit gates routes', () => {
       expect(JSON.parse(res.body).code).toBe('VALIDATION');
     });
 
-    // #1066 — caller-supplied frameId flows into outbound `data.frameId` on ack too.
-    describe('#1066 frameId threading', () => {
-      it('supplied non-empty frameId is forwarded on outbound data', async () => {
+    // #1066 caller-supplied frameId + #1077 route-mint precedence on ack.
+    describe('frameId threading (#1066 + #1077)', () => {
+      it('supplied non-empty frameId overrides the mint on outbound data', async () => {
         const client = makeMockClient();
         setupCockpitGatesRoute(server, {
           retainer,
@@ -458,13 +606,18 @@ describe('cockpit gates routes', () => {
           payload: { ...validAckBody, frameId: 'frm_ack_known' },
         });
         expect(res.statusCode).toBe(202);
+        expect(JSON.parse(res.body).frameId).toBe('frm_ack_known');
         const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
           data: { frameId?: string };
         };
         expect(call.data.frameId).toBe('frm_ack_known');
+        expect(client.registerPendingFrame).toHaveBeenCalledWith('frm_ack_known', {
+          frameType: 'gate-outcome',
+          gateId: GATE_ID,
+        });
       });
 
-      it('omitted frameId → wire body does not carry the key', async () => {
+      it('omitted frameId → route mints one and stamps it on the wire', async () => {
         const client = makeMockClient();
         setupCockpitGatesRoute(server, {
           retainer,
@@ -478,18 +631,23 @@ describe('cockpit gates routes', () => {
           payload: validAckBody,
         });
         expect(res.statusCode).toBe(202);
+        const body = JSON.parse(res.body);
+        expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
         const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-          data: Record<string, unknown>;
+          data: { frameId?: string };
         };
-        const wire = JSON.parse(JSON.stringify(call.data));
-        expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+        expect(call.data.frameId).toBe(body.frameId);
+        expect(client.registerPendingFrame).toHaveBeenCalledWith(body.frameId, {
+          frameType: 'gate-outcome',
+          gateId: GATE_ID,
+        });
       });
 
       it.each([
         ['empty-string', ''],
         ['null', null],
       ] as const)(
-        '%s frameId is normalized to absent on the wire',
+        '%s frameId is normalized to absent by the schema, then route mints',
         async (_label, value) => {
           const client = makeMockClient();
           setupCockpitGatesRoute(server, {
@@ -504,13 +662,42 @@ describe('cockpit gates routes', () => {
             payload: { ...validAckBody, frameId: value },
           });
           expect(res.statusCode).toBe(202);
+          const body = JSON.parse(res.body);
+          expect(body.frameId).toMatch(/^frm_[a-f0-9]{24}$/);
           const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-            data: Record<string, unknown>;
+            data: { frameId?: string };
           };
-          const wire = JSON.parse(JSON.stringify(call.data));
-          expect(Object.hasOwn(wire, 'frameId')).toBe(false);
+          expect(call.data.frameId).toBe(body.frameId);
         },
       );
+
+      it('two consecutive posts with identical bodies mint distinct frameIds', async () => {
+        const client = makeMockClient();
+        setupCockpitGatesRoute(server, {
+          retainer,
+          getRelayClient: () => client,
+          logger: silentLogger,
+        });
+        await server.ready();
+
+        const res1 = await server.inject({
+          method: 'POST',
+          url: `/cockpit/gates/${GATE_ID}/ack`,
+          payload: validAckBody,
+        });
+        const res2 = await server.inject({
+          method: 'POST',
+          url: `/cockpit/gates/${GATE_ID}/ack`,
+          payload: validAckBody,
+        });
+        expect(res1.statusCode).toBe(202);
+        expect(res2.statusCode).toBe(202);
+        const id1 = JSON.parse(res1.body).frameId;
+        const id2 = JSON.parse(res2.body).frameId;
+        expect(id1).toMatch(/^frm_[a-f0-9]{24}$/);
+        expect(id2).toMatch(/^frm_[a-f0-9]{24}$/);
+        expect(id1).not.toBe(id2);
+      });
 
       it('non-string frameId (number) → 400 VALIDATION', async () => {
         setupCockpitGatesRoute(server, {

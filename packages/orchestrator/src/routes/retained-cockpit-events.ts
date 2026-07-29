@@ -1,4 +1,8 @@
-import type { ClusterRelayClient, RelayMessage } from '../types/relay.js';
+import type {
+  ClusterRelayClient,
+  PendingFrameMeta,
+  RelayMessage,
+} from '../types/relay.js';
 
 export interface RetainedEvent {
   event: 'cluster.cockpit';
@@ -68,6 +72,32 @@ export function createRetainedCockpitEvents(
         const head = queue[0];
         if (!head) break;
         try {
+          // Re-arm the pending-frame TTL at send time. The accept-time
+          // registerPendingFrame() (#1077) starts the 30s clock at request
+          // accept, but for a retained frame the send is deferred by the
+          // outage that caused the retain — reconnect backoff runs
+          // 5s→15s→35s→75s cumulative, so from the third retry onward the
+          // accept-time entry has already been evicted before drain. Also
+          // covers the `getRelayClient() === null` accept-time path where no
+          // entry was registered at all. Idempotent: registerPendingFrame
+          // clears any existing TTL handle before re-inserting.
+          const d = head.data as {
+            frameId?: unknown;
+            type?: unknown;
+            gateId?: unknown;
+          };
+          if (
+            typeof d.frameId === 'string' &&
+            d.frameId.length > 0 &&
+            (d.type === 'gate-open' || d.type === 'gate-outcome') &&
+            typeof d.gateId === 'string'
+          ) {
+            const meta: PendingFrameMeta = {
+              frameType: d.type,
+              gateId: d.gateId,
+            };
+            client.registerPendingFrame(d.frameId, meta);
+          }
           client.send({
             type: 'event',
             event: 'cluster.cockpit',

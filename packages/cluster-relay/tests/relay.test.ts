@@ -711,8 +711,8 @@ describe('ClusterRelay', () => {
     await connectPromise;
   });
 
-  describe('cluster.cockpit.reply router branch (#1063)', () => {
-    it('SC-001: accepted:true frame emits zero warn-or-above lines', async () => {
+  describe('cluster.cockpit.reply router branch (#1063 + #1077)', () => {
+    it('SC-001: accepted:true reply with a matching pending entry emits one info settle line', async () => {
       const logger = {
         debug: vi.fn(),
         info: vi.fn(),
@@ -730,7 +730,7 @@ describe('ClusterRelay', () => {
                 JSON.stringify({
                   type: 'cluster.cockpit.reply',
                   timestamp: '2026-07-28T00:00:00.000Z',
-                  frameId: null,
+                  frameId: 'frm_known_settle_1',
                   frameType: 'gate-open',
                   gateId: 'gate-abc',
                   accepted: true,
@@ -743,30 +743,42 @@ describe('ClusterRelay', () => {
       });
 
       relay = new ClusterRelay(createConfig(port), logger);
+      // Register the pending entry BEFORE connect so it exists when the reply
+      // arrives.
+      relay.registerPendingFrame('frm_known_settle_1', {
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+      });
       const connectPromise = relay.connect();
 
-      await waitFor(() => logger.debug.mock.calls.length >= 1, 3000);
+      await waitFor(
+        () =>
+          logger.info.mock.calls.some(
+            (call) => call[1] === 'cluster.cockpit.reply settled pending frame',
+          ),
+        3000,
+      );
 
-      // Only debug — no warn, no error.
+      // No warn, no error.
       expect(logger.warn).not.toHaveBeenCalled();
       expect(logger.error).not.toHaveBeenCalled();
-      // The debug line carries the full parsed message under `message`.
-      expect(logger.debug).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.objectContaining({
-            type: 'cluster.cockpit.reply',
-            accepted: true,
-            gateId: 'gate-abc',
-          }),
-        }),
-        'cluster.cockpit.reply received',
+      const settleCalls = logger.info.mock.calls.filter(
+        (call) => call[1] === 'cluster.cockpit.reply settled pending frame',
       );
+      expect(settleCalls).toHaveLength(1);
+      expect(settleCalls[0][0]).toMatchObject({
+        frameId: 'frm_known_settle_1',
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+      });
+      expect(typeof settleCalls[0][0].ageMs).toBe('number');
 
       await relay.disconnect();
       await connectPromise;
     });
 
-    it('SC-002: accepted:false frame emits one info line with reason/frameType/gateId/priorStatus', async () => {
+    it('SC-002: reply with no matching pending entry emits one info drop line naming the frameId', async () => {
       const logger = {
         debug: vi.fn(),
         info: vi.fn(),
@@ -803,7 +815,7 @@ describe('ClusterRelay', () => {
       await waitFor(
         () =>
           logger.info.mock.calls.some(
-            (call) => call[1] === 'cluster.cockpit.reply dropped',
+            (call) => call[1] === 'cluster.cockpit.reply had no matching pending frame',
           ),
         3000,
       );
@@ -811,15 +823,16 @@ describe('ClusterRelay', () => {
       // No warn, no error.
       expect(logger.warn).not.toHaveBeenCalled();
       expect(logger.error).not.toHaveBeenCalled();
-      // Exactly one dropped-info line with the enumerated fields.
       const droppedCalls = logger.info.mock.calls.filter(
-        (call) => call[1] === 'cluster.cockpit.reply dropped',
+        (call) => call[1] === 'cluster.cockpit.reply had no matching pending frame',
       );
       expect(droppedCalls).toHaveLength(1);
       expect(droppedCalls[0][0]).toEqual({
+        frameId: null,
         reason: 'schema-invalid',
         frameType: 'gate-outcome',
         gateId: 'gate-def',
+        accepted: false,
         priorStatus: 'unknown',
       });
 
@@ -886,6 +899,290 @@ describe('ClusterRelay', () => {
 
       // Handler must NOT see either reply variant — short-circuit is structural.
       expect(received.filter((m) => m.type === 'cluster.cockpit.reply')).toHaveLength(0);
+
+      await relay.disconnect();
+      await connectPromise;
+    });
+  });
+
+  describe('#1077 pending-frame correlation', () => {
+    it('settle-then-evict: three replies clear all three pending entries', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      const frameIds = ['frm_settle_a', 'frm_settle_b', 'frm_settle_c'];
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+            setTimeout(() => {
+              for (const frameId of frameIds) {
+                ws.send(
+                  JSON.stringify({
+                    type: 'cluster.cockpit.reply',
+                    timestamp: '2026-07-28T00:00:00.000Z',
+                    frameId,
+                    frameType: 'gate-open',
+                    gateId: `gate-${frameId}`,
+                    accepted: true,
+                  }),
+                );
+              }
+            }, 20);
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), logger);
+      for (const frameId of frameIds) {
+        relay.registerPendingFrame(frameId, {
+          frameType: 'gate-open',
+          gateId: `gate-${frameId}`,
+        });
+      }
+      expect(relay._pendingFramesSizeForTests()).toBe(3);
+      const connectPromise = relay.connect();
+
+      await waitFor(
+        () =>
+          logger.info.mock.calls.filter(
+            (call) => call[1] === 'cluster.cockpit.reply settled pending frame',
+          ).length >= 3,
+        3000,
+      );
+
+      const settleCalls = logger.info.mock.calls.filter(
+        (call) => call[1] === 'cluster.cockpit.reply settled pending frame',
+      );
+      expect(settleCalls).toHaveLength(3);
+      expect(relay._pendingFramesSizeForTests()).toBe(0);
+
+      await relay.disconnect();
+      await connectPromise;
+    });
+
+    it('TTL eviction: 30-second timer removes the entry and logs debug', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      vi.useFakeTimers();
+      try {
+        relay = new ClusterRelay(createConfig(port), logger);
+        relay.registerPendingFrame('frm_ttl_1', {
+          frameType: 'gate-open',
+          gateId: 'gate-ttl-1',
+        });
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        vi.advanceTimersByTime(30_000);
+
+        expect(relay._pendingFramesSizeForTests()).toBe(0);
+        // Eviction log includes stored frameType and gateId — the only path
+        // where the reply never arrives, so the entry's own copy is the only
+        // source available for joining the frameId back to a gate.
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            frameId: 'frm_ttl_1',
+            frameType: 'gate-open',
+            gateId: 'gate-ttl-1',
+            ageMs: expect.any(Number),
+          }),
+          'cluster.cockpit pending frame evicted on TTL',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settle logs a warn when stored gateId disagrees with the reply gateId', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+            setTimeout(() => {
+              ws.send(
+                JSON.stringify({
+                  type: 'cluster.cockpit.reply',
+                  timestamp: '2026-07-28T00:00:00.000Z',
+                  frameId: 'frm_gate_mismatch',
+                  frameType: 'gate-open',
+                  gateId: 'gate-reply-side',
+                  accepted: true,
+                }),
+              );
+            }, 20);
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), logger);
+      relay.registerPendingFrame('frm_gate_mismatch', {
+        frameType: 'gate-open',
+        gateId: 'gate-stored-side',
+      });
+      const connectPromise = relay.connect();
+
+      await waitFor(
+        () =>
+          logger.info.mock.calls.some(
+            (call) => call[1] === 'cluster.cockpit.reply settled pending frame',
+          ),
+        3000,
+      );
+
+      const warnCalls = logger.warn.mock.calls.filter(
+        (call) =>
+          call[1] === 'cluster.cockpit.reply gateId disagrees with pending entry',
+      );
+      expect(warnCalls).toHaveLength(1);
+      expect(warnCalls[0][0]).toMatchObject({
+        frameId: 'frm_gate_mismatch',
+        storedGateId: 'gate-stored-side',
+        replyGateId: 'gate-reply-side',
+      });
+
+      await relay.disconnect();
+      await connectPromise;
+    });
+
+    // #1077 review — drain-time re-arm (retained-cockpit-events.drainInto)
+    // relies on registerPendingFrame() being idempotent: the accept-time entry
+    // may have already been evicted during the outage that caused the retain
+    // (reconnect backoff crosses 30s from the third retry). Re-arm must
+    // reinstate the entry with a fresh TTL so the reply lands in the settle
+    // branch and not the quiet-drop branch.
+    it('re-registering after TTL eviction reinstates the entry with a fresh timer', async () => {
+      const logger = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      vi.useFakeTimers();
+      try {
+        relay = new ClusterRelay(createConfig(port), logger);
+
+        // Accept-time register — starts the 30s TTL clock at t=0.
+        relay.registerPendingFrame('frm_retain_1', {
+          frameType: 'gate-open',
+          gateId: 'gate-retain-1',
+        });
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        // Simulate the outage: enough time elapses for the accept-time TTL
+        // to fire. Entry is now gone.
+        vi.advanceTimersByTime(30_000);
+        expect(relay._pendingFramesSizeForTests()).toBe(0);
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            frameId: 'frm_retain_1',
+            frameType: 'gate-open',
+            gateId: 'gate-retain-1',
+          }),
+          'cluster.cockpit pending frame evicted on TTL',
+        );
+
+        // Drain-time re-register (what retained-cockpit-events.drainInto now
+        // does) — reinstates the entry with a fresh 30s TTL.
+        relay.registerPendingFrame('frm_retain_1', {
+          frameType: 'gate-open',
+          gateId: 'gate-retain-1',
+        });
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        // Advance just under 30s from the re-register — entry still present.
+        vi.advanceTimersByTime(29_999);
+        expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+        // Tip past the fresh TTL — entry evicts.
+        vi.advanceTimersByTime(2);
+        expect(relay._pendingFramesSizeForTests()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('disconnect() clears the pending map and no pending timers fire afterwards', async () => {
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), silentLogger);
+      const connectPromise = relay.connect();
+      await waitFor(() => relay.isConnected, 3000);
+
+      relay.registerPendingFrame('frm_dc_1', {
+        frameType: 'gate-open',
+        gateId: 'gate-dc-1',
+      });
+      relay.registerPendingFrame('frm_dc_2', {
+        frameType: 'gate-outcome',
+        gateId: 'gate-dc-2',
+      });
+      expect(relay._pendingFramesSizeForTests()).toBe(2);
+
+      await relay.disconnect();
+      await connectPromise;
+
+      expect(relay._pendingFramesSizeForTests()).toBe(0);
+    });
+
+    it('transient reconnect (ws close) preserves the pending map and the TTL timer', async () => {
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'handshake') {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+          }
+        });
+      });
+
+      relay = new ClusterRelay(createConfig(port), silentLogger);
+      const connectPromise = relay.connect();
+      await waitFor(() => relay.isConnected, 3000);
+
+      relay.registerPendingFrame('frm_transient_1', {
+        frameType: 'gate-open',
+        gateId: 'gate-transient-1',
+      });
+      expect(relay._pendingFramesSizeForTests()).toBe(1);
+
+      // Simulate transient disconnect from the server side (does NOT call
+      // relay.disconnect()) — the class auto-reconnects.
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+
+      // Wait for a fresh connection to arrive at the server.
+      await waitFor(() => relay.isConnected === false, 3000);
+      await waitFor(() => relay.isConnected === true, 3000);
+
+      // Map preserved.
+      expect(relay._pendingFramesSizeForTests()).toBe(1);
 
       await relay.disconnect();
       await connectPromise;
