@@ -41,6 +41,14 @@ const BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL = 'blocked:fixer-timeout-no-progre
 const BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL = 'blocked:fixer-timeout-repeat';
 
 /**
+ * #1073 FR-013: terminal disposition — CLI-self-commit cycle where the branch
+ * HEAD advanced (code changes landed) but the reply/resolve batch had zero
+ * successes. Distinct from `blocked:stuck-feedback-loop` because the remedy
+ * differs: check GitHub API responses, not fixer transcripts.
+ */
+const BLOCKED_RESOLVE_FAILED_LABEL = 'blocked:resolve-failed';
+
+/**
  * Label added by Disposition C (#1047) when the fixer completed a cycle
  * without touching any file named by an unaddressed review-body finding.
  * The monitor's bare `l.startsWith('blocked:')` skip gate honors this
@@ -464,6 +472,15 @@ export class PrFeedbackHandler {
         item.workflowName,
       );
 
+      // #1073 FR-001/FR-002: capture branch HEAD AFTER the CLI exits and BEFORE
+      // `commitAndPushChanges` runs. Load-bearing placement — before spawn is
+      // trivially preFixSha, after the handler's own commit would confound the
+      // "did the CLI push?" signal in the rare case where the CLI produced
+      // changes without committing (research.md § D-1).
+      const postCliSha = await this.getHeadSha(checkoutPath);
+      const cliSelfCommitted =
+        postCliSha !== null && preFixSha !== null && postCliSha !== preFixSha;
+
       // 7. Commit and push changes (even on timeout — partial completion strategy)
       // FR-013: Push partial changes on timeout to preserve work and enable retry
       //
@@ -501,12 +518,12 @@ export class PrFeedbackHandler {
         // is redundant.
         if (hasChanges && success) {
           this.logger.info(
-            { prNumber, issueNumber },
+            { prNumber, issueNumber, source: 'handler' },
             'Successfully pushed changes to PR branch',
           );
         } else if (hasChanges && !success) {
           this.logger.warn(
-            { prNumber, issueNumber, cliCompleted: false, exitCode },
+            { prNumber, issueNumber, cliCompleted: false, exitCode, source: 'handler' },
             'Pushed partial changes before CLI timed out — retry may follow',
           );
         }
@@ -574,7 +591,12 @@ export class PrFeedbackHandler {
 
       // B1/B2/B3 — non-timeout failure paths (clean non-zero exit or no diff).
       // Behavior preserved from pre-#1070 (FR-004): `blocked:stuck-feedback-loop`.
-      if (!success || !hasChanges) {
+      //
+      // #1073 FR-003: gate now guarded by `!cliSelfCommitted` — a cycle in
+      // which the CLI committed and pushed its own work is a success, not a
+      // no-diff wedge, even though the handler's own commit step finds nothing
+      // to do (spec § Observed).
+      if (!cliSelfCommitted && (!success || !hasChanges)) {
         this.logger.warn(
           {
             prNumber,
@@ -587,6 +609,23 @@ export class PrFeedbackHandler {
         );
         await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
         return;
+      }
+
+      // #1073 FR-007/FR-008/FR-008a: distinct info line when the CLI committed
+      // and pushed its own work. `preFixSha` + `postFixSha` in the payload make
+      // the head-advance claim auditable (research.md § D-2).
+      if (cliSelfCommitted && !hasChanges) {
+        this.logger.info(
+          {
+            prNumber,
+            issueNumber,
+            source: 'cli',
+            disposition: 'cli-self-committed',
+            preFixSha,
+            postFixSha: postCliSha,
+          },
+          'CLI self-committed changes — proceeding to reply/resolve',
+        );
       }
 
       // 7b. Happy path — CLI succeeded AND we have a real commit.
@@ -623,12 +662,25 @@ export class PrFeedbackHandler {
       const resolveFailures = outcomes.filter(o => !o.resolveResult.ok);
 
       if (resolveSuccesses === 0) {
-        // FR-006 tail — commit landed but no thread transitioned.
-        this.logger.warn(
-          { prNumber, issueNumber, outcomes },
-          'commit pushed but resolve batch had zero successes — persisting trigger, entering blocked-stuck-feedback-loop disposition',
-        );
-        await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
+        // #1073 FR-013: split by head-advance signal. A cycle where the branch
+        // HEAD moved (via CLI-self-commit OR handler-commit) but zero threads
+        // resolved is a GitHub-API-shaped failure, not a fixer wedge —
+        // `blocked:resolve-failed` names that distinctly.
+        const headAdvanced = cliSelfCommitted || hasChanges;
+        if (headAdvanced) {
+          this.logger.warn(
+            { prNumber, issueNumber, outcomes, preFixSha, postFixSha: postCliSha },
+            'commit pushed but resolve batch had zero successes — entering blocked:resolve-failed disposition (#1073)',
+          );
+          await this.addBlockedResolveFailedLabel(github, owner, repo, issueNumber);
+        } else {
+          // FR-006 tail — commit landed but no thread transitioned.
+          this.logger.warn(
+            { prNumber, issueNumber, outcomes },
+            'commit pushed but resolve batch had zero successes — persisting trigger, entering blocked-stuck-feedback-loop disposition',
+          );
+          await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
+        }
         return;
       }
 
@@ -1237,6 +1289,33 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
       this.logger.warn(
         { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL },
         'Failed to add blocked:fixer-timeout-repeat label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1073 FR-013: terminal disposition — CLI-self-commit or handler-commit
+   * cycle where the branch HEAD advanced but the reply/resolve batch had zero
+   * successes. Distinct from `blocked:stuck-feedback-loop`: the code is fine;
+   * the GitHub side didn't take. Operator remediation is to check thread state
+   * and GitHub API responses, not fixer transcripts.
+   */
+  private async addBlockedResolveFailedLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_RESOLVE_FAILED_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_RESOLVE_FAILED_LABEL },
+        'Added blocked:resolve-failed label (terminal, resolve batch had zero successes)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_RESOLVE_FAILED_LABEL },
+        'Failed to add blocked:resolve-failed label — non-fatal, waiting-for label persists',
       );
     }
   }
