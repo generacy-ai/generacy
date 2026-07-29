@@ -30,18 +30,18 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
 ## Phase 1: Consume — cluster-relay pending map + settle/drop + TTL + comment cleanup
 
-- [ ] T001 [US2] Add `PendingFrame` (private) and `PendingFrameMeta` (exported)
+- [X] T001 [US2] Add `PendingFrame` (private) and `PendingFrameMeta` (exported)
   types to `packages/cluster-relay/src/relay.ts` per `data-model.md § E-1` and
   `contracts/pending-map.md § Public API added`. Include `frameType`, `gateId`,
   `registeredAt`, `ttlHandle` on `PendingFrame`; `frameType: 'gate-open' | 'gate-outcome'`
   and `gateId: string` on `PendingFrameMeta`. No exports for `PendingFrame`
   beyond internal use; `PendingFrameMeta` is re-exported from the package root.
 
-- [ ] T002 [US2] Add `private readonly pendingFrames = new Map<string, PendingFrame>()`
+- [X] T002 [US2] Add `private readonly pendingFrames = new Map<string, PendingFrame>()`
   and `private static readonly TTL_MS = 30_000` to the `ClusterRelay` class in
   `packages/cluster-relay/src/relay.ts`.
 
-- [ ] T003 [US2] Implement `registerPendingFrame(frameId: string, meta: PendingFrameMeta): void`
+- [X] T003 [US2] Implement `registerPendingFrame(frameId: string, meta: PendingFrameMeta): void`
   on `ClusterRelay` in `packages/cluster-relay/src/relay.ts` per
   `contracts/pending-map.md § registerPendingFrame(frameId, meta) — behaviour`:
   empty `frameId` returns silently (with a `debug` line); existing entry for
@@ -50,13 +50,13 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
   `ttlHandle: setTimeout(() => this.evictOnTtl(frameId), ClusterRelay.TTL_MS)`.
   Sync. Never throws. No log at register time.
 
-- [ ] T004 [US2] Implement `private evictOnTtl(frameId: string): void` on
+- [X] T004 [US2] Implement `private evictOnTtl(frameId: string): void` on
   `ClusterRelay` in `packages/cluster-relay/src/relay.ts` per
   `contracts/pending-map.md § TTL — 30 seconds`: `get` + guard `!entry`, then
   `delete`, then log at `debug` with `{ frameId, ageMs }` under message
   `'cluster.cockpit pending frame evicted on TTL'`.
 
-- [ ] T005 [US2] Replace the `cluster.cockpit.reply` branch at
+- [X] T005 [US2] Replace the `cluster.cockpit.reply` branch at
   `packages/cluster-relay/src/relay.ts:334-349` with the settle/quiet-drop
   logic from `contracts/pending-map.md § cluster.cockpit.reply handler`. Both
   branches log at **`info`**: settle uses `'cluster.cockpit.reply settled pending frame'`
@@ -65,7 +65,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
   same fields minus `ageMs`. Preserve the structural early `return` (FR-003 —
   pinned by `relay.test.ts:830`).
 
-- [ ] T006 [US4] Replace the comment at `packages/cluster-relay/src/relay.ts:330-333`
+- [X] T006 [US4] Replace the comment at `packages/cluster-relay/src/relay.ts:330-333`
   with the block from `research.md § D-10`:
 
   ```ts
@@ -77,7 +77,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
   No occurrences of `#1059 steps 4-7` may remain (SC-007).
 
-- [ ] T007 [US2] Add pending-map cleanup to `disconnect()` in
+- [X] T007 [US2] Add pending-map cleanup to `disconnect()` in
   `packages/cluster-relay/src/relay.ts` per `contracts/pending-map.md § Shutdown / disconnect`:
   iterate `pendingFrames.values()`, `clearTimeout(entry.ttlHandle)` for each,
   then `pendingFrames.clear()`. **Silent** — no per-entry log. Do NOT add this
@@ -86,13 +86,13 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
   still find their pending entries (see `contracts/pending-map.md § Reconnect
   invariant`).
 
-- [ ] T008 [US2] Add a test-only accessor `_pendingFramesSizeForTests(): number`
+- [X] T008 [US2] Add a test-only accessor `_pendingFramesSizeForTests(): number`
   (or `get pendingFrameCount(): number`) on `ClusterRelay` in
   `packages/cluster-relay/src/relay.ts` per `contracts/pending-map.md § Test surface`
   final paragraph. Prefer the `_ForTests` naming convention for parity with
   `_ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS`.
 
-- [ ] T009 [US2] Rewrite the two `#1063` router-branch tests in
+- [X] T009 [US2] Rewrite the two `#1063` router-branch tests in
   `packages/cluster-relay/tests/relay.test.ts` per `contracts/pending-map.md § Test surface`:
   - `SC-001 accepted:true` — assert **`info`** with settle-line fields (was
     `debug`). Peer sends `frameId: <known-id>` after the test registers a
@@ -102,7 +102,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
     unregistered id.
   - `FR-003 handler exclusion` at `:830` — **unchanged**, must stay green.
 
-- [ ] T010 [US2] Add new `#1077 pending-frame correlation` describe block to
+- [X] T010 [US2] Add new `#1077 pending-frame correlation` describe block to
   `packages/cluster-relay/tests/relay.test.ts` per `contracts/pending-map.md § Test surface`:
   - `settle-then-evict`: register 3 frames, echo 3 replies, assert 3 `info`
     settle lines and `_pendingFramesSizeForTests() === 0` (SC-004).
@@ -114,7 +114,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
     (do NOT call `disconnect()`), wait for reconnect via `waitFor`, assert
     `size === 1` and the TTL timer is still live.
 
-- [ ] T011 [US2] Add `PendingFrameMeta` to the package's public exports in
+- [X] T011 [US2] Add `PendingFrameMeta` to the package's public exports in
   `packages/cluster-relay/src/index.ts` (or wherever the barrel export lives).
   Verify with `grep -n 'PendingFrameMeta' packages/cluster-relay/src/index.ts`.
 
@@ -122,14 +122,14 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
 ## Phase 2: Mint — orchestrator interface + route + unit tests
 
-- [ ] T020 [US1] Add `registerPendingFrame(frameId: string, meta: PendingFrameMeta): void`
+- [X] T020 [US1] Add `registerPendingFrame(frameId: string, meta: PendingFrameMeta): void`
   to the `ClusterRelayClient` interface in `packages/orchestrator/src/types/relay.ts`
   per `data-model.md § E-2`. Import `PendingFrameMeta` from
   `@generacy-ai/cluster-relay`. Alphabetically place it near the other action
   methods (`send`, `on`, `off`, `disconnect`, `connect`) or immediately after
   `send` (register is the natural pair of send).
 
-- [ ] T021 [US1] Add the internal helper `mintFrameId()` to the top of
+- [X] T021 [US1] Add the internal helper `mintFrameId()` to the top of
   `packages/orchestrator/src/routes/cockpit-gates.ts` per `data-model.md § E-3`:
 
   ```ts
@@ -142,7 +142,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
   Not exported. Place near the existing `collapseCloudStatus` helpers.
 
-- [ ] T022 [US1] Wire the mint + register + emit for `POST /cockpit/gates`
+- [X] T022 [US1] Wire the mint + register + emit for `POST /cockpit/gates`
   handler in `packages/orchestrator/src/routes/cockpit-gates.ts` per
   `contracts/mint-route.md § Behaviour` and `data-model.md § Route mutation shape`.
   After `GateOpenSchema.parse` at `:334`:
@@ -161,12 +161,12 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
   `contracts/mint-route.md § Ordering invariants`). Same `emitData` reference
   is passed to `tryEmitOrRetain` — do NOT clone.
 
-- [ ] T023 [US1] Wire the mint + register + emit for `POST /cockpit/gates/:id/ack`
+- [X] T023 [US1] Wire the mint + register + emit for `POST /cockpit/gates/:id/ack`
   handler in `packages/orchestrator/src/routes/cockpit-gates.ts` — same pattern
   as T022, applied at `:413` (`GateOutcomeSchema.parse`) and `:416`
   (`tryEmitOrRetain` call). `frameType: parsed.type` is `'gate-outcome'`.
 
-- [ ] T024 [US1] Update the 202 response bodies for both handlers in
+- [X] T024 [US1] Update the 202 response bodies for both handlers in
   `packages/orchestrator/src/routes/cockpit-gates.ts` per
   `contracts/wire-response.md § Response shape (both handlers)`:
   `{ accepted: true, retained, frameId, retainQueue? }`. `retainQueue` remains
@@ -174,14 +174,14 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
   validation failure is unchanged (no mint attempted before the validation
   gate).
 
-- [ ] T025 [US1] Extend `makeMockClient(...)` helpers in
+- [X] T025 [US1] Extend `makeMockClient(...)` helpers in
   `packages/orchestrator/src/routes/__tests__/cockpit-gates.test.ts:19-29`
   (and any other sites — grep `makeMockClient` under
   `packages/orchestrator/src/routes/__tests__/`) with a
   `registerPendingFrame: vi.fn()` field so existing tests compile against the
   widened `ClusterRelayClient` interface.
 
-- [ ] T026 [US1] Add unit tests to
+- [X] T026 [US1] Add unit tests to
   `packages/orchestrator/src/routes/__tests__/cockpit-gates.test.ts` per
   `contracts/mint-route.md § Test surface`:
   - POST `/cockpit/gates` with no `frameId` in body → 202 body has a
@@ -200,7 +200,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
     minted `frameId`; retainer receives an event with that id inside `data`
     (no throw, no `registerPendingFrame` invocation).
 
-- [ ] T027 [US1] Extend existing 202-body assertions across the test file to
+- [X] T027 [US1] Extend existing 202-body assertions across the test file to
   check `body.frameId` matches `/^frm_[a-f0-9]{24}$/` on all successful mints
   (both `retained: false` and `retained: true` paths). Guardrails against
   regressing existing scenarios silently.
@@ -209,7 +209,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
 ## Phase 3: E2E integration — real WebSocket peer
 
-- [ ] T030 [US3] Extend
+- [X] T030 [US3] Extend
   `packages/orchestrator/src/__tests__/cockpit-gates-frameid.integration.test.ts`
   per `contracts/mint-route.md § Test surface` (integration section) and
   `research.md § D-9`:
@@ -223,7 +223,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
     id; no throw; `_pendingFramesSizeForTests()` unchanged (SC-003).
   - Same coverage for `gate-outcome` via `POST /cockpit/gates/:id/ack`.
 
-- [ ] T031 [US3] Add a regression assertion to
+- [X] T031 [US3] Add a regression assertion to
   `packages/orchestrator/src/routes/__tests__/retained-cockpit-events.test.ts`
   (or extend the closest existing scenario) per `research.md § D-7` and SC-005:
   after a route mint under a null / disconnected relay client → retainer
@@ -234,18 +234,18 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
 ## Phase 4: Tool wire schemas — optional caller-supplied frameId
 
-- [ ] T040 [P] [US1] Add `frameId: z.string().min(1).optional()` to
+- [X] T040 [P] [US1] Add `frameId: z.string().min(1).optional()` to
   `GateOpenWireSchema` at
   `packages/generacy/src/cli/commands/cockpit/mcp/gates/schemas.ts:142` per
   `data-model.md § E-4`. Preserves the tool's own `safeParse` self-check when
   a caller supplies a `frameId`. Type impact only: `GateOpenWire` gains
   optional `frameId?: string`.
 
-- [ ] T041 [P] [US1] Add `frameId: z.string().min(1).optional()` to
+- [X] T041 [P] [US1] Add `frameId: z.string().min(1).optional()` to
   `GateOutcomeWireSchema` at `:193` in the same file per `data-model.md § E-4`.
   `GateOutcomeWire` gains optional `frameId?: string`.
 
-- [ ] T042 [US1] Add / extend schema regression tests in
+- [X] T042 [US1] Add / extend schema regression tests in
   `packages/generacy/src/cli/commands/cockpit/mcp/gates/__tests__/schemas.test.ts`
   (or the closest existing file — grep for existing `GateOpenWireSchema`
   tests): `frameId: 'frm_abc'` accepted, `frameId: ''` rejected,
@@ -257,7 +257,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
 ## Phase 5: Changeset
 
-- [ ] T050 [US1][US2] Create `.changeset/1077-frameId-mint-consume.md` per
+- [X] T050 [US1][US2] Create `.changeset/1077-frameId-mint-consume.md` per
   `plan.md § Constitution Check`:
   - `@generacy-ai/cluster-relay` — **minor** (new public
     `registerPendingFrame` method + `PendingFrameMeta` export).
@@ -276,7 +276,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
 ## Phase 6: Verification
 
-- [ ] T060 [US1][US2] Run the SC-006 static check:
+- [X] T060 [US1][US2] Run the SC-006 static check:
 
   ```bash
   grep -rn 'frameId' packages/generacy/src | wc -l
@@ -284,7 +284,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
   Expected: **> 0** (was 0 pre-fix; T040/T041 satisfy this alone).
 
-- [ ] T061 [US4] Run the SC-007 static check:
+- [X] T061 [US4] Run the SC-007 static check:
 
   ```bash
   grep -n '#1059 steps 4-7' packages/cluster-relay/src/relay.ts
@@ -292,7 +292,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
 
   Expected: **no output** (T006 removed the comment reference).
 
-- [ ] T062 [US1][US2][US3] Run the four package test suites and confirm
+- [X] T062 [US1][US2][US3] Run the four package test suites and confirm
   100% green (SC-008 — no regression across pre-existing tests):
 
   ```bash
@@ -302,7 +302,7 @@ Phase 1 (cluster-relay)  →  Phase 2 (orchestrator interface + route)
   pnpm --filter @generacy-ai/generacy test
   ```
 
-- [ ] T063 [US1][US2] Confirm the changeset gate reads the new file:
+- [X] T063 [US1][US2] Confirm the changeset gate reads the new file:
 
   ```bash
   ls .changeset/1077-*.md

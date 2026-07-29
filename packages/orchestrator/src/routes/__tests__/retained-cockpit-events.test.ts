@@ -19,6 +19,7 @@ function makeMockClient(overrides: Partial<ClusterRelayClient> = {}): ClusterRel
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
     send: vi.fn(),
+    registerPendingFrame: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
     isConnected: true,

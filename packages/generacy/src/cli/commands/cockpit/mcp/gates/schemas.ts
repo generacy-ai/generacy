@@ -156,6 +156,10 @@ export const GateOpenWireSchema = z.object({
   allowFreeText: z.boolean(),
   sessionId: z.string().min(1),
   askedAt: z.string().datetime(),
+  // #1077 — optional per-frame correlation id preserved on the tool self-check
+  // so callers that hand-supply one can pass the outbound `safeParse` without
+  // shape drift. The route mints one when this is absent.
+  frameId: z.string().min(1).optional(),
 });
 export type GateOpenWire = z.infer<typeof GateOpenWireSchema>;
 
@@ -196,6 +200,8 @@ export const GateOutcomeWireSchema = z.object({
   outcome: GateOutcomeSchema,
   detail: z.string().optional(),
   at: z.string().datetime(),
+  // #1077 — see GateOpenWireSchema.frameId. Same shape and rationale.
+  frameId: z.string().min(1).optional(),
 });
 export type GateOutcomeWire = z.infer<typeof GateOutcomeWireSchema>;
 

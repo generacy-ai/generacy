@@ -20,6 +20,23 @@ export interface Logger {
   error(obj: Record<string, unknown>, msg: string): void;
 }
 
+/**
+ * Metadata for a pending outbound cockpit frame (#1077). Registered by the
+ * orchestrator's route immediately after mint via `registerPendingFrame()`;
+ * carried onto the settle log when the cloud replies.
+ */
+export interface PendingFrameMeta {
+  frameType: 'gate-open' | 'gate-outcome';
+  gateId: string;
+}
+
+interface PendingFrame {
+  frameType: string;
+  gateId: string;
+  registeredAt: number;
+  ttlHandle: ReturnType<typeof setTimeout>;
+}
+
 /** Options accepted by ClusterRelayClient (orchestrator-facing API). */
 export interface ClusterRelayClientOptions {
   /** API key for cloud authentication (GENERACY_API_KEY) */
@@ -75,6 +92,8 @@ export class ClusterRelay {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pongReceived = true;
   private metadataOverride: Partial<ClusterMetadata> | null = null;
+  private readonly pendingFrames = new Map<string, PendingFrame>();
+  private static readonly TTL_MS = 30_000;
 
   /**
    * Accept either a full RelayConfig or a ClusterRelayClientOptions (orchestrator API).
@@ -189,7 +208,15 @@ export class ClusterRelay {
    * Gracefully disconnect.
    */
   async disconnect(): Promise<void> {
-    if (!this.running) return;
+    if (!this.running) {
+      // Even when the outer loop is not running, a leftover pending-frame map
+      // could exist if register was called pre-connect. Clear defensively.
+      for (const entry of this.pendingFrames.values()) {
+        clearTimeout(entry.ttlHandle);
+      }
+      this.pendingFrames.clear();
+      return;
+    }
 
     this._state = 'disconnecting';
     this.running = false;
@@ -211,6 +238,11 @@ export class ClusterRelay {
       });
     }
 
+    for (const entry of this.pendingFrames.values()) {
+      clearTimeout(entry.ttlHandle);
+    }
+    this.pendingFrames.clear();
+
     this._state = 'disconnected';
   }
 
@@ -223,6 +255,38 @@ export class ClusterRelay {
       return;
     }
     this.ws.send(JSON.stringify(message));
+  }
+
+  registerPendingFrame(frameId: string, meta: PendingFrameMeta): void {
+    if (!frameId) {
+      this.logger.debug({ frameId }, 'registerPendingFrame ignored empty frameId');
+      return;
+    }
+    const existing = this.pendingFrames.get(frameId);
+    if (existing) {
+      clearTimeout(existing.ttlHandle);
+    }
+    this.pendingFrames.set(frameId, {
+      frameType: meta.frameType,
+      gateId: meta.gateId,
+      registeredAt: Date.now(),
+      ttlHandle: setTimeout(() => this.evictOnTtl(frameId), ClusterRelay.TTL_MS),
+    });
+  }
+
+  private evictOnTtl(frameId: string): void {
+    const entry = this.pendingFrames.get(frameId);
+    if (!entry) return;
+    this.pendingFrames.delete(frameId);
+    this.logger.debug(
+      { frameId, ageMs: Date.now() - entry.registeredAt },
+      'cluster.cockpit pending frame evicted on TTL',
+    );
+  }
+
+  /** @internal Test-only accessor for the pending-frame map size. */
+  _pendingFramesSizeForTests(): number {
+    return this.pendingFrames.size;
   }
 
   /**
@@ -327,22 +391,39 @@ export class ClusterRelay {
           return;
         }
 
-        // Cloud-sent gate acknowledgement (#1063). Observability-only until
-        // #1059 steps 4-7 wire the frameId correlation. The return is
-        // structural (Q3=A / FR-003) — prevents any future subscriber from
-        // beginning to correlate before the full design lands.
+        // Cloud-sent gate acknowledgement (#1063 + #1077). #1077 wires the
+        // frameId-keyed pending map: settle on match, quiet-drop on miss.
+        // The return is structural (Q3=A / FR-003) — registered onMessage
+        // handlers must not observe cluster.cockpit.reply.
         if (message.type === 'cluster.cockpit.reply') {
-          if (message.accepted) {
-            this.logger.debug({ message }, 'cluster.cockpit.reply received');
+          const { frameId } = message;
+          if (frameId !== null && this.pendingFrames.has(frameId)) {
+            const entry = this.pendingFrames.get(frameId)!;
+            clearTimeout(entry.ttlHandle);
+            this.pendingFrames.delete(frameId);
+            this.logger.info(
+              {
+                frameId,
+                frameType: message.frameType,
+                gateId: message.gateId,
+                accepted: message.accepted,
+                reason: message.reason,
+                priorStatus: message.priorStatus,
+                ageMs: Date.now() - entry.registeredAt,
+              },
+              'cluster.cockpit.reply settled pending frame',
+            );
           } else {
             this.logger.info(
               {
-                reason: message.reason,
+                frameId,
                 frameType: message.frameType,
                 gateId: message.gateId,
+                accepted: message.accepted,
+                reason: message.reason,
                 priorStatus: message.priorStatus,
               },
-              'cluster.cockpit.reply dropped',
+              'cluster.cockpit.reply had no matching pending frame',
             );
           }
           return;

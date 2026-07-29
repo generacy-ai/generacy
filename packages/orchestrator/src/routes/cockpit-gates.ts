@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 // Canonical frozen wire schemas (tetrad-development/docs/cockpit-remote-gates-plan.md
@@ -86,6 +87,10 @@ const GateQueryStringSchema = z
  * negatives collapse to `absent`.
  */
 type ThreeState = 'open' | 'answered' | 'absent';
+
+function mintFrameId(): string {
+  return `frm_${randomBytes(12).toString('hex')}`;
+}
 
 function collapseCloudStatus(status: CloudGateStatusResponse['status']): ThreeState {
   switch (status) {
@@ -332,15 +337,21 @@ export function setupCockpitGatesRoute(
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const parsed = GateOpenSchema.parse(request.body);
+        const frameId = parsed.frameId ?? mintFrameId();
+        const emitData = { ...parsed, frameId };
+        options.getRelayClient()?.registerPendingFrame(frameId, {
+          frameType: parsed.type,
+          gateId: parsed.gateId,
+        });
         const timestamp = new Date().toISOString();
-        const approxBytes = JSON.stringify(parsed).length;
+        const approxBytes = JSON.stringify(emitData).length;
         const outcome = tryEmitOrRetain(
           {
-            data: parsed,
+            data: emitData,
             timestamp,
             approxBytes,
-            gateId: parsed.gateId,
-            type: parsed.type,
+            gateId: emitData.gateId,
+            type: emitData.type,
           },
           options,
         );
@@ -348,10 +359,11 @@ export function setupCockpitGatesRoute(
           return reply.status(202).send({
             accepted: true,
             retained: true,
+            frameId,
             retainQueue: outcome.retainQueue,
           });
         }
-        return reply.status(202).send({ accepted: true, retained: false });
+        return reply.status(202).send({ accepted: true, retained: false, frameId });
       } catch (err) {
         if (err instanceof ZodError) {
           options.logger.warn(
@@ -411,15 +423,21 @@ export function setupCockpitGatesRoute(
               : new Date().toISOString(),
         };
         const parsed = GateOutcomeSchema.parse(candidate);
+        const frameId = parsed.frameId ?? mintFrameId();
+        const emitData = { ...parsed, frameId };
+        options.getRelayClient()?.registerPendingFrame(frameId, {
+          frameType: parsed.type,
+          gateId: parsed.gateId,
+        });
         const timestamp = new Date().toISOString();
-        const approxBytes = JSON.stringify(parsed).length;
+        const approxBytes = JSON.stringify(emitData).length;
         const outcome = tryEmitOrRetain(
           {
-            data: parsed,
+            data: emitData,
             timestamp,
             approxBytes,
-            gateId: parsed.gateId,
-            type: parsed.type,
+            gateId: emitData.gateId,
+            type: emitData.type,
           },
           options,
         );
@@ -427,10 +445,11 @@ export function setupCockpitGatesRoute(
           return reply.status(202).send({
             accepted: true,
             retained: true,
+            frameId,
             retainQueue: outcome.retainQueue,
           });
         }
-        return reply.status(202).send({ accepted: true, retained: false });
+        return reply.status(202).send({ accepted: true, retained: false, frameId });
       } catch (err) {
         if (err instanceof ZodError) {
           options.logger.warn(

@@ -71,6 +71,13 @@ export interface FakePeer {
     timeoutMs?: number,
   ): Promise<ApiResponseMessage>;
 
+  /**
+   * Send a raw JSON frame to every currently-connected client. #1077 uses this
+   * to echo a `cluster.cockpit.reply` frame back after receiving a
+   * `cluster.cockpit` event, exercising the pending-map settle/quiet-drop path.
+   */
+  sendRawToClusters(frame: unknown): void;
+
   /** Force-drop all currently connected clients (FR-004 disconnect). */
   disconnectAllClients(): Promise<void>;
 
@@ -232,6 +239,15 @@ export async function startFakePeer(opts: FakePeerOptions = {}): Promise<FakePee
       });
       currentClient.send(JSON.stringify(frame));
       return responsePromise;
+    },
+
+    sendRawToClusters(frame) {
+      const serialized = JSON.stringify(frame);
+      for (const client of wss.clients) {
+        if (client.readyState === WsWebSocket.OPEN) {
+          client.send(serialized);
+        }
+      }
     },
 
     async disconnectAllClients() {
