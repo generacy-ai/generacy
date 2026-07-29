@@ -47,16 +47,18 @@ export function cockpitGateList(
     const options = resolveGateOptions(deps);
     const client = createGateQueryClient(options);
 
-    // #1067 — deliberately drop `runId` before calling the client. The deployed
-    // cloud contract carries
-    // `.refine((q) => q.runId === undefined || q.generation !== undefined,
-    // { message: 'runId requires generation' })` — list mode has no
-    // `generation` by construction, so forwarding `runId` would produce a 400
-    // RFC-7807 and break the sweep's primary dedup primitive. The schema
-    // accepts `runId` for MCP-surface parity with `cockpit_gate_status`, but
-    // the handler MUST NOT propagate it (and does NOT emit the
-    // `runIdSource` log line per Q3=C). Cloud follow-up for a list-mode
-    // `runId` filter is a separate generacy-cloud issue.
+    // #1080 — deliberately drop `runId` before calling the client. This is a
+    // *policy*, not a workaround: as of `generacy-cloud#894` the cloud accepts
+    // `?runId=` on list mode as a real `where('runId', '==', X)` equality
+    // filter, so forwarding would succeed — but it would silently narrow the
+    // result set to *this* run, and `agency#471`'s startup-sweep adoption
+    // pass depends on `cockpit_gate_list` returning gates from **prior** runs
+    // (a run-filtered list at startup returns `{gates:[]}` by construction
+    // and defeats adoption). The correct extension path if a future named
+    // consumer needs a run-scoped list is an explicit opt-in, not removing
+    // this drop. The schema accepts `runId` for MCP-surface parity with
+    // `cockpit_gate_status`; the handler does NOT emit the `runIdSource`
+    // log line per #1067 Q3=C.
     const listInput = {
       issueRef: parsed.data.issueRef,
       ...(parsed.data.gateType !== undefined ? { gateType: parsed.data.gateType } : {}),
