@@ -17,7 +17,7 @@ MUST NOT appear anywhere under:
 - `packages/orchestrator/src/**` — EXCEPT `packages/orchestrator/src/__tests__/**`
 - `packages/control-plane/src/**` — EXCEPT `packages/control-plane/src/__tests__/**`
 - `packages/cluster-relay/src/**` — EXCEPT `packages/cluster-relay/tests/**`
-- `packages/generacy/src/cli/commands/cockpit/**` — EXCEPT `packages/generacy/src/cli/commands/cockpit/**/__tests__/**`
+- `packages/generacy/src/**` — EXCEPT `packages/generacy/src/**/__tests__/**`
 - `packages/cockpit/src/**` — EXCEPT `packages/cockpit/src/__tests__/**`
 
 Rationale (from clarifications.md § Q5): "A production binary carrying env-var-triggered 'behave like the broken version' branches is one misconfiguration away from being the broken version in a real cluster and inverts the meaning of every log line around it."
@@ -39,27 +39,37 @@ Currently, no such item exists — all three phase reverts are realizable as fak
 ```ts
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// .../packages/orchestrator/src/__tests__/cockpit-gates → repo root (5 up)
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
+
+const TARGET_DIRS = [
+  'packages/orchestrator/src',
+  'packages/control-plane/src',
+  'packages/cluster-relay/src',
+  'packages/generacy/src',
+  'packages/cockpit/src',
+];
 
 describe('FR-012 production-code boundary', () => {
   it('no SIMULATE_PHASE_* identifiers in shipped code', () => {
-    // Grep. `|| true` prevents grep's exit-1 (no match) from failing execSync.
+    // Guard against the vacuous pass: `|| true` swallows grep's "no such file"
+    // exit, and execSync captures only stdout — so a wrong root or a renamed
+    // package would make this assert `'' === ''` while grepping nothing.
+    for (const dir of TARGET_DIRS) {
+      expect(existsSync(resolve(REPO_ROOT, dir)), `grep target missing: ${dir}`).toBe(true);
+    }
+    // `|| true` prevents grep's exit-1 (no match) from failing execSync.
     const cmd = [
       "grep -rE 'SIMULATE_PHASE_[A-Z]+'",
-      "  packages/orchestrator/src",
-      "  packages/control-plane/src",
-      "  packages/cluster-relay/src",
-      "  packages/generacy/src/cli/commands/cockpit",
-      "  packages/cockpit/src",
-      "  --exclude-dir=__tests__",
-      "  --exclude-dir=tests",
-      "  --exclude='*.test.ts'",
-      "  --exclude='*.spec.ts'",
-      "  || true",
+      ...TARGET_DIRS,
+      "--exclude-dir=__tests__ --exclude-dir=tests --exclude='*.test.ts' --exclude='*.spec.ts'",
+      '|| true',
     ].join(' ');
-    const output = execSync(cmd, {
-      cwd: '/workspaces/generacy',
-      encoding: 'utf-8',
-    }).trim();
+    const output = execSync(cmd, { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
     expect(output).toBe('');
   });
 });

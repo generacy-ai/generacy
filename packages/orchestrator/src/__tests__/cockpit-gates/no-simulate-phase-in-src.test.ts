@@ -10,27 +10,37 @@
  */
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// .../packages/orchestrator/src/__tests__/cockpit-gates → repo root (5 up)
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
+
+const TARGET_DIRS = [
+  'packages/orchestrator/src',
+  'packages/control-plane/src',
+  'packages/cluster-relay/src',
+  'packages/generacy/src',
+  'packages/cockpit/src',
+];
 
 describe('FR-012 production-code boundary', () => {
   it('no SIMULATE_PHASE_* identifiers in shipped code', () => {
+    // Guard against the vacuous pass: `|| true` swallows grep's "no such file"
+    // exit, and execSync captures only stdout — so a wrong root or a renamed
+    // package would make this assert `'' === ''` while grepping nothing.
+    for (const dir of TARGET_DIRS) {
+      expect(existsSync(resolve(REPO_ROOT, dir)), `grep target missing: ${dir}`).toBe(true);
+    }
     // `|| true` prevents grep's exit-1 (no match) from failing execSync.
     const cmd = [
       "grep -rE 'SIMULATE_PHASE_[A-Z]+'",
-      '  packages/orchestrator/src',
-      '  packages/control-plane/src',
-      '  packages/cluster-relay/src',
-      '  packages/generacy/src/cli/commands/cockpit',
-      '  packages/cockpit/src',
-      '  --exclude-dir=__tests__',
-      '  --exclude-dir=tests',
-      "  --exclude='*.test.ts'",
-      "  --exclude='*.spec.ts'",
-      '  || true',
+      ...TARGET_DIRS,
+      "--exclude-dir=__tests__ --exclude-dir=tests --exclude='*.test.ts' --exclude='*.spec.ts'",
+      '|| true',
     ].join(' ');
-    const output = execSync(cmd, {
-      cwd: '/workspaces/generacy',
-      encoding: 'utf-8',
-    }).trim();
+    const output = execSync(cmd, { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
     expect(output).toBe('');
   });
 });
