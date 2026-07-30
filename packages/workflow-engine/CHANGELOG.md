@@ -1,5 +1,127 @@
 # @generacy-ai/workflow-engine
 
+## 0.5.0
+
+### Minor Changes
+
+- bdbde27: Deterministic branch/spec-slug + PR dedup on speckit workflow re-entry (#1043).
+
+  Speckit workflows re-entering `implement` (e.g., after
+  `cockpit_advance(implementation-review)`) could re-derive a different branch
+  slug from a mutated description, miss the existing `specs/<N>-*` idempotency
+  check in `createFeature()`, and open a duplicate PR alongside the real one
+  (as observed in generacy-cloud#850 / #1038 → PR #1041 orphaning PR #1039).
+
+  Fix: new pure resolver `resolveIssueBranch()` in
+  `@generacy-ai/workflow-engine` that returns the canonical `<N>-<slug>`
+  branch for an issue by querying remote state only (open PRs on `<N>-*`
+  branches first, oldest `<N>-*` remote branch as fallback). Two callers:
+  `CreateFeatureInput` gains an optional `resolveExistingBranch` callback
+  that lets `createFeature()` skip slug re-derivation when a canonical
+  branch already exists; `PrManager.ensureDraftPr()` runs the resolver as
+  defense-in-depth and adopts the canonical PR instead of opening a
+  duplicate on mismatch. Slug-generation logic is unchanged — the callback
+  returning `null` falls back to the existing derivation path.
+
+  Emits structured events for observability: `workflow-reentry-branch-reused`
+  (happy path, SC-003) and `workflow-reentry-branch-mismatch` (defensive
+  path, FR-005).
+
+- 66cf1d6: PR-feedback fixer now consumes review bodies, not just inline threads (#1047).
+
+  `packages/workflow-engine` — adds `Review` + `ReviewSubmissionState` types and
+  `GitHubClient.listReviews(owner, repo, prNumber): Promise<Review[]>`. Implements
+  via `gh api /repos/{owner}/{repo}/pulls/{n}/reviews`. Introduces the new label
+  `blocked:body-finding-unaddressed` used by the orchestrator's Disposition C.
+
+  `packages/orchestrator` — `PrFeedbackHandler` now:
+
+  - Fetches submitted reviews alongside inline threads and merges their bodies
+    into the fixer prompt so findings that name files NOT in the diff still
+    reach Claude on the same round (FR-002).
+  - Applies a per-finding gate: parses the `<!-- generacy-cockpit:unanchored-findings -->`
+    marker block in each review body, extracts the `**Files:**` list under each
+    `### Finding <n>`, and requires the just-pushed commit to touch at least one
+    named file per finding before advancing (FR-003). Older-producer bodies
+    without a `**Files:**` line degrade to no-constraint (FR-005), so a two-sided
+    producer/consumer rollout is safe.
+  - Adds Disposition C: on gate failure, applies
+    `blocked:body-finding-unaddressed` and posts a marker-keyed top-level PR
+    comment enumerating the unaddressed findings. Distinct from Disposition B
+    (`blocked:stuck-feedback-loop`).
+  - On resume, findings listed in the newest
+    `<!-- generacy-cockpit:body-findings-unaddressed -->` marker comment are
+    treated as acknowledged and skip re-gating; they still reach the prompt
+    (FR-008).
+
+  No new npm dependencies. No changes to the monitor's blocked-label skip gate —
+  `l.startsWith('blocked:')` honors the new label with zero allow-list change.
+
+  **Scope limit** — the fixer only reaches the review-body path when a review
+  also carries at least one trusted inline thread. `PrFeedbackMonitorService` still
+  gates enqueue on `unresolvedThreadIds.length > 0`, so a review submitted with a
+  body finding and NO inline comments does not schedule the fixer. Widening the
+  monitor's enqueue trigger to reviews-with-body-findings is tracked as a
+  follow-up; body-only reviews should currently be paired with at least one inline
+  comment (or the operator can add an inline note before submitting).
+
+- 63436bf: Split PR-feedback CLI-timeout disposition off `blocked:stuck-feedback-loop` and allow up to two bounded auto-retries per trigger (#1070). Three new label vocabulary entries in `@generacy-ai/workflow-engine`: `blocked:fixer-timeout` (retry-eligible, monitor auto-dispatches on next poll), `blocked:fixer-timeout-no-progress` (terminal — CLI timed out with zero commits), `blocked:fixer-timeout-repeat` (terminal — auto-retry budget of 2 exhausted). Orchestrator's `PrFeedbackHandler` collapsed `!success || !hasChanges` branch is split into an explicit four-way switch and the historically contradictory `msg: "Successfully pushed changes" success: false` log line is fixed. Retry counter lives on the monitor (`PrFeedbackMonitorService.fixerTimeoutRetryCount`) and travels handler-ward via a new optional `retryAttempt?: number` field on `PrFeedbackMetadata`; resets only when all review threads are fully resolved (Case C). Cockpit `WAITING_PIPELINE_ORDER` gains the two terminal `blocked:fixer-timeout-*` labels ahead of `waiting-for:address-pr-feedback` (mirrors the `blocked:stuck-feedback-loop` precedence), while the retry-eligible `blocked:fixer-timeout` intentionally sorts below the active waiting gate.
+- cd811d1: Detect fixer-CLI self-commit cycles in PR-feedback handler by comparing branch HEAD SHA across the CLI invocation, so `blocked:stuck-feedback-loop` no longer lands on cycles that actually pushed a commit (#1073). New `@generacy-ai/workflow-engine` label vocabulary entry `blocked:resolve-failed` for the narrower case where code changes landed but thread reply/resolve failed — separated from `blocked:stuck-feedback-loop` because the two require different operator remediation (check GitHub API responses vs. read fixer transcripts). Orchestrator's `PrFeedbackHandler` disposition dispatcher gains a head-advance check between the CLI spawn and the pre-existing B1/B2/B3 branch; timeout branches (B4/B5/B6 from #1070) are unaffected. Log lines gain a `source: 'cli' | 'handler'` field on both the CLI-self-commit and handler-commit paths, and the CLI-self-commit path carries `preFixSha` + `postFixSha` so the head-advance claim is auditable rather than asserted (clarification Q4 caveat). The CLI-self-commit info line also carries a `handlerCommitted: boolean` field so operators can distinguish CLI-only, handler-only, and mixed (both committed) cycles from a single grep. Cockpit `WAITING_PIPELINE_ORDER` gains `blocked:resolve-failed` ahead of `waiting-for:address-pr-feedback` (mirrors the terminal `blocked:fixer-timeout-*` precedence). No changes to `PrFeedbackMonitorService`, `PrFeedbackMetadata`, `QueueItem`, or the `blocked:*` short-circuit; this is a producer-side fix.
+
+  **Operator-visible narrowing:** `blocked:stuck-feedback-loop` no longer originates from the zero-resolve path (previously reachable in principle but shown to be unreachable in practice; PR #1075 review). The label now only originates from the B1/B2/B3 branch (`!cliSelfCommitted && (!success || !hasChanges)`). A zero-resolve cycle after a real head-advance now always lands `blocked:resolve-failed`.
+
+### Patch Changes
+
+- 349fdba: Prevent orchestrator worker from resurrecting merged-and-deleted branches (#1051).
+
+  Bundles three independent, additive fixes that together prevent a re-entering
+  worker from resurrecting a deleted branch and opening a duplicate PR that claims
+  `Closes #<already-closed>`:
+
+  - **FR-001**: adds `--prune` to the multi-ref `git fetch origin` in both
+    `RepoCheckout.switchBranch` and `RepoCheckout.updateRepo`. Deleted upstream
+    branches are removed from local tracking refs so `reset --hard origin/<branch>`
+    no longer silently succeeds against a stale ref. `fetchBase` (single-ref) is
+    unchanged.
+  - **FR-002/003**: new stateless `push-guard` module + wiring at three sites
+    (`pr-feedback-handler.commitAndPushChanges`, `pr-manager.commitAndPush`,
+    `phase-loop` entry). Refuses a push when the PR has already merged/closed,
+    the remote branch is missing under an open PR, or the PR-state lookup itself
+    fails; emits `event: 'push-refused'` with a `reason` enum
+    (`pr-merged`/`pr-closed`/`branch-missing`/`pr-lookup-failed`) and clears
+    `agent:in-progress` (plus adds `agent:error` on still-open issues). Never
+    adds `failed:<phase>` — that would invite `/cockpit:resume` into a loop. The
+    refusal signal propagates from `PrManager.commitPushAndEnsurePr` (via a new
+    `CommitResult.pushRefused` field) up to `phase-loop`, which aborts the
+    workflow — otherwise `ensureDraftPr` would open a duplicate PR against the
+    merged branch and the loop would flip the PR ready-for-review with zero
+    commits pushed.
+  - **FR-005**: `LabelMonitorService.processLabelEvent` drops both `process`
+    and `resume` events whose target issue is closed at enqueue time, emitting
+    one `info` log line with `dropped: 'issue-closed'`. Zero mutations on drop.
+    Complements #1049's `PrFeedbackMonitorService` merged-PR gate, which covers
+    only the address-pr-feedback entry path. Scope: gate fires inside
+    `processLabelEvent` only — four other enqueue paths (base-advance-monitor,
+    worker-dispatcher lease-expiry / post-complete rearm, pr-feedback-monitor)
+    are out of scope for this spec and tracked as follow-ups.
+  - **FR-004** (RETRACTED): the original writeup claimed cross-issue working-tree
+    contamination from `d8e392ca`. That commit is actually a two-parent merge
+    commit; the `added` file statuses were an API artifact of GitHub diffing
+    merges against parent 1 only. No contamination mechanism was ever present in
+    the observed evidence. Corresponding regression test deleted.
+
+  `workflow-engine` gains one new internal method `findPRForBranchAnyState` on
+  `GitHubClient` — used only by orchestrator's `push-guard`, not re-exported at
+  the public boundary. **Throws** on non-zero `gh` exit (silent null-on-error is
+  the wrong contract for a safety-gate input); returns `null` only for the
+  operationally-meaningful "no PR exists" case. Uses `--limit 10` plus a
+  caller-side merged-precedence scan so a MERGED PR older than a CLOSED PR on
+  the same branch still produces the more diagnostic `reason: 'pr-merged'`.
+  Existing `findPRForBranch` is intentionally unchanged; five call sites depend
+  on its open-only default.
+
+  No new labels, no new persisted state, no workflow-YAML changes.
+
 ## 0.4.0
 
 ### Minor Changes

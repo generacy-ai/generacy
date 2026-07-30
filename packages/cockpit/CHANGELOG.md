@@ -1,5 +1,145 @@
 # @generacy-ai/cockpit
 
+## 0.7.0
+
+### Minor Changes
+
+- 7c69dba: Resolver: phase-shaped `####` headings open phases; bare `#N` refs in checkboxes resolve to scope repo (#1014).
+- 2d1adbc: Add `cockpit_claim` + `cockpit_release` MCP tools for per-scope active-driver claim (#1015). Two concurrent `/cockpit:auto` conversations can no longer silently double-drive the same scope: the claim is stored as an `<!-- cockpit:claim v1 -->` marker comment on the scope issue (source of truth) plus a `cockpit:claimed` label (enumeration index). Claim is idempotent (acquire / refresh / takeover) with a 10-minute absolute staleness threshold. Refusal payload carries the incumbent's full `holder` claim + `commentUrl` so the calling skill can render an actionable gate without a second GitHub call. `@generacy-ai/cockpit` gains two `GhWrapper` methods — `editIssueComment` and `deleteIssueComment` — plus an `id: number` field on `IssueComment` (REST-numeric comment id extracted from the URL). Observer tools (`cockpit_status`, `cockpit_context`, `cockpit_await_events`) are structurally unable to touch the claim (verified by regression test).
+- bcbcc6b: Add `packages/cockpit/src/gates/` — presenter-agnostic wire contracts for the Cockpit Remote Gates epic (#1020). New public surface (root export): `GateRecordSchema`, `GateAnswerSchema`, `GateOutcomeAckSchema` (Zod), the `GateType` / `ArtifactReviewKind` / `GateOutcome` enums with matching const tuples, `deriveGateKey` + `deriveGateId` (deterministic sha256-24-hex-prefix), one generation helper per gate type (`deriveClarificationGeneration`, `deriveArtifactReviewGeneration`, `deriveImplementationReviewGeneration`, `deriveManualValidationGeneration`, `deriveEscalationGeneration`, `derivePhaseQueueGeneration`, `deriveFilingGeneration`, `deriveScopeDrainedGeneration`), and four fixture maps (`VALID_FIXTURES`, `MALFORMED_FIXTURES`, `VALID_ANSWER_FIXTURES`, `VALID_ACK_FIXTURES`) for downstream orchestrator/doorbell/MCP tests. Zero new dependencies; zero I/O in the module. The gates `IssueRef` type is re-exported from the package root as `GateIssueRef` to avoid collision with the resolver's `IssueRef`; `IssueRefSchema` is unaliased. Later P1 issues (orchestrator routes, MCP tools, doorbell, generacy-cloud mirror) all import from `@generacy-ai/cockpit`.
+- 7db8ba2: Add orchestrator-side wire for the Cockpit Remote Gates epic (#1021). Three new HTTP routes on the orchestrator (`POST /cockpit/gates`, `POST /cockpit/gates/:id/ack`, `POST /cockpit/answers`), one new `cluster.cockpit` relay channel with retain-and-replay on reconnect (bounded FIFO with count + byte caps, drop-oldest), and one append-only NDJSON answers file at `/workspaces/.generacy/cockpit/answers.ndjson` with size-based rotation (`.1`..`.N`) and in-memory `deliveryId` dedup rebuilt on boot. `@generacy-ai/cockpit` gains `packages/cockpit/src/gates/` with `GateOpenSchema`, `GateAckSchema`, `GateAnswerSchema` (Zod with passthrough for forward-compat) and inferred TS types. Auth reuses `authMiddleware` via a new `COCKPIT_INTERNAL_API_KEY` env var (parallel to `ORCHESTRATOR_INTERNAL_API_KEY` from #598); `/cockpit/answers` reaches the orchestrator via the cluster-relay dispatcher's implicit `orchestratorUrl` fallback with no new route entry. Downstream MCP tools, the doorbell that tails `answers.ndjson`, and the cloud-side inbox UI ship as separate epic issues.
+- 68c820c: Cluster-side integration harness for the Cockpit Remote Gates epic (#1024).
+
+  Composes the four P1 siblings end-to-end against a fake relay peer — no cloud,
+  no live GitHub, no smee: a light in-process orchestrator (real gate/answer
+  routes + answers-file writer + retain-and-replay retainer), a real
+  `ClusterRelayClient` dialed at a `ws` fake peer, and the REAL `generacy cockpit
+doorbell` spawned as a child process. The eight cross-component scenarios of
+  `specs/1024-part-cockpit-remote-gates/contracts/scenario-catalog.md` (S1a, S1b,
+  S2, S3, S4, S5, F1, F2, F3) run with real assertions.
+
+  Public API (`@generacy-ai/cockpit`, minor): adds wire-envelope fixture builders
+  so cluster and cloud (P2) single-source the transport shapes — `gateOpenFixture`,
+  `gateAckFixture`, `answerLineFixture`, `DEFAULT_WIRE_SCOPE`, `DEFAULT_WIRE_EPIC_REF`.
+  The `packages/cockpit/README.md` §"Gates protocol" table is updated to match.
+
+  Doorbell (`@generacy-ai/generacy`, patch): the `cockpit doorbell` command now
+  honours `COCKPIT_ANSWERS_FILE` for its tail target, plus an env-gated hermetic
+  harness mode (`COCKPIT_DOORBELL_HARNESS=1`) that tails the answers file with a
+  local in-process bus and no GitHub — the seam that lets the harness exercise
+  FR-005/007/013/015 against the real binary offline (FR-012 / env-seams S-5).
+
+- dbb0fbe: Cockpit gates — read-only status query + stable sweep generation derivation (#1038).
+
+  Adds three additive pieces that jointly kill the sweep-duplicate bug in
+  `/cockpit:auto --gates=ui`:
+
+  1. **`@generacy-ai/cockpit`** (minor) — new pure helper
+     `computeClarificationAnswerSetHash({ questions })`: canonical 12-hex hash of
+     the sorted-by-`questionNumber` list of `{ questionNumber, questionText }`.
+     Same round of asks → same `generation` → same `gateId`, regardless of
+     whether the agency-side sweep or the live in-repo path derived it (SC-002).
+     `deriveClarificationGeneration({ batchId })` signature unchanged; the new
+     helper is additive.
+
+  2. **`@generacy-ai/generacy`** (minor) — two new read-only MCP tools on the
+     cockpit MCP server:
+
+     - `cockpit_gate_status({ issueRef, gateType, generation })` →
+       `{ gateId, status: 'open' | 'answered' | 'absent' }`
+     - `cockpit_gate_list({ issueRef, gateType? })` →
+       `{ gates: [{ gateId, gateType, generation, status }], truncated? }`
+       Both are thin HTTP clients over `GET /cockpit/gates`. Adds one new
+       `ErrorClass` union member (`query-unreachable`), distinct from `transport`
+       so the sweep's downstream dispatch can differ (abort vs. AskUserQuestion
+       fallback). Retry policy: 3 attempts, 0/1500/3500 ms (≤5s total).
+
+  3. **`@generacy-ai/orchestrator`** (patch) — new `GET /cockpit/gates` route +
+     `CloudGateQueryClient` (mirrors `packages/control-plane/src/services/cloud-pull-client.ts`).
+     The route dispatches to the cloud via HTTPS + cluster API key, applies the
+     seven-to-three cloud-status collapse, and the non-terminal filter for
+     list-mode responses. Existing `POST /cockpit/gates` handlers untouched.
+
+  Unblocks the agency-side sweep (generacy-ai/agency#450) and the cloud-side
+  Firestore query endpoint (generacy-ai/generacy-cloud epic 850).
+
+- 8b8ed56: Fix cross-run terminal-gate collisions by folding an optional per-run discriminator into `gateKey` (#1053). `deriveGateKey(issueRef, gateType, generation)` gains an optional fourth argument `runId?: string`; when passed, the derivation appends `:${runId}` to the pre-image so a re-run of the same natural gate (same `issueRef`, `gateType`, `generation`) produces a fresh `gateId` and stops colliding with a terminal cloud doc from a prior run. `deriveGateId`'s hash function, output length, and 24-hex encoding are unchanged; `GateOpenWireSchema` and `GateOutcomeWireSchema` field-sets are unchanged (the wire carries only the longer opaque `gateKey` string).
+
+  MCP tool surface: `GateOpenInputSchema` and `GateAckInputSchema` accept optional `runId?: z.string().min(1).optional()`. `cockpit_gate_open` threads the explicit `runId` through the derivation; when omitted, the tool derives with the pre-#1053 3-tuple shape (byte-for-byte back-compat) and logs the source at `info` as `runIdSource: 'unset'` (event `cockpit_gate_open.runid-source`). A process-scoped fallback (`INSTANCE_NONCE`) was rejected on review — it re-introduced the same cross-run collision this fix exists to close (two `/cockpit:auto` runs in one MCP-server process share the nonce) and desynced against the cloud's positional-3-tuple `generationFromGateKey` read-side parser. `cockpit_gate_ack` accepts-and-ignores `runId` for envelope symmetry. `askedAt` is hoisted above the retry boundary via a per-`gateId` in-memory cache so within-run retries produce byte-identical wire frames — US2 correctness no longer depends on cloud `gateId`-keyed dedup.
+
+  The end-to-end #1053 fix requires the sibling `/cockpit:auto` skill (agency repo, FR-006) to thread the auto-run id through as `runId`. Until that companion lands, the schema surface is present but the per-run discriminator is a no-op on the default path (`runIdSource: 'unset'`); a caller that passes an explicit `runId` today already gets a fresh `gateId` per run.
+
+  Ships US1 + US2 only. FR-004 / FR-005 / FR-007 (terminal-collision detection + the new `'terminal-collision'` `ErrorClass` value + ack-path parity) and FR-006 (skill-side handler in the sibling `agency` repo) ship in a follow-up PR gated on generacy-cloud#887.
+
+- af5619f: Preserve caller-supplied `frameId` on `GateOpenSchema` / `GateOutcomeSchema` and
+  the orchestrator cockpit-gates route so `cluster.cockpit.reply` correlation
+  (generacy-cloud#890) _can_ stop collapsing onto `(gateId, frameType)` on
+  idempotent retries. Additive-optional wire-schema field; older callers
+  unaffected.
+
+  This makes correlation _possible_, not delivered. Nothing on the cluster yet
+  generates a per-frame `frameId` or keeps a `frameId → pending-promise` map, so
+  outbound frames still omit the field and replies still carry `frameId: null`
+  until a producer lands in a follow-up.
+
+### Patch Changes
+
+- 403f0c3: fix(cockpit): conform the gate wire contract to the frozen spec (#1034).
+
+  The `packages/cockpit/src/gates/` module previously shipped an invented gate
+  wire envelope (`kind`-discriminated, `scope`-wrapped, with a `gate-ack`
+  sub-event and a nested-`answer` down-path) that matched **neither** the frozen
+  authoritative contract in
+  `tetrad-development/docs/cockpit-remote-gates-plan.md § "Wire contracts"` **nor**
+  the generacy-cloud receiver (`gates-wire.md` Shapes 1/2/3), which dispatches on
+  `data.type` and log-drops any unknown subtype. Net effect: the orchestrator's
+  own `GateOpenSchema` rejected the plugin's `cockpit_gate_open` call, and even a
+  patched frame would have been silently dropped cloud-side (`data.type ===
+undefined`) — no gate ever reached the operator inbox. This supersedes the
+  envelope portions of #1032/#1033 (gate-open `scope`) and the gate-ack work
+  (#1035), which refined the wrong shape.
+
+  Now conformant to the frozen contract (the cloud is the authoritative
+  receiver/sender; these schemas mirror it field-for-field):
+
+  - **Schema module** (`packages/cockpit/src/gates/`): `GateOpenSchema`
+    (`type:'gate-open'`, flat — `gateKey`, `gateType` enum, `title`/`body`/
+    `options`/`allowFreeText`/`sessionId`/`askedAt`, 24-hex `gateId`),
+    `GateOutcomeSchema` (`type:'gate-outcome'` — THE ACK, replaces `GateAckSchema`),
+    `GateAnswerSchema` (down-path `type:'gate-answer'`, flat `optionId`/`freeText`/
+    `actor`, both `freeText` and `actor.email`/`actor.displayName` **nullable** to
+    match what the cloud sends). Adds `deriveGateKey`/`deriveGateId`
+    (`sha256(gateKey)[:24]`). Removes the dead `GateAckSchema` /
+    `GateAnswerEnvelopeSchema`.
+  - **Orchestrator** (`routes/cockpit-gates.ts`, `routes/cockpit-answers.ts`): the
+    `/ack` route now stamps `type:'gate-outcome'` (path-authoritative `gateId`,
+    defaulted `at`) instead of emitting a `gate-ack`; the emitted relay `data`
+    carries `type` as the cloud sub-event discriminator; `/cockpit/answers`
+    validates the frozen flat `GateAnswerSchema` (24-hex `gateId`) before append.
+  - **MCP tools**: `cockpit_gate_open` now **derives** `gateKey`+`gateId` in TS
+    and self-validates the assembled frozen record before POSTing (the plugin/LLM
+    never hand-builds a sha256); `cockpit_gate_ack` assembles a `gate-outcome`.
+  - **Doorbell**: the answers tailer parses the frozen flat down-path line
+    (`type`/`gateKey`/flat `optionId`/`freeText`/`actor`); repo-scope filter keys
+    on the `gateKey` issue-ref (owner/repo, child-issue numbers pass).
+
+  Known follow-up: cross-repo child-issue answers are dropped by the tailer's
+  owner/repo scope filter (documented inline; cross-repo remote gates are not yet
+  exercised). Pairs with the `@generacy-ai/claude-plugin-cockpit` change that
+  emits the frozen record shape.
+
+- 63436bf: Split PR-feedback CLI-timeout disposition off `blocked:stuck-feedback-loop` and allow up to two bounded auto-retries per trigger (#1070). Three new label vocabulary entries in `@generacy-ai/workflow-engine`: `blocked:fixer-timeout` (retry-eligible, monitor auto-dispatches on next poll), `blocked:fixer-timeout-no-progress` (terminal — CLI timed out with zero commits), `blocked:fixer-timeout-repeat` (terminal — auto-retry budget of 2 exhausted). Orchestrator's `PrFeedbackHandler` collapsed `!success || !hasChanges` branch is split into an explicit four-way switch and the historically contradictory `msg: "Successfully pushed changes" success: false` log line is fixed. Retry counter lives on the monitor (`PrFeedbackMonitorService.fixerTimeoutRetryCount`) and travels handler-ward via a new optional `retryAttempt?: number` field on `PrFeedbackMetadata`; resets only when all review threads are fully resolved (Case C). Cockpit `WAITING_PIPELINE_ORDER` gains the two terminal `blocked:fixer-timeout-*` labels ahead of `waiting-for:address-pr-feedback` (mirrors the `blocked:stuck-feedback-loop` precedence), while the retry-eligible `blocked:fixer-timeout` intentionally sorts below the active waiting gate.
+- cd811d1: Detect fixer-CLI self-commit cycles in PR-feedback handler by comparing branch HEAD SHA across the CLI invocation, so `blocked:stuck-feedback-loop` no longer lands on cycles that actually pushed a commit (#1073). New `@generacy-ai/workflow-engine` label vocabulary entry `blocked:resolve-failed` for the narrower case where code changes landed but thread reply/resolve failed — separated from `blocked:stuck-feedback-loop` because the two require different operator remediation (check GitHub API responses vs. read fixer transcripts). Orchestrator's `PrFeedbackHandler` disposition dispatcher gains a head-advance check between the CLI spawn and the pre-existing B1/B2/B3 branch; timeout branches (B4/B5/B6 from #1070) are unaffected. Log lines gain a `source: 'cli' | 'handler'` field on both the CLI-self-commit and handler-commit paths, and the CLI-self-commit path carries `preFixSha` + `postFixSha` so the head-advance claim is auditable rather than asserted (clarification Q4 caveat). The CLI-self-commit info line also carries a `handlerCommitted: boolean` field so operators can distinguish CLI-only, handler-only, and mixed (both committed) cycles from a single grep. Cockpit `WAITING_PIPELINE_ORDER` gains `blocked:resolve-failed` ahead of `waiting-for:address-pr-feedback` (mirrors the terminal `blocked:fixer-timeout-*` precedence). No changes to `PrFeedbackMonitorService`, `PrFeedbackMetadata`, `QueueItem`, or the `blocked:*` short-circuit; this is a producer-side fix.
+
+  **Operator-visible narrowing:** `blocked:stuck-feedback-loop` no longer originates from the zero-resolve path (previously reachable in principle but shown to be unreachable in practice; PR #1075 review). The label now only originates from the B1/B2/B3 branch (`!cliSelfCommitted && (!success || !hasChanges)`). A zero-resolve cycle after a real head-advance now always lands `blocked:resolve-failed`.
+
+- Updated dependencies [bdbde27]
+- Updated dependencies [66cf1d6]
+- Updated dependencies [349fdba]
+- Updated dependencies [63436bf]
+- Updated dependencies [cd811d1]
+  - @generacy-ai/workflow-engine@0.5.0
+
 ## 0.6.0
 
 ### Minor Changes
