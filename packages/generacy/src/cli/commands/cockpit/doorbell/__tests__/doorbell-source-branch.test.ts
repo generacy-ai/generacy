@@ -75,7 +75,7 @@ describe('runDoorbell branch selection', () => {
           /* do not throw */
         },
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -113,14 +113,17 @@ describe('runDoorbell branch selection', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
     expect(code).toBe(0);
     expect(stdout.chunks[0]).toBe('armed\n');
     expect(smeeFactory).toHaveBeenCalled();
-    expect(acquireBus).not.toHaveBeenCalled();
+    // acquireBus is called once — for the answers-file tailer (#1023) —
+    // even in smee mode, so `cockpit_await_events` sees gate-answer
+    // events. Poll-mode's own acquire is NOT called in smee mode.
+    expect(acquireBus).toHaveBeenCalledTimes(1);
   });
 
   it('malformed channel file → poll-mode path taken with malformed warn', async () => {
@@ -145,7 +148,7 @@ describe('runDoorbell branch selection', () => {
         channelFilePath: '/tmp/bogus',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn },
+        logger: { warn, info: () => undefined },
       },
     );
 
@@ -226,7 +229,7 @@ describe('runDoorbell branch selection', () => {
           channelFilePath: '/tmp/nonexistent',
           exit: () => undefined,
           abortSignal: abort.signal,
-          logger: { warn: () => undefined },
+          logger: { warn: () => undefined, info: () => undefined },
         },
       );
 

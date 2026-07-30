@@ -1,6 +1,11 @@
 import { firstToken } from './heading-match.js';
 import { parseRef } from './ref-shapes.js';
-import type { IssueRef, ParsedEpicBody, ParsedPhase } from './types.js';
+import type {
+  IssueRef,
+  ParsedEpicBody,
+  ParsedPhase,
+  ParseEpicBodyOptions,
+} from './types.js';
 
 const HEADING_L3_RE = /^###\s+(.+?)\s*$/;
 const HEADING_L4_PLUS_RE = /^####+\s+/;
@@ -27,6 +32,9 @@ const REF_SHAPED_RE =
 //   - "URL path not /(issues|pull)/N"
 const BARE_HASH_N_RE = /^#\d+$/;
 const URL_LIKE_RE = /^https?:\/\//;
+// #1014: validates ParseEpicBodyOptions.defaultRepo. Mirrors the OWNER_REPO
+// char class in ref-shapes.ts:3. Malformed → warn + treat as absent (never throws).
+const DEFAULT_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 function classifyRejection(token: string): string {
   if (BARE_HASH_N_RE.test(token)) {
     return "unrecognised shape — bare '#N' shorthand is not accepted";
@@ -54,23 +62,48 @@ function dedupKey(ref: IssueRef): string {
  *
  * Grammar (see contracts/resolver.md):
  *   - Heading (level 3): `^### (.+)$` — opens a phase.
- *   - Heading (level 4+): `^#### … $` — closes the current phase.
+ *   - Heading (level 4+, phase-shaped): `^####+ (P\d+…|…phase…)` — opens a phase
+ *     (flat sibling to any surrounding `###` phase; #1014 FR-001).
+ *   - Heading (level 4+, non-phase-shaped): `^####+ …` — transparent, does NOT
+ *     close the current phase (#1014 FR-002).
  *   - Heading (level 2): `^## …$` — ignored.
  *   - Task-list item: `^\s*- \[[ xX]\] (ref-shape)` — appends a ref to the current phase.
  *
  * Rejected but ref-shaped lines (e.g. bare `#N`) produce a `warnings[]` entry.
+ * When `options.defaultRepo` is set, bare `#N` inside checkbox items is
+ * resolved to `<defaultRepo>#N` instead (#1014 FR-004).
+ *
  * Pure function — no throws, no I/O.
  */
-export function parseEpicBody(body: string): ParsedEpicBody {
+export function parseEpicBody(
+  body: string,
+  options?: ParseEpicBodyOptions,
+): ParsedEpicBody {
   const phases: ParsedPhase[] = [];
   const warnings: string[] = [];
   const globalRefs = new Map<string, IssueRef>();
   const adhocRefs: IssueRef[] = [];
   const adhocSeen = new Set<string>();
 
+  // #1014 (FR-003): validate defaultRepo up front. On mismatch, emit one
+  // warning with marker substring `invalid defaultRepo` and behave as if
+  // the option were absent. Never throws.
+  let effectiveDefaultRepo: string | undefined;
+  if (options?.defaultRepo !== undefined) {
+    if (DEFAULT_REPO_RE.test(options.defaultRepo)) {
+      effectiveDefaultRepo = options.defaultRepo;
+    } else {
+      warnings.push(
+        `cockpit: parseEpicBody: invalid defaultRepo '${options.defaultRepo}' (invalid defaultRepo)`,
+      );
+    }
+  }
+
   let current: ParsedPhase | null = null;
   let currentSeen = new Set<string>();
   let sawPhaseShapedH4 = false;
+  let sawH3Phase = false;
+  let sawMixedHeadingLevels = false;
 
   const lines = body.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
@@ -80,10 +113,19 @@ export function parseEpicBody(body: string): ParsedEpicBody {
     if (HEADING_L4_PLUS_RE.test(line)) {
       const text = line.replace(/^####+\s+/, '').trim();
       if (PHASE_SHAPED_H4_RE.test(text)) {
+        // #1014 (FR-001): phase-shaped H4 opens a new phase, mirroring the
+        // H3 branch's semantics. Flat sibling to any surrounding H3 phase.
         sawPhaseShapedH4 = true;
+        const heading = text;
+        const token = firstToken(heading);
+        current = { heading, token, refs: [] };
+        currentSeen = new Set();
+        phases.push(current);
+        if (sawH3Phase) sawMixedHeadingLevels = true;
       }
-      current = null;
-      currentSeen = new Set();
+      // #1014 (FR-002): non-phase-shaped H4+ is transparent — do NOT close
+      // the current phase, do NOT reset currentSeen. Enables `#### Notes`
+      // sub-sections whose child refs continue to attribute to the current phase.
       continue;
     }
 
@@ -105,6 +147,8 @@ export function parseEpicBody(body: string): ParsedEpicBody {
       current = { heading, token, refs: [] };
       currentSeen = new Set();
       phases.push(current);
+      sawH3Phase = true;
+      if (sawPhaseShapedH4) sawMixedHeadingLevels = true;
       continue;
     }
 
@@ -118,7 +162,21 @@ export function parseEpicBody(body: string): ParsedEpicBody {
     // ^…$-anchored shape.
     const refToken = refText.split(/\s+/)[0]!;
 
-    const ref = parseRef(refToken);
+    let ref = parseRef(refToken);
+    // #1014 (FR-004): under an effectiveDefaultRepo, a bare `#N` inside a
+    // TASK_LIST_RE line synthesizes { repo: effectiveDefaultRepo, number }.
+    // Applies only inside checkbox items (FR-013); non-checkbox lines never
+    // reach here.
+    if (
+      ref == null &&
+      effectiveDefaultRepo !== undefined &&
+      BARE_HASH_N_RE.test(refToken)
+    ) {
+      const n = Number.parseInt(refToken.slice(1), 10);
+      if (Number.isFinite(n) && n > 0) {
+        ref = { repo: effectiveDefaultRepo, number: n };
+      }
+    }
     if (ref == null) {
       // First-token silence rule (FR-007): if the first token is not ref-shaped,
       // stay silent regardless of what appears later on the line — prose
@@ -173,6 +231,15 @@ export function parseEpicBody(body: string): ParsedEpicBody {
     const n = adhocRefs.length;
     warnings.push(
       `cockpit: ${n} task ref${n === 1 ? '' : 's'} fell to ad-hoc; phase headers must be '###', found '####'`,
+    );
+  }
+
+  // #1014 (FR-012): body mixes H3 and phase-shaped H4 phase headings. Every
+  // phase-shaped heading opens a top-level phase (flat siblings). Exactly one
+  // warning per call regardless of count. Marker substring `mixed phase heading levels`.
+  if (sawMixedHeadingLevels) {
+    warnings.push(
+      "cockpit: body mixes '###' and '####' phase headings; every phase-shaped heading opens a top-level phase (mixed phase heading levels)",
     );
   }
 

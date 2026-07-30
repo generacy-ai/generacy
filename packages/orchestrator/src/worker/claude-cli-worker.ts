@@ -582,6 +582,7 @@ export class ClaudeCliWorker {
         item.repo,
         item.issueNumber,
         workerLogger,
+        checkoutPath, // #1051 FR-002: cwd for the pre-push guard's git ls-remote
       );
 
       // 7b. On resume, clean up gate labels before starting the phase loop

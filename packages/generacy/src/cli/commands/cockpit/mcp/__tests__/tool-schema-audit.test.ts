@@ -12,12 +12,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { buildMcpServer } from '../server.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TOOLS_DIR = join(__dirname, '..', 'tools');
 const CLI_DIR = join(__dirname, '..', '..');
 
-type RefKind = 'issue' | 'epic' | 'scope';
+type RefKind = 'issue' | 'epic' | 'scope' | 'gate';
 
 /**
  * The audit table. Each entry names the wrapped CLI verb's REF kind — this
@@ -25,6 +26,10 @@ type RefKind = 'issue' | 'epic' | 'scope';
  *
  *   'issue' — the wrapped verb operates on a single issue ref
  *   'epic'  — the wrapped verb operates on an epic ref
+ *   'scope' — the wrapped verb operates on a scope issue's body (add/remove)
+ *   'gate'  — #1022 remote-gate tools; no ref field (input is a gate record
+ *             or a `{gateId,outcome,detail?}` triple). Ref-field assertion is
+ *             skipped for this kind — see the per-kind block below.
  */
 const EXPECTED_KIND: Record<string, RefKind> = {
   cockpit_status: 'epic',
@@ -42,6 +47,17 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   // #958 — deterministic clarification-answer relay. Wraps an issue ref
   // (marker-stamped comment posted + completed:clarification applied).
   cockpit_relay_clarify_answers: 'issue',
+  // #1015 — active-driver claim MCP tools. Both take a `scope` field
+  // (the epic-or-tracking issue whose claim state is being manipulated).
+  cockpit_claim: 'scope',
+  cockpit_release: 'scope',
+  // #1022 — remote-gate tools. No ref field; see the 'gate' RefKind doc.
+  cockpit_gate_open: 'gate',
+  cockpit_gate_ack: 'gate',
+  // #1038 — read-only gate-query tools. Same 'gate' kind (no ref field —
+  // input is a query descriptor, not an issue ref).
+  cockpit_gate_status: 'gate',
+  cockpit_gate_list: 'gate',
 };
 
 /**
@@ -53,6 +69,8 @@ const SCHEMA_FIELD_BY_KIND: Record<RefKind, string> = {
   issue: 'issue',
   epic: 'epic',
   scope: 'scope',
+  // 'gate' kind has no canonical ref field — assertion is skipped below.
+  gate: '',
 };
 
 /**
@@ -64,6 +82,7 @@ const CLI_TOKENS_BY_KIND: Record<RefKind, string[]> = {
   issue: ['<issue>', '<issue-ref>', '[issue]'],
   epic: ['<epic>', '<epic-ref>'],
   scope: ['<scope-ref>'],
+  gate: [],
 };
 
 /**
@@ -84,6 +103,18 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   // #958 — MCP-first tool. `runClarifyRelay` is not exposed as a top-level
   // Commander verb in v1 (the skill invokes the MCP tool directly).
   cockpit_relay_clarify_answers: null,
+  // #1015 — MCP-only tools. Skill-side CLI wiring lives in the agency repo.
+  cockpit_claim: null,
+  cockpit_release: null,
+  // #1022 — Q3 → A exception to design invariant #1: no CLI twin. Rationale
+  // documented in server.ts above the two registrations. Mocked-orchestrator
+  // parity tests (parity-gate-*.test.ts) exercise the code paths a CLI twin
+  // would have.
+  cockpit_gate_open: null,
+  cockpit_gate_ack: null,
+  // #1038 — same invariant-#1 exception (read-only query tools).
+  cockpit_gate_status: null,
+  cockpit_gate_list: null,
 };
 
 const schemasSource = readFileSync(
@@ -106,24 +137,101 @@ describe('#928 Q3 → B tool-schema audit table', () => {
     }
   });
 
+  it('buildMcpServer({}) registers every cockpit_* tool named in the audit table (#1022)', () => {
+    const server = buildMcpServer({});
+    // Access the SDK's private registered-tools map for introspection.
+    const registered = (server as unknown as { _registeredTools: Record<string, unknown> })
+      ._registeredTools;
+    expect(registered, 'buildMcpServer must expose registered tools').toBeDefined();
+    const registeredNames = Object.keys(registered);
+    for (const tool of Object.keys(EXPECTED_KIND)) {
+      expect(
+        registeredNames,
+        `${tool} must be registered by buildMcpServer`,
+      ).toContain(tool);
+    }
+    // Sanity: the two #1022 tools are in the built server.
+    expect(registeredNames).toContain('cockpit_gate_open');
+    expect(registeredNames).toContain('cockpit_gate_ack');
+    // #1038 — the two read-only query tools must also be in the built server.
+    expect(registeredNames).toContain('cockpit_gate_status');
+    expect(registeredNames).toContain('cockpit_gate_list');
+  });
+
+  // #1038 T053 — read-only query tools reject `{}` (missing required fields)
+  // and accept canonical fixture inputs (see quickstart.md § Usage).
+  describe('#1038 — read-only query tool input schemas', () => {
+    it('cockpit_gate_status rejects {} with missing fields', async () => {
+      const { CockpitGateStatusInputSchema } = await import('../schemas.js');
+      const result = CockpitGateStatusInputSchema.safeParse({});
+      expect(result.success).toBe(false);
+    });
+
+    it('cockpit_gate_status accepts the canonical fixture input', async () => {
+      const { CockpitGateStatusInputSchema } = await import('../schemas.js');
+      const result = CockpitGateStatusInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1038',
+        gateType: 'clarification',
+        generation: 'abc123def456',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('cockpit_gate_list rejects {} with missing fields', async () => {
+      const { CockpitGateListInputSchema } = await import('../schemas.js');
+      const result = CockpitGateListInputSchema.safeParse({});
+      expect(result.success).toBe(false);
+    });
+
+    it('cockpit_gate_list accepts the canonical fixture input', async () => {
+      const { CockpitGateListInputSchema } = await import('../schemas.js');
+      const result = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1038',
+        gateType: 'clarification',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('cockpit_gate_list accepts input without gateType', async () => {
+      const { CockpitGateListInputSchema } = await import('../schemas.js');
+      const result = CockpitGateListInputSchema.safeParse({
+        issueRef: 'generacy-ai/generacy#1038',
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
   for (const [toolName, kind] of Object.entries(EXPECTED_KIND)) {
     describe(`${toolName} → ${kind}`, () => {
-      it(`schemas.ts declares a "${SCHEMA_FIELD_BY_KIND[kind]}:" field on the tool's input schema`, () => {
-        const schemaName = mcpToolToSchemaName(toolName);
-        const source = schemasSource;
-        // Extract the schema definition body.
-        const bodyRegex = new RegExp(
-          `${schemaName}\\s*=\\s*z[\\s\\S]*?\\.strict\\(\\)`,
-          'm',
-        );
-        const match = bodyRegex.exec(source);
-        expect(match, `${schemaName} not found or not .strict() in schemas.ts`).not.toBeNull();
-        const body = match![0];
-        const fieldRegex = new RegExp(
-          `\\b${SCHEMA_FIELD_BY_KIND[kind]}\\s*:`,
-        );
-        expect(fieldRegex.test(body), `${schemaName} must declare a "${SCHEMA_FIELD_BY_KIND[kind]}:" field`).toBe(true);
-      });
+      if (kind === 'gate') {
+        // #1022 — gate tools carry no ref field; the schema-field audit does
+        // not apply. Assert instead that the two symbols are exported from
+        // schemas.ts so the tool handlers have a stable import surface.
+        it(`schemas.ts exports the tool's input schema symbol`, () => {
+          const schemaName = mcpToolToSchemaName(toolName);
+          const exportRegex = new RegExp(`export const ${schemaName}\\b`);
+          expect(exportRegex.test(schemasSource), `${schemaName} must be exported from schemas.ts`).toBe(
+            true,
+          );
+        });
+      } else {
+        it(`schemas.ts declares a "${SCHEMA_FIELD_BY_KIND[kind]}:" field on the tool's input schema`, () => {
+          const schemaName = mcpToolToSchemaName(toolName);
+          const source = schemasSource;
+          // Extract the schema definition body.
+          const bodyRegex = new RegExp(
+            `${schemaName}\\s*=\\s*z[\\s\\S]*?\\.strict\\(\\)`,
+            'm',
+          );
+          const match = bodyRegex.exec(source);
+          expect(match, `${schemaName} not found or not .strict() in schemas.ts`).not.toBeNull();
+          const body = match![0];
+          const fieldRegex = new RegExp(
+            `\\b${SCHEMA_FIELD_BY_KIND[kind]}\\s*:`,
+          );
+          expect(fieldRegex.test(body), `${schemaName} must declare a "${SCHEMA_FIELD_BY_KIND[kind]}:" field`).toBe(true);
+        });
+      }
 
       const verbFile = CLI_VERB_FILE[toolName];
       if (verbFile !== null) {

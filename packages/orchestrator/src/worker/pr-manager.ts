@@ -1,6 +1,21 @@
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
-import type { WorkflowPhase, Logger } from './types.js';
+import { resolveIssueBranch, simpleGit } from '@generacy-ai/workflow-engine';
+import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
+import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
+import { defaultRemoteBranchExists } from './repo-checkout.js';
+
+/**
+ * Internal discriminated union returned by `commitAndPush`. Loosely mirrors
+ * the wire shape historically returned as a bare `boolean` (true = pushed or
+ * unchanged-no-refusal; false = nothing to commit) with an added `refused`
+ * variant so `commitPushAndEnsurePr` can distinguish "guard refused" from
+ * "nothing to commit". PR #1052 review Findings 2+3.
+ */
+type CommitAndPushOutcome =
+  | { kind: 'pushed' }
+  | { kind: 'no-changes' }
+  | { kind: 'refused'; refusal: Extract<PushGuardDecision, { kind: 'refuse' }> };
 
 /**
  * Manages draft PR creation and git commit/push operations between workflow phases.
@@ -22,6 +37,12 @@ export class PrManager {
     private readonly repo: string,
     private readonly issueNumber: number,
     private readonly logger: Logger,
+    /**
+     * #1051 FR-002: cwd for the pre-push guard's `git ls-remote` call.
+     * Optional so existing tests (which construct PrManager without a checkout
+     * path) keep passing — the default helper falls back to the process cwd.
+     */
+    private readonly checkoutPath?: string,
   ) {}
 
   /**
@@ -45,13 +66,31 @@ export class PrManager {
    * Safe to call after every phase — handles "nothing to commit" and
    * "PR already exists" gracefully.
    *
-   * @returns An object with the PR URL (if available) and whether changes were produced
-   * (either uncommitted changes we commit, or commits the phase made directly).
+   * PR #1052 review Finding 2: when the pre-push guard refuses (merged/closed
+   * PR, or open PR with a missing branch), this method MUST short-circuit
+   * BEFORE `ensureDraftPr()` — otherwise the guard blocks the push but
+   * `ensureDraftPr` still opens a duplicate `Closes #N` PR against the
+   * merged/deleted branch, defeating the guard entirely. The returned
+   * `CommitResult.pushRefused` field is the signal for the phase loop to
+   * abort the workflow (see Finding 3).
+   *
+   * @returns A `CommitResult` — `pushRefused` is present iff the guard
+   * refused; when absent the phase completed normally.
    */
-  async commitPushAndEnsurePr(phase: WorkflowPhase, options?: { message?: string }): Promise<{ prUrl?: string; hasChanges: boolean }> {
-    const hasChanges = await this.commitAndPush(phase, options?.message);
+  async commitPushAndEnsurePr(phase: WorkflowPhase, options?: { message?: string }): Promise<CommitResult> {
+    const outcome = await this.commitAndPush(phase, options?.message);
+    if (outcome.kind === 'refused') {
+      // Do NOT call ensureDraftPr — otherwise the guard blocks the push but
+      // the very next line opens a duplicate PR that claims `Closes #N`
+      // against a merged/deleted branch (PR #1052 review Finding 2).
+      const { reason, prNumber, branch, owner, repo, issueNumber } = outcome.refusal;
+      return {
+        hasChanges: false,
+        pushRefused: { reason, prNumber, branch, owner, repo, issueNumber },
+      };
+    }
     const prUrl = await this.ensureDraftPr();
-    return { prUrl, hasChanges };
+    return { ...(prUrl !== undefined ? { prUrl } : {}), hasChanges: outcome.kind === 'pushed' };
   }
 
   /**
@@ -60,9 +99,17 @@ export class PrManager {
    * Handles both cases: uncommitted changes (we commit them) and changes the
    * phase already committed directly (detected via unpushed commits).
    *
-   * @returns true if changes were produced (committed or already committed), false otherwise.
+   * PR #1052 review Finding 3: returns a discriminated `CommitAndPushOutcome`
+   * so the caller can distinguish "guard refused" (`refused`) from
+   * "nothing to push" (`no-changes`) and "pushed successfully" (`pushed`).
+   * A bare boolean return would collapse `refused` into `no-changes`, causing
+   * the phase loop to mark the phase complete and advance — with zero commits
+   * having reached origin.
    */
-  private async commitAndPush(phase: WorkflowPhase, customMessage?: string): Promise<boolean> {
+  private async commitAndPush(
+    phase: WorkflowPhase,
+    customMessage?: string,
+  ): Promise<CommitAndPushOutcome> {
     try {
       let committed = false;
 
@@ -99,7 +146,7 @@ export class PrManager {
 
       if (!committed && !hasUnpushed) {
         this.logger.debug({ phase }, 'No changes to commit or push after phase');
-        return false;
+        return { kind: 'no-changes' };
       }
 
       if (hasUnpushed) {
@@ -109,6 +156,31 @@ export class PrManager {
             'Phase committed its own changes — pushing to remote',
           );
         }
+
+        // #1051 FR-002/003: pre-push guard. Refuses the push when the PR has
+        // already merged/closed or the remote branch is missing — prevents a
+        // re-entering worker from resurrecting a deleted branch and opening a
+        // duplicate PR that claims `Closes #<already-closed>`. Applies to both
+        // uncommitted-then-committed changes and phase-committed changes since
+        // both funnel through this push site.
+        const decision = await evaluatePushGuard({
+          owner: this.owner,
+          repo: this.repo,
+          issueNumber: this.issueNumber,
+          branch,
+          github: this.github,
+          git: {
+            remoteBranchExists: (b) => defaultRemoteBranchExists(b, this.checkoutPath),
+          },
+        });
+        if (decision.kind === 'refuse') {
+          await this.handlePushRefused(decision);
+          // PR #1052 review Finding 3: propagate the refusal so the caller
+          // (`commitPushAndEnsurePr` → phase loop) can distinguish this from
+          // a legitimate "nothing to commit" and abort the workflow.
+          return { kind: 'refused', refusal: decision };
+        }
+
         // Push to remote (set upstream on first push)
         const pushResult = await this.github.push('origin', branch, true);
         this.logger.info(
@@ -117,14 +189,14 @@ export class PrManager {
         );
       }
 
-      return true;
+      return { kind: 'pushed' };
     } catch (error) {
       // Log but don't fail the workflow — commit/push is best-effort between phases
       this.logger.warn(
         { phase, error: String(error) },
         'Failed to commit/push after phase (non-fatal)',
       );
-      return false;
+      return { kind: 'no-changes' };
     }
   }
 
@@ -136,6 +208,83 @@ export class PrManager {
    *
    * @returns The PR URL, or undefined if creation failed.
    */
+  /**
+   * Best-effort #1043 dedup probe.
+   *
+   * If an `<N>-*` branch other than the current checkout already has an OPEN
+   * PR, adopt that PR (record its number/URL and return the URL so the caller
+   * stops). A PR-less canonical branch is IGNORED (Q2=A) — logged and skipped
+   * so the caller proceeds to create a PR on the current branch.
+   *
+   * Every failure is swallowed (logged as non-fatal) so this probe can never
+   * disrupt normal PR creation or leave `this.prNumber` unset. In particular,
+   * `resolveIssueBranch`/`simpleGit` may be unavailable or a GitHub client
+   * method may be missing (e.g. in tests) — that must not abort PR creation.
+   *
+   * @returns the adopted PR URL if a canonical open PR was adopted, else undefined.
+   */
+  private async tryAdoptCanonicalPr(branch: string): Promise<string | undefined> {
+    try {
+      const canonical = await resolveIssueBranch({
+        issueNumber: this.issueNumber,
+        owner: this.owner,
+        repo: this.repo,
+        github: this.github,
+        git: simpleGit(),
+        logger: this.logger,
+      });
+
+      if (canonical && canonical.branchName !== branch) {
+        const adoptedPr = await this.github.findPRForBranch(
+          this.owner,
+          this.repo,
+          canonical.branchName,
+        );
+        if (adoptedPr) {
+          this.prNumber = adoptedPr.number;
+          this.prUrl = `https://github.com/${this.owner}/${this.repo}/pull/${adoptedPr.number}`;
+          this.logger.info(
+            {
+              event: 'workflow-reentry-branch-mismatch',
+              issueNumber: this.issueNumber,
+              currentBranch: branch,
+              canonicalBranch: canonical.branchName,
+              source: canonical.source,
+              anchoringPrNumber: canonical.anchoringPrNumber,
+              action: 'adopted',
+            },
+            'workflow-reentry-branch-mismatch',
+          );
+          return this.prUrl;
+        }
+        // #1043 Finding 1 (Q2=A): the resolver reported a canonical `<N>-*`
+        // branch that differs from our checkout but has NO open PR. A PR-less
+        // `<N>-*` branch must be IGNORED — it is not canonical. Do NOT no-op
+        // (that permanently stalls PR creation for the real work branch); the
+        // caller falls through to create a PR on the current branch.
+        this.logger.info(
+          {
+            event: 'workflow-reentry-branch-mismatch',
+            issueNumber: this.issueNumber,
+            currentBranch: branch,
+            canonicalBranch: canonical.branchName,
+            source: canonical.source,
+            anchoringPrNumber: canonical.anchoringPrNumber,
+            action: 'ignored-prless-canonical',
+          },
+          'workflow-reentry-branch-mismatch',
+        );
+      }
+    } catch (error) {
+      // Best-effort: a dedup failure must NEVER abort PR creation.
+      this.logger.warn(
+        { issueNumber: this.issueNumber, error: String(error) },
+        'workflow-reentry dedup probe failed (non-fatal) — proceeding with normal PR creation',
+      );
+    }
+    return undefined;
+  }
+
   private async ensureDraftPr(): Promise<string | undefined> {
     // If we already know the PR URL, return it
     if (this.prUrl) {
@@ -144,6 +293,23 @@ export class PrManager {
 
     try {
       const branch = await this.github.getCurrentBranch();
+
+      // #1043 defense-in-depth: before opening a new PR, check whether an
+      // `<N>-*` branch/PR already anchors this issue. Prevents pr-manager
+      // from being the sole dedup site when createFeature's resolver
+      // callback is not wired.
+      //
+      // This probe is best-effort — `tryAdoptCanonicalPr` isolates it in its
+      // own try/catch so that ANY failure (resolver throw, an unavailable
+      // client method such as a mock without `listOpenPullRequests`, or a git
+      // error) falls through to the normal PR-creation path below rather than
+      // aborting it. Without this isolation a dedup failure would leave
+      // `this.prNumber` unset and silently break the markReadyForReview-on-
+      // completion flow (#1043 review follow-up).
+      const adoptedUrl = await this.tryAdoptCanonicalPr(branch);
+      if (adoptedUrl) {
+        return adoptedUrl;
+      }
 
       // Check if a PR already exists for this branch
       const existingPr = await this.github.findPRForBranch(this.owner, this.repo, branch);
@@ -183,6 +349,63 @@ export class PrManager {
         'Failed to ensure draft PR (non-fatal)',
       );
       return undefined;
+    }
+  }
+
+  /**
+   * #1051 FR-003: react to a `refuse` decision from the pre-push guard.
+   *
+   * Mirrors the same warn shape as `PrFeedbackHandler.handlePushRefused` so a
+   * grep for `event: 'push-refused'` reveals every refusal site (T061). Best-
+   * effort label mutation: `agent:in-progress` cleared unconditionally,
+   * `agent:error` added only when the linked issue is still open.
+   *
+   * Deliberately typed via `Extract<PushGuardDecision, ...>` (PR #1052 review
+   * Finding 1) so a new refusal reason on the guard cannot desynchronize this
+   * signature. `pr-lookup-failed` is treated the same as the other reasons on
+   * purpose — a safety gate that could not verify state is still a refusal an
+   * operator needs to see (`agent:error` on an open issue), and the reason
+   * literal in the warn log lets triage distinguish "we could not determine
+   * safety" from "we determined it is unsafe".
+   */
+  private async handlePushRefused(
+    decision: Extract<PushGuardDecision, { kind: 'refuse' }>,
+  ): Promise<void> {
+    const { reason, prNumber, branch, owner, repo, issueNumber } = decision;
+    this.logger.warn(
+      { event: 'push-refused', reason, prNumber, branch, owner, repo, issueNumber },
+      'Refusing push — PR state or remote branch state indicates a resurrection or duplicate-PR attempt',
+    );
+
+    let issueState: 'open' | 'closed' = 'open';
+    try {
+      const issue = await this.github.getIssue(owner, repo, issueNumber);
+      issueState = issue.state;
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to read issue state — assuming open',
+      );
+    }
+
+    try {
+      await this.github.removeLabels(owner, repo, issueNumber, ['agent:in-progress']);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to remove agent:in-progress — non-fatal',
+      );
+    }
+
+    if (issueState === 'open') {
+      try {
+        await this.github.addLabels(owner, repo, issueNumber, ['agent:error']);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'handlePushRefused: failed to add agent:error — non-fatal',
+        );
+      }
     }
   }
 

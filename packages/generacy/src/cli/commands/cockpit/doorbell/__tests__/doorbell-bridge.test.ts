@@ -120,7 +120,7 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -152,8 +152,11 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
       expect(sel.currentSource).toBe('smee-active');
       // Smee source never stopped by mode-change handler.
       expect(smee.stop).not.toHaveBeenCalled();
-      // Poll subscriber never opened.
-      expect(acquireBus).not.toHaveBeenCalled();
+      // Poll subscriber never opened. acquireBus is called once — for the
+      // answers-file tailer's bridge (#1023) — but poll-mode subscribe was
+      // never opened (the tailer's acquire returns undefined here, so no
+      // subscribe/release is wired up).
+      expect(acquireBus).toHaveBeenCalledTimes(1);
       // Stdout stream still open.
       expect(stdout.ended).toBe(false);
     } finally {
@@ -193,7 +196,7 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -261,7 +264,7 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 

@@ -31,6 +31,7 @@ function loadFromEnv(): Record<string, unknown> {
       github: {},
     },
     rateLimit: {},
+    lease: {},
     cors: {},
     logging: {},
     repositories: undefined,
@@ -77,6 +78,12 @@ function loadFromEnv(): Record<string, unknown> {
   if (process.env[`${ENV_PREFIX}GITHUB_CALLBACK_URL`]) {
     ((config.auth as Record<string, unknown>).github as Record<string, unknown>).callbackUrl =
       process.env[`${ENV_PREFIX}GITHUB_CALLBACK_URL`];
+  }
+
+  // Lease config (#1016): enforcement is opt-in
+  if (process.env[`${ENV_PREFIX}LEASE_ENFORCE`]) {
+    (config.lease as Record<string, unknown>).enforce =
+      process.env[`${ENV_PREFIX}LEASE_ENFORCE`] === 'true';
   }
 
   // Rate limit config

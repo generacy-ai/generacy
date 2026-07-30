@@ -27,6 +27,9 @@ const mockGithub = {
   push: vi.fn().mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' }),
   getCurrentBranch: vi.fn().mockResolvedValue('feature/42'),
   findPRForBranch: vi.fn().mockResolvedValue(null),
+  // #1051 pre-push guard mock — defaults to "no PR in any state" so the
+  // guard falls through to the branch-existence check → allow.
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
   getDefaultBranch: vi.fn().mockResolvedValue('develop'),
   createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
   markPRReady: vi.fn().mockResolvedValue(undefined),
@@ -57,6 +60,14 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   }),
   registerProcessLauncher: vi.fn(),
   clearProcessLauncher: vi.fn(),
+  // #1043: PrManager.ensureDraftPr imports these for its best-effort dedup
+  // probe. Provide them so the mock module surface matches the real one —
+  // otherwise the probe throws on an undefined `resolveIssueBranch` and (before
+  // the try/catch isolation fix) would abort PR creation. Default to "no
+  // canonical branch" so the probe is a clean no-op and the normal PR-creation
+  // path runs. Dedup/adoption behavior is covered by pr-manager-issue-dedup.test.ts.
+  resolveIssueBranch: vi.fn().mockResolvedValue(null),
+  simpleGit: vi.fn(() => ({})),
   // #889: LabelManager imports WORKFLOW_LABELS to drive the ensure-pass.
   // Provide it here so the mock module surface matches the real one.
   WORKFLOW_LABELS: [],

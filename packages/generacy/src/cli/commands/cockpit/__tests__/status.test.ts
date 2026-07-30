@@ -294,11 +294,12 @@ describe('runStatus', () => {
       expect(parsed.warnings).toEqual([]);
     });
 
-    it('emits H4-phase-header marker on the snappoll fixture body', async () => {
+    it('emits mixed-heading-levels marker on the snappoll fixture body (#1014)', async () => {
       const gh = new FakeGh({
         bodyByIssue: { 'christrudelpw/snappoll#1': SNAPPOLL_BODY },
-        // All 12 refs fall to ad-hoc, so issuesByQuery is exercised per repo
-        // batch — but the resolver's warning fires regardless of GH results.
+        // #1014 rescue: H4 phases now open and carry their refs, so refs no
+        // longer fall to ad-hoc. Since the fixture mixes `###` and `####`
+        // phase-shaped headings, the new mixed-heading-levels warning fires.
         issuesByQuery: (): Issue[] => [],
       });
       const out: string[] = [];
@@ -312,7 +313,7 @@ describe('runStatus', () => {
       expect(Array.isArray(parsed.warnings)).toBe(true);
       expect(parsed.warnings.length).toBeGreaterThanOrEqual(1);
       expect(
-        parsed.warnings.some((w: string) => w.includes("phase headers must be '###'")),
+        parsed.warnings.some((w: string) => w.includes('mixed phase heading levels')),
       ).toBe(true);
     });
   });

@@ -183,6 +183,23 @@ export class FakeGh implements GhWrapper {
     throw new Error('postIssueComment not stubbed in FakeGh');
   }
 
+  async editIssueComment(
+    repo: string,
+    commentId: number,
+    body: string,
+  ): Promise<void> {
+    this.calls.push({ method: 'editIssueComment', args: [repo, commentId, body] });
+    throw new Error('editIssueComment not stubbed in FakeGh');
+  }
+
+  async deleteIssueComment(
+    repo: string,
+    commentId: number,
+  ): Promise<void> {
+    this.calls.push({ method: 'deleteIssueComment', args: [repo, commentId] });
+    throw new Error('deleteIssueComment not stubbed in FakeGh');
+  }
+
   async addAssignees(
     repo: string,
     issue: number,

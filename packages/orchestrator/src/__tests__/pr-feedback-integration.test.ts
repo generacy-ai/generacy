@@ -59,6 +59,9 @@ const mockGitHub = {
   push: vi.fn(),
   replyToPRComment: vi.fn(),
   resolveReviewThread: vi.fn(),
+  // #1051 pre-push guard: default to "no PR in any state" so the guard
+  // falls through to the branch-existence check and allows the push.
+  findPRForBranchAnyState: vi.fn().mockResolvedValue(null),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -182,6 +185,21 @@ class MockQueueManager implements QueueManager {
   async getQueueDepth(): Promise<number> { return this.enqueuedItems.length; }
   async getQueueItems(): Promise<QueueItemWithScore[]> { return []; }
   async getActiveWorkerCount(): Promise<number> { return 0; }
+
+  // #1054: no-op reap (matches InMemoryQueueAdapter).
+  async reapOrphanClaims(): Promise<import('../types/index.js').ReapReport> {
+    return {
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    };
+  }
+
+  // #1054: observability accessor; returns null when not in flight.
+  async hasInFlightAge(_itemKey: string): Promise<number | null> {
+    return null;
+  }
 
   clear(): void {
     this.enqueuedItems = [];
@@ -343,8 +361,9 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       command: 'address-pr-feedback',
     });
 
-    // Verify metadata
-    expect(enqueuedItem.metadata).toEqual({
+    // Verify metadata (#1070: metadata now also carries an optional
+    // `retryAttempt` field — use toMatchObject to accept the additive key).
+    expect(enqueuedItem.metadata).toMatchObject({
       prNumber: 100,
       reviewThreadIds: [1, 2],
     });
@@ -872,8 +891,9 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
       command: 'address-pr-feedback',
     });
 
-    // Verify metadata
-    expect(enqueuedItem.metadata).toEqual({
+    // Verify metadata (#1070: metadata now also carries an optional
+    // `retryAttempt` field — use toMatchObject to accept the additive key).
+    expect(enqueuedItem.metadata).toMatchObject({
       prNumber: 100,
       reviewThreadIds: [1, 2],
     });
@@ -1373,7 +1393,9 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       command: 'address-pr-feedback',
     });
 
-    expect(enqueuedItem.metadata).toEqual({
+    // #1070: metadata now also carries an optional `retryAttempt` field —
+    // use toMatchObject to accept the additive key.
+    expect(enqueuedItem.metadata).toMatchObject({
       prNumber: 100,
       reviewThreadIds: [1, 2],
     });
@@ -2480,6 +2502,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       prBody: 'Closes #4',
       branchName: '4-add-tests',
       source: 'webhook',
+      prMerged: false,
     });
 
     expect(result).toBe(true);
@@ -2503,5 +2526,142 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockReturnValue({ trusted: true, reason: 'owner' });
     }
     svc.stopPolling();
+  });
+});
+
+// ============================================================================
+// #1070 T060: end-to-end retry-then-succeed
+//
+// SC-002 primary field-scenario regression: a timeout with pushed commit on
+// cycle 1 should NOT be terminal — cycle 2 sees the retry-eligible label,
+// dispatches an auto-retry with `retryAttempt: 1`, and the handler completes
+// the resolve loop successfully. Final state has no `blocked:*` labels and
+// the counter is cleared via Case C.
+// ============================================================================
+describe('#1070 T060: retry-then-succeed end-to-end', () => {
+  let logger: Logger;
+  let queueAdapter: MockQueueManager;
+  let monitorService: PrFeedbackMonitorService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    logger = createMockLogger();
+    queueAdapter = new MockQueueManager();
+    monitorService = new PrFeedbackMonitorService(
+      logger,
+      () => mockGitHub as never,
+      queueAdapter,
+      {
+        enabled: true,
+        pollIntervalMs: 100,
+        adaptivePolling: false,
+        maxConcurrentPolls: 1,
+      },
+      [{ owner: 'test-org', repo: 'test-repo' }],
+    );
+
+    // Standard mock setup for the retry cycle.
+    mockGitHub.getPullRequest.mockResolvedValue({
+      number: 100,
+      title: 'Test PR',
+      body: 'Fixes #42',
+      head: { ref: '42-add-tests', sha: 'abc123' },
+      base: { ref: 'main' },
+      state: 'open',
+    });
+    mockGitHub.getIssue.mockResolvedValue({
+      number: 42,
+      title: 'Test issue',
+      body: '',
+      state: 'open',
+      labels: [
+        { name: 'agent:in-progress', color: '' },
+        { name: 'process:speckit-feature', color: '' },
+        // Cycle-1 remnant: retry-eligible label from a previous timeout.
+        { name: 'blocked:fixer-timeout', color: '' },
+      ],
+      assignees: ['reviewer'],
+      created_at: '',
+      updated_at: '',
+    });
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
+      { id: 1, path: 'src/a.ts', line: 5, body: 'change', author: 'reviewer',
+        authorAssociation: 'MEMBER', resolved: false },
+    ]));
+    mockGitHub.listOpenPullRequests.mockResolvedValue([]);
+    mockGitHub.addLabels.mockResolvedValue(undefined);
+    mockGitHub.removeLabels.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    monitorService.stopPolling();
+    queueAdapter.clear();
+  });
+
+  it('cycle 2 (retry): monitor removes blocked:fixer-timeout, enqueues with retryAttempt:1', async () => {
+    // First cycle: `blocked:fixer-timeout` present → retry-eligible branch fires.
+    (mockGitHub.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+      'blocked:fixer-timeout',
+    ]);
+
+    const result = await monitorService.processPrReviewEvent({
+      owner: 'test-org',
+      repo: 'test-repo',
+      prNumber: 100,
+      prBody: 'Fixes #42',
+      branchName: '42-add-tests',
+      source: 'webhook',
+      prMerged: false,
+    });
+
+    expect(result).toBe(true);
+
+    // The retry-eligible branch removed the label before dispatch.
+    expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['blocked:fixer-timeout'],
+    );
+
+    // Exactly one enqueue with `retryAttempt: 1` (auto-retry #1).
+    expect(queueAdapter.enqueuedItems).toHaveLength(1);
+    const item = queueAdapter.enqueuedItems[0]!;
+    expect(item.command).toBe('address-pr-feedback');
+    expect((item.metadata as { retryAttempt?: number }).retryAttempt).toBe(1);
+  });
+
+  it('final state: Case C reset clears the counter after all threads resolve', async () => {
+    // Cycle 1: retry-eligible dispatch → counter 1.
+    (mockGitHub.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+      'blocked:fixer-timeout',
+    ]);
+    await monitorService.processPrReviewEvent({
+      owner: 'test-org',
+      repo: 'test-repo',
+      prNumber: 100,
+      prBody: 'Fixes #42',
+      branchName: '42-add-tests',
+      source: 'webhook',
+      prMerged: false,
+    });
+    const monitorState = monitorService as unknown as {
+      fixerTimeoutRetryCount: Map<string, number>;
+    };
+    expect(monitorState.fixerTimeoutRetryCount.get('test-org/test-repo#100')).toBe(1);
+
+    // Cycle 2 (handler succeeded, all threads resolved on GitHub): Case C
+    // fires — monitor sees no unresolved threads and deletes the counter.
+    mockGitHub.getPRReviewThreads.mockResolvedValue([]);
+    // Clear the queue slot so a fresh enqueue can happen (simulating handler
+    // completion between polls).
+    queueAdapter.clear();
+    await monitorService.processPrReviewEvent({
+      owner: 'test-org',
+      repo: 'test-repo',
+      prNumber: 100,
+      prBody: 'Fixes #42',
+      branchName: '42-add-tests',
+      source: 'webhook',
+      prMerged: false,
+    });
+    expect(monitorState.fixerTimeoutRetryCount.get('test-org/test-repo#100')).toBeUndefined();
   });
 });

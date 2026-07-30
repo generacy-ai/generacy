@@ -105,6 +105,10 @@ describe('CockpitStreamEventSchema — lint-style caller enumeration', () => {
         // method, not stdout NDJSON, but the regex still matches.
         'mcp/event-bus.ts',
         'mcp/event-bus-registry.ts',
+        // Answers-file tailer (#1023) — the doorbell bridges gate-answer
+        // events into the shared bus so `cockpit_await_events` sees them.
+        // `busForTailer.emit(event)` is a method call, not stdout NDJSON.
+        'doorbell.ts',
       ].map((rel) => resolve(COCKPIT_DIR, rel)),
     );
     const found = new Set<string>();
@@ -127,7 +131,12 @@ describe('CockpitStreamEventSchema — README drift check', () => {
     const readmeTypes = new Set<string>();
     for (const match of readme.matchAll(rowRegex)) {
       const cell = match[1];
-      if (cell === 'issue-transition' || cell === 'phase-complete' || cell === 'epic-complete') {
+      if (
+        cell === 'issue-transition' ||
+        cell === 'phase-complete' ||
+        cell === 'epic-complete' ||
+        cell === 'gate-answer'
+      ) {
         readmeTypes.add(cell);
       }
     }
@@ -136,7 +145,7 @@ describe('CockpitStreamEventSchema — README drift check', () => {
     })._def.options;
     const schemaTypes = new Set(options.map((o) => o.shape.type.value));
     expect(readmeTypes).toEqual(schemaTypes);
-    expect(schemaTypes.size).toBe(3);
+    expect(schemaTypes.size).toBe(4);
   });
 });
 

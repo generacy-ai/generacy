@@ -27,6 +27,20 @@ export type TemplateName = 'spec' | 'plan' | 'tasks' | 'checklist' | 'agent-file
 // --- Input Types ---
 
 /**
+ * Callback that returns the canonical branch name for an issue by querying
+ * remote git state (open PRs + `<N>-*` branches). Introduced in #1043 as
+ * the injection seam that keeps `feature.ts` git-only while letting the
+ * orchestrator inject a `GitHubClient`.
+ *
+ * A non-null return value MUST match `/^\d+-[a-z0-9]+(?:-[a-z0-9]+)*$/`
+ * (`FEATURE_NAME_PATTERN` in `feature.ts`). Malformed returns are treated
+ * as `null` with a warn log by `createFeature`.
+ */
+export type ResolveExistingBranchCallback = (
+  issueNumber: number,
+) => Promise<string | null>;
+
+/**
  * Input for speckit.create_feature operation
  */
 export interface CreateFeatureInput {
@@ -40,6 +54,14 @@ export interface CreateFeatureInput {
   parent_epic_branch?: string;
   /** Working directory */
   cwd?: string;
+  /**
+   * NEW in #1043: optional callback that returns the canonical branch name
+   * for an issue (by querying remote branches + open PRs). When it returns
+   * a non-null value that passes `FEATURE_NAME_PATTERN`, `createFeature`
+   * uses that name and skips slug derivation. When unset or returning
+   * `null`, falls back to `buildBranchNameFromPattern()`.
+   */
+  resolveExistingBranch?: ResolveExistingBranchCallback;
 }
 
 /**

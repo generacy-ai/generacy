@@ -20,6 +20,8 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  Review,
+  ReviewSubmissionState,
   ReviewThread,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
@@ -679,6 +681,65 @@ export class GhCliGitHubClient implements GitHubClient {
     return threads;
   }
 
+  async listReviews(owner: string, repo: string, prNumber: number): Promise<Review[]> {
+    const result = await this.executeGh([
+      'api',
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+      '--paginate',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list reviews for PR #${prNumber}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Array<{
+      id: number;
+      user: { login: string } | null;
+      body: string | null;
+      state: string;
+      submitted_at: string;
+      author_association?: string;
+    }> | null;
+
+    if (!data) return [];
+
+    const allowedStates: ReadonlySet<ReviewSubmissionState> = new Set([
+      'APPROVED',
+      'CHANGES_REQUESTED',
+      'COMMENTED',
+      'DISMISSED',
+      'PENDING',
+    ]);
+
+    // #1047 Finding 7: skip individual reviews with unrecognized `state`
+    // rather than throwing for the whole batch. A single future GitHub state
+    // (or casing/shape drift) must not silently disable the entire
+    // #1047 gate — a skip with a debug log preserves every OTHER review's
+    // participation in the gate and keeps the operator informed.
+    const reviews: Review[] = [];
+    for (const r of data) {
+      if (!allowedStates.has(r.state as ReviewSubmissionState)) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[gh-cli] Skipping review ${r.id} on PR #${prNumber} — unrecognized state "${r.state}"`,
+        );
+        continue;
+      }
+      const review: Review = {
+        id: r.id,
+        user: { login: r.user?.login ?? '' },
+        body: r.body ?? '',
+        state: r.state as ReviewSubmissionState,
+        submittedAt: r.submitted_at,
+      };
+      if (typeof r.author_association === 'string' && r.author_association.length > 0) {
+        review.authorAssociation = r.author_association;
+      }
+      reviews.push(review);
+    }
+    return reviews;
+  }
+
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {
     const result = await this.executeGh([
       'api',
@@ -754,12 +815,16 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
+    // #1043 Finding 3: the issue-branch resolver filters this full list down to
+    // `<N>-*` head refs, so a low cap can hide the canonical PR for a
+    // high-numbered issue in a busy repo. `gh pr list --limit` paginates
+    // internally up to the limit; raise it well above any plausible open-PR count.
     const result = await this.executeGh([
       'pr', 'list',
       '-R', `${owner}/${repo}`,
       '--state', 'open',
       '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
-      '--limit', '100',
+      '--limit', '1000',
     ]);
 
     if (result.exitCode !== 0) {
@@ -789,16 +854,26 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listPrCommentBodies(owner: string, repo: string, prNumber: number): Promise<string[]> {
+    // #1047 Finding 1: bodies may contain internal newlines (Disposition-C
+    // marker + enumeration rows straddle multiple lines). Splitting raw
+    // `--jq '.comments[].body'` stdout on `\n` produced one element per LINE,
+    // not per comment — the marker line ended up alone in the array and the
+    // ack-parser saw zero enumeration rows. Fix: pull the JSON array of
+    // comments directly and extract each `.body` in JS, preserving internal
+    // newlines as-is.
     const result = await this.executeGh([
       'pr', 'view', String(prNumber),
       '--repo', `${owner}/${repo}`,
       '--json', 'comments',
-      '--jq', '.comments[].body',
     ]);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to list PR comments for ${owner}/${repo}#${prNumber}: ${result.stderr}`);
     }
-    return result.stdout.split('\n').filter(l => l.length > 0);
+    const data = parseJSONSafe(result.stdout) as { comments?: Array<{ body?: string }> } | null;
+    if (!data || !Array.isArray(data.comments)) return [];
+    return data.comments
+      .map(c => (typeof c.body === 'string' ? c.body : ''))
+      .filter(b => b.length > 0);
   }
 
   async postPrComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
@@ -846,6 +921,71 @@ export class GhCliGitHubClient implements GitHubClient {
       created_at: pr['createdAt'] as string,
       updated_at: pr['updatedAt'] as string,
     };
+  }
+
+  async findPRForBranchAnyState(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
+    // #1051 PR #1052 review Finding 7: raise the limit and prefer a merged PR
+    // if multiple exist. `--limit 1` returns newest by `created_at DESC`; a
+    // fixture with a MERGED PR older than a CLOSED PR on the same head branch
+    // (verified live against `884-problem-refreshaccesstoken`) would drop the
+    // MERGED and report `reason: 'pr-closed'` at the guard's less-diagnostic
+    // row. Merged-precedence is the intent (see push-guard.ts row 1); raise
+    // to a small ceiling (10) so we can pick a merged PR when both exist.
+    const result = await this.executeGh([
+      'pr', 'list',
+      '-R', `${owner}/${repo}`,
+      '--head', branch,
+      '--state', 'all',
+      '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
+      '--limit', '10',
+    ]);
+
+    // #1051 PR #1052 review Finding 4: throw on non-zero exit rather than
+    // silently returning null. `findPRForBranch` (open-only) also returns
+    // null on non-zero exit, but that method's callers do not rely on the
+    // absence of a PR to decide safety — they can fall through to
+    // `createPullRequest` which surfaces its own error. `push-guard.ts` DOES
+    // rely on the distinction: a rate-limited `gh` call collapsed to `null`
+    // reclassifies as "no PR ever" → the guard silently allows the exact
+    // resurrection push it exists to block. Throwing lets the guard treat
+    // the two cases differently (see guard's try/catch split).
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `findPRForBranchAnyState: gh pr list exited ${result.exitCode} for ${owner}/${repo} head=${branch}: ${result.stderr}`,
+      );
+    }
+
+    const data = parseJSONSafe(result.stdout) as Array<Record<string, unknown>> | null;
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    const mapRow = (pr: Record<string, unknown>): PullRequest => {
+      const stateRaw = String(pr['state'] ?? '').toLowerCase();
+      const state: 'open' | 'closed' | 'merged' =
+        stateRaw === 'merged' ? 'merged' : stateRaw === 'closed' ? 'closed' : 'open';
+      return {
+        number: pr['number'] as number,
+        title: pr['title'] as string,
+        body: pr['body'] as string ?? '',
+        state,
+        draft: pr['isDraft'] as boolean ?? false,
+        head: { ref: pr['headRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+        base: { ref: pr['baseRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+        labels: ((pr['labels'] as Array<{ name: string; color: string }>) ?? []).map(l => ({
+          name: l.name,
+          color: l.color,
+        })),
+        created_at: pr['createdAt'] as string,
+        updated_at: pr['updatedAt'] as string,
+      };
+    };
+
+    // Merged-precedence: if any row is merged, return that one (most
+    // diagnostic reason at the guard). Otherwise return the newest row
+    // (`gh pr list` sorts by `created_at DESC` by default).
+    const merged = data.find((row) => String(row['state'] ?? '').toLowerCase() === 'merged');
+    return mapRow(merged ?? data[0]!);
   }
 
   // ==========================================================================
@@ -1306,10 +1446,14 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listBranches(owner: string, repo: string): Promise<string[]> {
-    // List remote branches using gh api
+    // List remote branches using gh api. #1043 Finding 3: paginate — the
+    // /branches endpoint caps at 30 results per page by default, so without
+    // `--paginate` + per_page=100 any `<N>-*` branch past page 1 is silently
+    // dropped and the issue-branch resolver returns null → duplicate branch.
     const result = await this.executeGh([
       'api',
-      `/repos/${owner}/${repo}/branches`,
+      '--paginate',
+      `/repos/${owner}/${repo}/branches?per_page=100`,
       '--jq', '.[].name',
     ]);
 

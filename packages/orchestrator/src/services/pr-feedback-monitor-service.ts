@@ -14,10 +14,16 @@ import type {
   PrFeedbackMetadata,
 } from '../types/monitor.js';
 import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
-import { PrLinker, type PrLinkInput } from '../worker/pr-linker.js';
+import { PrLinker, type PrLinkInput, type PrLinkResult } from '../worker/pr-linker.js';
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
+import type { DispatchConfig } from '../config/index.js';
 
 /**
  * #869 / FR-004 idempotency marker embedded in bot-authored top-level PR
@@ -77,6 +83,36 @@ export class PrFeedbackMonitorService {
   // re-triggers the notice, which is idempotency-safe via the marker grep.
   private lastZeroTrustedState: Map<string, boolean> = new Map();
 
+  /**
+   * #1070 Q1=A / FR-006 / Assumption 4: per-stateKey retry counter for the
+   * blocked:fixer-timeout retry-eligible branch. Mirrors the sibling
+   * lastUnresolvedThreadCount map above. Instance-scoped so state doesn't
+   * leak across services.
+   *
+   * Key: `${owner}/${repo}#${prNumber}` (same as lastUnresolvedThreadCount).
+   * Value: number of auto-retries dispatched so far, capped at 2 per Q5=C.
+   *
+   * Write sites:
+   *   - Increment in the retry-eligible branch of processPrReviewEvent per D-4.
+   *   - Delete in Case C (`totalUnresolvedThreads === 0`) per D-5 (progress-
+   *     only reset, Q5=C).
+   *
+   * Read sites:
+   *   - Retry-eligible branch decides `counter < 2` for dispatch permission.
+   *   - Same branch bakes the current value into `PrFeedbackMetadata.retryAttempt`
+   *     for handler consumption.
+   *
+   * Restart-loss failure mode is bounded and benign (spec §Assumption 7).
+   */
+  private fixerTimeoutRetryCount: Map<string, number> = new Map();
+
+  // #1054 / FR-006 / FR-007: per-itemKey severity state for the in-flight-drop
+  // transition-edge decision. Keyed by `${owner}/${repo}#${issueNumber}`.
+  // Instance-scoped so state doesn't leak across services (SC-004 divergence).
+  private monitorDropState: Map<string, DropTransitionState> = new Map();
+
+  private readonly maxRunDurationMs: number;
+
   private state: MonitorState;
 
   constructor(
@@ -90,6 +126,7 @@ export class PrFeedbackMonitorService {
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
     webhooksConfigured: boolean = false,
+    dispatchConfig?: Pick<DispatchConfig, 'maxRunDurationMs'>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -104,6 +141,7 @@ export class PrFeedbackMonitorService {
       adaptivePolling: config.adaptivePolling,
       maxConcurrentPolls: config.maxConcurrentPolls,
     };
+    this.maxRunDurationMs = dispatchConfig?.maxRunDurationMs ?? 1_800_000;
     this.prLinker = new PrLinker(logger);
 
     this.state = {
@@ -138,6 +176,17 @@ export class PrFeedbackMonitorService {
 
     const client = this.createClient(undefined, this.tokenProvider);
 
+    // #1049 (FR-008): merged-PR gate — first check, before PrLinker. Runs
+    // before any checkout/fetch/push code path can run. Poll path always
+    // hardcodes `prMerged: false`, so this gate is webhook-driven.
+    if (event.prMerged) {
+      this.logger.info(
+        { owner, repo, prNumber, gate: 'merged-pr', source },
+        'PR-feedback event dropped by merged-pr gate (PR is merged; reviews on merged PRs are not processed)',
+      );
+      return false;
+    }
+
     // 1. Link PR to orchestrated issue
     const prInput: PrLinkInput = {
       number: prNumber,
@@ -145,30 +194,35 @@ export class PrFeedbackMonitorService {
       head: { ref: branchName },
     };
 
-    const link = await this.prLinker.linkPrToIssue(client, owner, repo, prInput);
-    if (!link) {
-      this.logger.debug(
-        { owner, repo, prNumber },
-        'PR not linked to an orchestrated issue — skipping',
-      );
+    const linkResult = await this.prLinker.linkPrToIssue(client, owner, repo, prInput);
+    if (linkResult.kind !== 'ok') {
+      if (linkResult.kind === 'no-issue') {
+        this.logger.warn(
+          { owner, repo, prNumber, issueNumber: linkResult.issueNumber, gate: 'no-issue', source },
+          'PR-feedback event dropped by no-issue gate (linked issue could not be fetched)',
+        );
+        return false;
+      }
+      await this.dropWithGateLog(client, event, linkResult);
       return false;
     }
 
+    const { link } = linkResult;
     const { issueNumber, linkMethod, assignees } = link;
 
     // 2. Assignee check — skip PR feedback for issues not assigned to this cluster
     //    Uses assignees returned by PrLinker to avoid a duplicate getIssue() call
     if (this.clusterGithubUsername) {
       if (assignees.length === 0) {
-        this.logger.warn(
-          { owner, repo, issueNumber, prNumber },
-          'Skipping PR feedback: linked issue has no assignees',
-        );
+        await this.dropWithGateLog(client, event, {
+          kind: 'assignees-empty',
+          issueNumber,
+        });
         return false;
       }
       if (!assignees.includes(this.clusterGithubUsername)) {
         this.logger.debug(
-          { owner, repo, issueNumber, prNumber, assignees },
+          { owner, repo, issueNumber, prNumber, assignees, gate: 'wrong-cluster', source },
           'Skipping PR feedback: linked issue not assigned to this cluster',
         );
         return false;
@@ -282,6 +336,12 @@ export class PrFeedbackMonitorService {
       );
       this.lastUnresolvedThreadCount.set(stateKey, 0);
       this.lastZeroTrustedState.set(stateKey, false);
+      // #1070 D-5 / FR-013 (Q5=C): the sole counter-reset site. Case C fires
+      // naturally on the next monitor poll after all review threads are fully
+      // resolved (via Disposition A on the handler side OR manual operator
+      // resolution). Map.delete on absent key is a no-op — safe unconditional
+      // invocation.
+      this.fixerTimeoutRetryCount.delete(stateKey);
       return false;
     }
 
@@ -339,6 +399,76 @@ export class PrFeedbackMonitorService {
       );
       issueLabels = [];
     }
+    // #1070 FR-006 / D-4: retry-eligible check fires BEFORE the blocked:*
+    // short-circuit. Preserves Assumption 5 — any UNRECOGNIZED blocked:*
+    // label still pauses the monitor; only the specific `blocked:fixer-timeout`
+    // (retry-eligible) is carved out here.
+    //
+    // PR #1072 review — order-of-operations fix: check for any OTHER blocked:*
+    // label FIRST, before touching the counter or removing the label. Multiple
+    // handlers (`pr-feedback-handler`, `merge-conflict-handler`,
+    // `validate-fix-handler`) all write `blocked:*` labels to the same issue
+    // and do not coordinate, so two coexisting blocked labels is a normal
+    // state. If we consume the retry budget + remove the timeout signal and
+    // THEN discover another blocked label is present, we silently destroy the
+    // timeout signal (label gone from the issue) and burn a retry on a
+    // dispatch that never happens. The invariant is: do not mutate remote
+    // state or consume budget until the dispatch is committed.
+    const otherBlocked = issueLabels.find(
+      l => l.startsWith('blocked:') && l !== 'blocked:fixer-timeout',
+    );
+    if (!otherBlocked && issueLabels.includes('blocked:fixer-timeout')) {
+      const priorRetries = this.fixerTimeoutRetryCount.get(stateKey) ?? 0;
+      if (priorRetries < 2) {
+        // Budget remaining — remove the retry-eligible label and continue to
+        // the normal enqueue path with an incremented counter.
+        let removed = true;
+        try {
+          await client.removeLabels(owner, repo, issueNumber, ['blocked:fixer-timeout']);
+        } catch (error) {
+          removed = false;
+          this.logger.warn(
+            { err: error, owner, repo, issueNumber },
+            'Failed to remove blocked:fixer-timeout before retry dispatch — non-fatal, will re-check on next poll',
+          );
+          // Fall through to the blocked:* skip check below — safer than
+          // dispatching with the label still present (would race the handler's
+          // own removeLabels call).
+        }
+        if (removed) {
+          this.fixerTimeoutRetryCount.set(stateKey, priorRetries + 1);
+          // Filter the just-removed label out of the local list so the
+          // generic blocked:* short-circuit below does NOT re-match it. The
+          // API removal happened successfully; the local array is a snapshot
+          // taken before the removal.
+          issueLabels = issueLabels.filter(l => l !== 'blocked:fixer-timeout');
+          this.logger.info(
+            {
+              owner, repo, prNumber, issueNumber,
+              priorRetries,
+              newRetries: priorRetries + 1,
+              gate: 'blocked-fixer-timeout-retry-dispatch',
+            },
+            'Dispatching auto-retry after blocked:fixer-timeout (Q5=C, max 2)',
+          );
+          // Do NOT return — fall through to the normal enqueue path.
+        }
+      } else {
+        // priorRetries >= 2. Defense in depth: handler should have applied
+        // blocked:fixer-timeout-repeat and this branch shouldn't fire. If it
+        // does, log and fall through to the blocked:* skip check below.
+        this.logger.warn(
+          {
+            owner, repo, prNumber, issueNumber,
+            priorRetries,
+            gate: 'blocked-fixer-timeout-budget-exhausted',
+          },
+          'blocked:fixer-timeout present but retry budget exhausted — expected blocked:fixer-timeout-repeat (handler bug?)',
+        );
+        // Fall through to the blocked:* skip check below (which will match).
+      }
+    }
+
     const blockedLabel = issueLabels.find(l => l.startsWith('blocked:'));
     if (blockedLabel) {
       this.logger.info(
@@ -347,6 +477,7 @@ export class PrFeedbackMonitorService {
           blockedLabel,
           unresolvedThreads: unresolvedThreadIds.length,
           reason: 'blocked-label-present',
+          gate: 'blocked-label-present',
         },
         'Skipping PR-feedback enqueue while blocked:* label is present',
       );
@@ -378,10 +509,16 @@ export class PrFeedbackMonitorService {
     // 5. Resolve workflow name from issue labels
     const workflowName = await this.resolveWorkflowName(owner, repo, issueNumber);
 
-    // 6. Build queue item
+    // 6. Build queue item.
+    // #1070 D-1 / handler-counter-seam: attach the current retry counter to
+    // every enqueue (both the normal path AND the retry-eligible branch above,
+    // which has already incremented). Non-retry dispatches get 0. Handler
+    // reads `?? 0` for pre-#1070 backwards compatibility.
+    const currentRetries = this.fixerTimeoutRetryCount.get(stateKey) ?? 0;
     const metadata: PrFeedbackMetadata = {
       prNumber,
       reviewThreadIds: unresolvedThreadIds,
+      retryAttempt: currentRetries,
     };
 
     const queueItem: QueueItem = {
@@ -406,8 +543,19 @@ export class PrFeedbackMonitorService {
     const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
     if (!enqueued) {
       // FR-009: monitor-side context log paired with the adapter-level line.
-      this.logger.info(
-        { itemKey, reason: 'in-flight', prNumber, issueNumber, owner, repo },
+      // #1054 / FR-006 / FR-007: transition-edge severity escalation via the
+      // shared helper. Context fields preserved verbatim (only severity flips).
+      const ageMs = await this.queueManager.hasInFlightAge(itemKey);
+      const decision = classifyDropSeverity(
+        itemKey,
+        ageMs,
+        this.maxRunDurationMs,
+        this.monitorDropState,
+      );
+      emitDropLog(
+        this.logger,
+        decision,
+        { itemKey, reason: 'in-flight', prNumber, issueNumber, owner, repo, ageMs },
         'Dropping PR-feedback enqueue (item already in flight)',
       );
       return false;
@@ -419,6 +567,94 @@ export class PrFeedbackMonitorService {
     );
 
     return true;
+  }
+
+  // ==========================================================================
+  // #1049 / FR-004, FR-005: drop-gate logging
+  // ==========================================================================
+
+  /**
+   * Probe for unresolved review-thread count. Runs the existing GraphQL
+   * `getPRReviewThreads` call and counts unresolved threads. Used only at
+   * drop-time to decide whether to lift a drop-gate log line from `debug`
+   * to `info` (FR-004). Not called for merged-pr / wrong-cluster gates.
+   */
+  private async probeUnresolvedThreads(
+    client: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<number> {
+    const threads = await client.getPRReviewThreads(owner, repo, prNumber);
+    return threads.filter(t => !t.isResolved).length;
+  }
+
+  /**
+   * Log a drop-gate event with the right level and gate name (FR-004, FR-005).
+   *
+   * For `source === 'webhook'` (rare, user-driven), probes unresolved-thread
+   * count and lifts to `info` when ≥1, else `debug`. Probe errors fall back
+   * to `debug` with `probeError` field — a failed probe MUST NOT itself
+   * become an error signal.
+   *
+   * For `source === 'poll'` (steady-state, every ~60s per open PR per repo),
+   * the probe is SKIPPED and the log line drops to `debug`. Rationale: the
+   * poll path iterates every open PR in every monitored repo and reaches
+   * this helper for each unlinked / non-orchestrated / assignees-empty PR
+   * on every cycle. An unconditional GraphQL probe there would amplify to
+   * ~60 queries/hour per PR against a shared 5 000/hr GitHub budget, and an
+   * `info` line per unlinked human/bot PR would spam every 60 s indefinitely.
+   * The lifted-to-`info` diagnostic is preserved for the one-shot webhook
+   * path, which is what operators care about.
+   */
+  private async dropWithGateLog(
+    client: GitHubClient,
+    event: PrReviewEvent,
+    result:
+      | Extract<PrLinkResult, { kind: 'no-link' }>
+      | Extract<PrLinkResult, { kind: 'not-orchestrated' }>
+      | { kind: 'assignees-empty'; issueNumber: number },
+  ): Promise<void> {
+    const { owner, repo, prNumber, source } = event;
+    const gate =
+      result.kind === 'no-link' ? 'no-link' :
+      result.kind === 'not-orchestrated' ? 'not-orchestrated' :
+      'assignees-empty';
+    const issueNumber = result.kind === 'no-link' ? undefined : result.issueNumber;
+
+    if (source === 'poll') {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, gate, source },
+        `PR-feedback event dropped by ${gate} gate (poll path — probe skipped)`,
+      );
+      return;
+    }
+
+    let unresolvedThreads: number;
+    try {
+      unresolvedThreads = await this.probeUnresolvedThreads(client, owner, repo, prNumber);
+    } catch (err) {
+      this.logger.debug(
+        {
+          owner, repo, prNumber, issueNumber, gate, source,
+          probeError: err instanceof Error ? err.message : String(err),
+        },
+        `PR-feedback event dropped by ${gate} gate (probe failed)`,
+      );
+      return;
+    }
+
+    if (unresolvedThreads >= 1) {
+      this.logger.info(
+        { owner, repo, prNumber, issueNumber, gate, source, unresolvedThreads },
+        `PR-feedback event dropped by ${gate} gate (PR has ${unresolvedThreads} unresolved thread(s))`,
+      );
+    } else {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, gate, source, unresolvedThreads: 0 },
+        `PR-feedback event dropped by ${gate} gate (no unresolved threads)`,
+      );
+    }
   }
 
   // ==========================================================================
@@ -627,6 +863,8 @@ export class PrFeedbackMonitorService {
         prBody: pr.body ?? '',
         branchName: pr.head.ref,
         source: 'poll',
+        // #1049 (D5): poll uses listOpenPullRequests → open-only invariant.
+        prMerged: false,
       };
 
       try {

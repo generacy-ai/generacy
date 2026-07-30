@@ -211,8 +211,9 @@ The worker handles SIGTERM and SIGINT for graceful shutdown:
 | `issue-transition` | `type`, `ts`, `repo`, `kind`, `number`, `from`, `to`, `sourceLabel`, `url`, `event`, `labels`, `initial?` | Per-issue or per-PR state transition surfaced by the poll loop's diff step. |
 | `phase-complete`   | `type`, `phase`, `epicRepo`, `epicNumber`, `ts`, `initial?`                                          | Every ref in a phase is CLOSED (fires once per transition into fully-closed). |
 | `epic-complete`    | `type`, `epicRepo`, `epicNumber`, `ts`, `initial?`                                                   | Every ref in the epic is CLOSED. |
+| `gate-answer`      | `type`, `ts`, `gateId`, `deliveryId`, `epic`, `line`                                                | Operator answered a `/cockpit:auto` gate. Emitted by `cockpit doorbell` only (tails `/workspaces/.generacy/cockpit/answers.ndjson`); not emitted by `cockpit watch`. |
 
-`initial: true` (optional, all three types) marks lines emitted during the startup sweep — see [Startup sweep](#startup-sweep).
+`initial: true` (optional, the first three types) marks lines emitted during the startup sweep — see [Startup sweep](#startup-sweep).
 
 ### `issue-transition`
 

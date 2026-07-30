@@ -552,6 +552,9 @@ importers:
       '@generacy-ai/cluster-relay':
         specifier: workspace:^
         version: link:../cluster-relay
+      '@generacy-ai/cockpit':
+        specifier: workspace:*
+        version: link:../cockpit
       '@generacy-ai/config':
         specifier: workspace:^
         version: link:../config
@@ -592,9 +595,18 @@ importers:
         specifier: ^3.23.0
         version: 3.25.76
     devDependencies:
+      '@types/ioredis-mock':
+        specifier: ^8.2.6
+        version: 8.2.6(ioredis@5.10.0)
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.35
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      ioredis-mock:
+        specifier: ^8.9.0
+        version: 8.13.1(@types/ioredis-mock@8.2.6(ioredis@5.10.0))(ioredis@5.10.0)
       tsx:
         specifier: ^4.0.0
         version: 4.21.0
@@ -604,6 +616,9 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+      ws:
+        specifier: ^8.18.0
+        version: 8.19.0
 
   packages/orchestrator-types:
     devDependencies:

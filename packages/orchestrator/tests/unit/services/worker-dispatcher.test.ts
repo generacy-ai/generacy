@@ -23,10 +23,22 @@ function createMockQueueManager(
     enqueue: vi.fn().mockResolvedValue(undefined),
     claim: vi.fn().mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    // #1060 PR #1065 review finding 2 — lease-expiry-safe re-pend that
+    // preserves attemptCount.
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
     getQueueItems: vi.fn().mockResolvedValue([]),
     getActiveWorkerCount: vi.fn().mockResolvedValue(0),
+    enqueueIfAbsent: vi.fn().mockResolvedValue(true),
+    hasInFlight: vi.fn().mockResolvedValue(false),
+    reapOrphanClaims: vi.fn().mockResolvedValue({
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    }),
+    hasInFlightAge: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
 }

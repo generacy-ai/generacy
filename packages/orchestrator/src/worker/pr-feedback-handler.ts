@@ -5,7 +5,16 @@ import {
   tryLoadCommentTrustConfig,
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
-import type { Comment, GitHubClient, ReviewThread } from '@generacy-ai/workflow-engine';
+import type { Comment, GitHubClient, Review, ReviewThread } from '@generacy-ai/workflow-engine';
+import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
+import { defaultRemoteBranchExists } from './repo-checkout.js';
+import {
+  parseAcknowledgedFindings,
+  parseSingleMarkerEntries,
+  BODY_FINDINGS_UNADDRESSED_MARKER,
+} from './pr-feedback-ack-parser.js';
+import { parseReviewBody, type ParsedReview } from './pr-feedback-body-parser.js';
+import { evaluateBodyGate, type UnaddressedFinding } from './pr-feedback-body-gate.js';
 import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -21,6 +30,33 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
 
 /**
+ * #1070 labels for the CLI-timeout disposition split. See FR-002/002a/003 and
+ * `contracts/label-vocabulary.md`.
+ *   - `blocked:fixer-timeout` — retry-eligible (timeout + partial push, budget remaining).
+ *   - `blocked:fixer-timeout-no-progress` — terminal (timeout without any commit).
+ *   - `blocked:fixer-timeout-repeat` — terminal (auto-retry budget exhausted).
+ */
+const BLOCKED_FIXER_TIMEOUT_LABEL = 'blocked:fixer-timeout';
+const BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL = 'blocked:fixer-timeout-no-progress';
+const BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL = 'blocked:fixer-timeout-repeat';
+
+/**
+ * #1073 FR-013: terminal disposition — CLI-self-commit cycle where the branch
+ * HEAD advanced (code changes landed) but the reply/resolve batch had zero
+ * successes. Distinct from `blocked:stuck-feedback-loop` because the remedy
+ * differs: check GitHub API responses, not fixer transcripts.
+ */
+const BLOCKED_RESOLVE_FAILED_LABEL = 'blocked:resolve-failed';
+
+/**
+ * Label added by Disposition C (#1047) when the fixer completed a cycle
+ * without touching any file named by an unaddressed review-body finding.
+ * The monitor's bare `l.startsWith('blocked:')` skip gate honors this
+ * without any allow-list change (see FR-007 grep verification).
+ */
+const BLOCKED_BODY_FINDING_UNADDRESSED_LABEL = 'blocked:body-finding-unaddressed';
+
+/**
  * `agent:in-progress` label — cleared structurally at the single shared exit
  * path (#926 SC-004/SC-005). Extracted to a module constant so the literal
  * appears at exactly one code site: the coalesced happy-path removal and the
@@ -33,6 +69,42 @@ const WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
 
 /** #941 FR-002: gate label the fix session must leave present on every exit. */
 const WAITING_FOR_IMPLEMENTATION_REVIEW_LABEL = 'waiting-for:implementation-review';
+
+/** Set equality by size + element containment (both are Sets of primitives). */
+function setsEqual<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
+/**
+ * #1070 FR-011: Return shape of `spawnClaudeForFeedback` (widened from
+ * `boolean`). Private to this module — not re-exported from
+ * `@generacy-ai/orchestrator`.
+ *
+ * `success` is true iff the CLI exited with code 0.
+ * `timedOut` is true iff the internal SIGTERM timer fired (regardless of exit
+ * code).
+ * `exitCode` is the process exit code (null when the process died via signal
+ * before an exit code was captured — matches Node's ChildProcess.exitCode
+ * semantics).
+ *
+ * Semantic invariants:
+ *   1. `timedOut === true` implies `success === false`. A timeout that races
+ *      with a natural exit-0 finish is treated as timeout; the SIGTERM timer
+ *      fires and this cycle's work is bounded (per FR-013).
+ *   2. `exitCode === null` is legal and signals "process died via signal
+ *      before exit code was captured". Handler treats `null` identically to
+ *      a non-zero exit code for disposition purposes (both are `success: false`).
+ *   3. When `timedOut === true`, `exitCode` will typically be `143` (SIGTERM)
+ *      but callers MUST NOT switch on the specific numeric value — `timedOut`
+ *      is the authoritative signal.
+ */
+interface SpawnClaudeResult {
+  success: boolean;
+  exitCode: number | null;
+  timedOut: boolean;
+}
 
 type OutcomeResult = { ok: true } | { ok: false; error: string };
 
@@ -94,10 +166,14 @@ export class PrFeedbackHandler {
     }
 
     const { prNumber } = metadata;
+    // #1070 D-1: read the current retry counter (or 0 for pre-#1070 items
+    // still queued from an older monitor). Handler is stateless w.r.t. the
+    // counter — the monitor owns storage and reset (Case C).
+    const retryAttempt = metadata.retryAttempt ?? 0;
     const workflowId = `${owner}/${repo}#${issueNumber}`;
 
     this.logger.info(
-      { prNumber, issueNumber, owner, repo },
+      { prNumber, issueNumber, owner, repo, retryAttempt },
       'Starting PR feedback addressing',
     );
 
@@ -145,6 +221,8 @@ export class PrFeedbackHandler {
       let unresolvedThreadCount: number;
       let unresolvedComments: Comment[];
       let trustedUnresolvedThreads: ReviewThread[];
+      let parsedReviews: ParsedReview[] = [];
+      let relevantReviews: Review[] = [];
       let untrustedSkips: Array<{
         commentId: number;
         author: string;
@@ -234,6 +312,94 @@ export class PrFeedbackHandler {
         throw new Error(`Failed to fetch review threads for PR #${prNumber}: ${String(error)}`);
       }
 
+      // 3b. #1047: also fetch review submissions so top-level review-body
+      // findings that name files NOT in the diff still reach the fixer prompt
+      // (inline threads only surface findings anchored to a file+line). Failure
+      // is log-and-continue — the thread path is independent and must still run.
+      //
+      // #1047 Finding 3: apply the same author-trust filter used for inline
+      // review comments. Any GitHub user can submit a COMMENTED review, and
+      // an unfiltered untrusted body can (a) inject prompt content into the
+      // fixer and (b) pin the loop on Disposition C by naming files nothing
+      // can touch. Trust ordering mirrors the inline path — bot-login match
+      // first, then author_association tier + config-widen.
+      try {
+        const reviews = await github.listReviews(owner, repo, prNumber);
+        const stateAndBodyOK = reviews.filter(
+          (r: Review) =>
+            (r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED') &&
+            r.body.trim().length > 0,
+        );
+        const trustConfig = tryLoadCommentTrustConfig(checkoutPath, this.logger);
+        const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+        const untrustedReviewSkips: Array<{
+          reviewId: number;
+          author: string;
+          authorAssociation: string | undefined;
+          reason: string;
+        }> = [];
+        for (const r of stateAndBodyOK) {
+          // Build a Comment-shaped stub for `isTrustedCommentAuthor`. `viewerDidAuthor`
+          // is set to `false` explicitly (not undefined) because the REST reviews
+          // endpoint does not expose GraphQL's `viewerDidAuthor` primitive — our
+          // own bot-authored reviews are captured by the bot-login match above the
+          // viewerDidAuthor branch in the trust helper. Passing `false` also
+          // silences the migrated-surfaces shape-drift warn (see comment-trust.ts).
+          const stub: Comment = {
+            id: r.id,
+            body: r.body,
+            author: r.user.login,
+            created_at: r.submittedAt,
+            updated_at: r.submittedAt,
+            viewerDidAuthor: false,
+            ...(r.authorAssociation ? { authorAssociation: r.authorAssociation } : {}),
+          };
+          const decision = isTrustedCommentAuthor(stub, 'pr-feedback', {
+            logger: this.logger,
+            ...(botLogin ? { botLogin } : {}),
+            ...(trustConfig ? { config: trustConfig } : {}),
+          });
+          if (decision.trusted) {
+            relevantReviews.push(r);
+          } else {
+            untrustedReviewSkips.push({
+              reviewId: r.id,
+              author: r.user.login,
+              authorAssociation: r.authorAssociation,
+              reason: decision.reason,
+            });
+            this.logger.info(
+              {
+                event: 'review-body-skipped',
+                surface: 'pr-feedback',
+                reviewId: r.id,
+                author: r.user.login,
+                authorAssociation: r.authorAssociation,
+                reason: decision.reason,
+              },
+              'Skipped PR review body from untrusted author (#1047 Finding 3)',
+            );
+          }
+        }
+        parsedReviews = relevantReviews.map(parseReviewBody);
+        this.logger.info(
+          {
+            prNumber,
+            totalReviews: reviews.length,
+            trustedRelevantReviews: relevantReviews.length,
+            untrustedReviewSkips: untrustedReviewSkips.length,
+          },
+          'Fetched PR reviews for body-consumption path (#1047, trust-filtered)',
+        );
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), prNumber, owner, repo },
+          'Failed to fetch PR reviews (#1047 body-consumption path) — continuing with thread-only inputs',
+        );
+        parsedReviews = [];
+        relevantReviews = [];
+      }
+
       // 4. Case A (#869): no unresolved threads at all — remove label and
       // clear dedupe key.
       if (unresolvedThreadCount === 0) {
@@ -269,11 +435,36 @@ export class PrFeedbackHandler {
         return;
       }
 
-      // 5. Build structured prompt
-      const prompt = this.buildFeedbackPrompt(unresolvedComments, prNumber, issueNumber);
+      // #1047 T011: extend the prompt inputs with each non-empty review body.
+      // buildFeedbackPrompt renders items without path/line as
+      // "general comment" — no renderer change required. Ordering is not
+      // load-bearing (FR-006).
+      const reviewBodyItems: Comment[] = relevantReviews.map(r => ({
+        id: r.id,
+        body: `review body (no file anchor):\n\n${r.body}`,
+        author: r.user.login,
+        created_at: r.submittedAt,
+        updated_at: r.submittedAt,
+      }));
+      const promptInputs: Comment[] = [...unresolvedComments, ...reviewBodyItems];
 
-      // 6. Spawn Claude CLI to address feedback
-      const success = await this.spawnClaudeForFeedback(
+      // 5. Build structured prompt
+      const prompt = this.buildFeedbackPrompt(promptInputs, prNumber, issueNumber);
+
+      // #1047 Finding 2: capture HEAD SHA BEFORE spawning the fixer so the
+      // touched-file gate can diff `<preFixSha>..HEAD` — the ACTUAL fix-cycle
+      // scope. The previous `origin/<base>..HEAD` diff returned every file the
+      // PR ever changed, so any body finding naming an in-diff file was
+      // auto-satisfied without the fixer touching it. Null on git failure
+      // → gate degrades to "nothing touched" (safe direction, per
+      // getCommitTouchedFiles).
+      const preFixSha = await this.getHeadSha(checkoutPath);
+
+      // 6. Spawn Claude CLI to address feedback.
+      // #1070 T021 / FR-011: destructure the widened SpawnClaudeResult so the
+      // dispatcher below can distinguish timeout (B4/B5/B6) from clean non-zero
+      // exit (B1/B2/B3).
+      const { success, exitCode, timedOut } = await this.spawnClaudeForFeedback(
         checkoutPath,
         prompt,
         workflowId,
@@ -281,8 +472,35 @@ export class PrFeedbackHandler {
         item.workflowName,
       );
 
+      // #1073 FR-001/FR-002: capture branch HEAD AFTER the CLI exits and BEFORE
+      // `commitAndPushChanges` runs. Load-bearing placement — before spawn is
+      // trivially preFixSha, after the handler's own commit would confound the
+      // "did the CLI push?" signal in the rare case where the CLI produced
+      // changes without committing (research.md § D-1).
+      const postCliSha = await this.getHeadSha(checkoutPath);
+      const cliSelfCommitted =
+        postCliSha !== null && preFixSha !== null && postCliSha !== preFixSha;
+
       // 7. Commit and push changes (even on timeout — partial completion strategy)
       // FR-013: Push partial changes on timeout to preserve work and enable retry
+      //
+      // #1051 FR-002/003: pre-push guard — refuse the push if the PR has already
+      // merged/closed or the remote branch is missing. Prevents a re-entering
+      // worker from resurrecting a deleted branch and opening a duplicate PR
+      // that claims to close the already-closed issue (generacy-cloud#883).
+      const guardDecision = await evaluatePushGuard({
+        owner,
+        repo,
+        issueNumber,
+        branch: branchName,
+        github,
+        git: { remoteBranchExists: (b) => defaultRemoteBranchExists(b, checkoutPath) },
+      });
+      if (guardDecision.kind === 'refuse') {
+        await this.handlePushRefused(github, guardDecision);
+        return;
+      }
+
       let hasChanges = false;
       try {
         hasChanges = await this.commitAndPushChanges(
@@ -293,10 +511,20 @@ export class PrFeedbackHandler {
           issueNumber,
         );
 
-        if (hasChanges) {
+        // #1070 FR-005 / D-6: split the collapsed log line so the historically
+        // contradictory `msg: "Successfully pushed" success: false` shape
+        // (bug report §Trigger) is unreachable. `success` intentionally dropped
+        // from the happy-path payload — both branches guard on it so the field
+        // is redundant.
+        if (hasChanges && success) {
           this.logger.info(
-            { prNumber, issueNumber, success },
+            { prNumber, issueNumber, source: 'handler' },
             'Successfully pushed changes to PR branch',
+          );
+        } else if (hasChanges && !success) {
+          this.logger.warn(
+            { prNumber, issueNumber, cliCompleted: false, exitCode, source: 'handler' },
+            'Pushed partial changes before CLI timed out — retry may follow',
           );
         }
       } catch (error) {
@@ -307,23 +535,103 @@ export class PrFeedbackHandler {
         // Don't throw here — we still need to run the blocked disposition.
       }
 
-      // 7a. Disposition B short-circuit (#883): CLI did not complete cleanly OR
-      // there is no diff. Both mean the loop cannot advance on this cycle —
-      // add `blocked:stuck-feedback-loop` and leave `waiting-for:*` intact so
-      // the operator sees the pause. Do NOT reply, do NOT resolve, do NOT log
-      // success.
-      if (!success || !hasChanges) {
+      // 7a. Disposition B/B4/B5/B6 dispatcher (#1070 FR-001).
+      //
+      // The pre-#1070 collapsed `if (!success || !hasChanges)` branch is split
+      // into an explicit four-way switch per data-model.md §4:
+      //
+      //   B4 (timedOut && !hasChanges)             → blocked:fixer-timeout-no-progress (terminal)
+      //   B5 (timedOut && hasChanges && retryAttempt < 2)   → blocked:fixer-timeout (retry-eligible)
+      //   B6 (timedOut && hasChanges && retryAttempt >= 2)  → blocked:fixer-timeout-repeat (terminal)
+      //   B1/B2/B3 (!timedOut && (!success || !hasChanges)) → blocked:stuck-feedback-loop (unchanged)
+      //
+      // FR-012: `waiting-for:address-pr-feedback` MUST stay in place across
+      // every branch — the shared `finally` clears only `agent:in-progress`.
+      // FR-010: every branch flows through the shared `finally` at ~line 665.
+      if (timedOut && !hasChanges) {
+        // B4 — CLI timed out but zero commits landed. Retries would not help.
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            disposition: 'timeout-no-progress',
+            retryAttempt,
+            cliCompleted: false,
+            exitCode,
+          },
+          'CLI timed out without pushing any commit — applying blocked:fixer-timeout-no-progress (terminal)',
+        );
+        await this.addBlockedFixerTimeoutNoProgressLabel(github, owner, repo, issueNumber);
+        return;
+      }
+
+      if (timedOut && hasChanges) {
+        // B5/B6 — CLI timed out with partial push. Retry-eligible unless the
+        // budget (2) is already spent.
+        const budgetExhausted = retryAttempt >= 2;
+        const disposition = budgetExhausted ? 'fixer-timeout-repeat' : 'fixer-timeout';
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            disposition,
+            retryAttempt,
+            cliCompleted: false,
+            exitCode,
+          },
+          budgetExhausted
+            ? 'CLI timed out with partial push after retry budget exhausted — applying blocked:fixer-timeout-repeat (terminal)'
+            : 'CLI timed out with partial push — applying blocked:fixer-timeout (retry eligible)',
+        );
+        if (budgetExhausted) {
+          await this.addBlockedFixerTimeoutRepeatLabel(github, owner, repo, issueNumber);
+        } else {
+          await this.addBlockedFixerTimeoutLabel(github, owner, repo, issueNumber);
+        }
+        return;
+      }
+
+      // B1/B2/B3 — non-timeout failure paths (clean non-zero exit or no diff).
+      // Behavior preserved from pre-#1070 (FR-004): `blocked:stuck-feedback-loop`.
+      //
+      // #1073 FR-003: gate now guarded by `!cliSelfCommitted` — a cycle in
+      // which the CLI committed and pushed its own work is a success, not a
+      // no-diff wedge, even though the handler's own commit step finds nothing
+      // to do (spec § Observed).
+      if (!cliSelfCommitted && (!success || !hasChanges)) {
         this.logger.warn(
           {
             prNumber,
             issueNumber,
             trigger: 'unresolvedThreads>0',
+            disposition: !success ? 'push-failed' : 'no-diff',
             reason: !success ? 'cli-did-not-complete' : 'no-diff',
           },
-          'no-diff cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition',
+          'no-diff / push-failed cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition',
         );
         await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
         return;
+      }
+
+      // #1073 FR-007/FR-008/FR-008a: distinct info line when the CLI committed
+      // and pushed its own work. `preFixSha` + `postFixSha` in the payload make
+      // the head-advance claim auditable (research.md § D-2).
+      //
+      // Fires on every CLI-self-commit cycle regardless of whether the handler
+      // committed afterwards (PR #1075 review). `handlerCommitted` distinguishes
+      // the three shapes — CLI-only, handler-only (this line does not fire),
+      // both — from a single grep on `disposition: 'cli-self-committed'`.
+      if (cliSelfCommitted) {
+        this.logger.info(
+          {
+            prNumber,
+            issueNumber,
+            source: 'cli',
+            disposition: 'cli-self-committed',
+            handlerCommitted: hasChanges,
+            preFixSha,
+            postFixSha: postCliSha,
+          },
+          'CLI self-committed changes — proceeding to reply/resolve',
+        );
       }
 
       // 7b. Happy path — CLI succeeded AND we have a real commit.
@@ -332,6 +640,14 @@ export class PrFeedbackHandler {
       // 8. Interleaved reply→resolve per root thread (#883, Q4-C, FR-005,
       // FR-007). Input-set closure: iterate `trustedUnresolvedThreads`
       // captured at cycle start.
+      //
+      // #1047 Finding 5 (FR-007): the body-finding gate MUST run AFTER this
+      // loop. FR-007's hold fires only "after thread resolves succeed", so the
+      // monitor's Case C reset (totalUnresolvedThreads === 0) fires on the
+      // next poll before the blocked:* skip check. Placing the gate before the
+      // resolve loop would leave inline threads unresolved and unreplied — the
+      // reviewer sees no "Addressed in <sha>" acknowledgment and the next
+      // cycle re-feeds already-fixed inline comments to the fixer.
       const outcomes: PerThreadOutcome[] = [];
       for (const thread of trustedUnresolvedThreads) {
         const replyBody = `Addressed in ${shortSha} — please review, and re-open this thread if it still falls short.`;
@@ -352,12 +668,17 @@ export class PrFeedbackHandler {
       const resolveFailures = outcomes.filter(o => !o.resolveResult.ok);
 
       if (resolveSuccesses === 0) {
-        // FR-006 tail — commit landed but no thread transitioned.
+        // #1073 FR-013: reaching 7b implies `cliSelfCommitted || (success &&
+        // hasChanges)` (see guard at ~line 599), so the branch HEAD has
+        // necessarily advanced by construction — a zero-resolve cycle here is
+        // always a GitHub-API-shaped failure, never a fixer wedge. Narrows the
+        // meaning of `blocked:stuck-feedback-loop`: it no longer originates
+        // from the zero-resolve path (PR #1075 review).
         this.logger.warn(
-          { prNumber, issueNumber, outcomes },
-          'commit pushed but resolve batch had zero successes — persisting trigger, entering blocked-stuck-feedback-loop disposition',
+          { prNumber, issueNumber, outcomes, preFixSha, postFixSha: postCliSha },
+          'commit pushed but resolve batch had zero successes — entering blocked:resolve-failed disposition (#1073)',
         );
-        await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
+        await this.addBlockedResolveFailedLabel(github, owner, repo, issueNumber);
         return;
       }
 
@@ -374,6 +695,58 @@ export class PrFeedbackHandler {
           },
           'resolveReviewThread persistently failed after retries; label will still be cleared',
         );
+      }
+
+      // 9b. #1047 T013 (FR-003, FR-007): per-finding body-gate. Runs AFTER
+      // the reply/resolve loop so unresolved-thread count decays to zero
+      // regardless of Disposition C outcome (Finding 5). Diff scope is the
+      // fix-cycle SHA range (`<preFixSha>..HEAD`), NOT the whole PR — otherwise
+      // a body finding naming a file already in the PR diff auto-satisfies
+      // without the fixer touching it (Finding 2).
+      const commitTouchedFiles = preFixSha
+        ? await this.getCommitTouchedFiles(checkoutPath, preFixSha, 'HEAD')
+        : new Set<string>();
+      let existingCommentBodies: string[] = [];
+      try {
+        existingCommentBodies = await github.listPrCommentBodies(owner, repo, prNumber);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), prNumber, owner, repo },
+          'Failed to list PR comment bodies (#1047 ack parse) — treating ack set as empty',
+        );
+      }
+      const acknowledged = parseAcknowledgedFindings(existingCommentBodies);
+      const gateResult = evaluateBodyGate({
+        parsedReviews,
+        commitTouchedFiles,
+        acknowledged,
+      });
+
+      if (!gateResult.satisfied) {
+        this.logger.warn(
+          {
+            prNumber,
+            issueNumber,
+            unaddressedCount: gateResult.unaddressed.length,
+            unaddressed: gateResult.unaddressed,
+            commitTouchedFileCount: commitTouchedFiles.size,
+            preFixSha: preFixSha ?? '<unknown>',
+          },
+          'body-finding gate unsatisfied — entering Disposition C (#1047)',
+        );
+        await this.applyDispositionC(
+          github,
+          owner,
+          repo,
+          prNumber,
+          issueNumber,
+          gateResult.unaddressed,
+          existingCommentBodies,
+        );
+        // Keep `waiting-for:address-pr-feedback` in place (mirrors Disposition
+        // B); the `blocked:body-finding-unaddressed` label pauses the monitor
+        // and the operator's removal of it re-opens the loop.
+        return;
       }
 
       // 10. Label-clear LAST (Q4 tail). #926 FR-006: coalesce the happy-path
@@ -467,8 +840,12 @@ Please proceed with addressing the feedback.`;
   /**
    * Spawn Claude CLI to address PR feedback.
    *
-   * Returns true if the CLI completed successfully, false on timeout or failure.
-   * FR-013: On timeout, partial changes are pushed and label is kept for retry.
+   * #1070 FR-011: return shape widened from `boolean` to `SpawnClaudeResult`
+   * so the caller can distinguish CLI-timeout (`timedOut: true`) from a clean
+   * non-zero exit (`timedOut: false, success: false`) — critical for the
+   * four-branch disposition in `handle()` per data-model.md §4.
+   * FR-013: On timeout, partial changes are pushed and the retry-eligible
+   * label is added by the caller (see B5/B6 branches).
    */
   private async spawnClaudeForFeedback(
     checkoutPath: string,
@@ -476,7 +853,7 @@ Please proceed with addressing the feedback.`;
     workflowId: string,
     prNumber: number,
     workflowName: string,
-  ): Promise<boolean> {
+  ): Promise<SpawnClaudeResult> {
     // #814 / Q1→B: pr-feedback resolves `{ provider, model }` against the
     // `implement` phase — pr-feedback revises the code `implement` produced,
     // so the same agent/model that wrote the code should address review on it.
@@ -507,7 +884,7 @@ Please proceed with addressing the feedback.`;
         { error: String(error), cwd: checkoutPath },
         'Failed to spawn Claude CLI process',
       );
-      return false;
+      return { success: false, exitCode: null, timedOut: false };
     }
 
     // Set up output capture for SSE events
@@ -569,18 +946,21 @@ Please proceed with addressing the feedback.`;
       const success = exitCode === 0;
 
       if (timedOut) {
-        // FR-013: Timeout scenario — partial completion strategy
+        // FR-013: Timeout scenario — partial completion strategy.
+        // #1070 FR-011: return the exit code and the timeout flag so the
+        // caller can differentiate B4 (no-progress, terminal) from B5/B6
+        // (retry-eligible or terminal-by-budget).
         this.logger.warn(
           { exitCode, timeoutMs: this.config.phaseTimeoutMs },
-          'CLI timed out — returning false to trigger partial completion strategy (push changes, keep label)',
+          'CLI timed out — returning timedOut=true to trigger partial completion strategy (push changes, keep label)',
         );
-        return false;
+        return { success: false, exitCode, timedOut: true };
       }
 
       if (!success) {
         this.logger.warn(
           { exitCode },
-          'CLI exited with non-zero code — returning false to keep label for retry',
+          'CLI exited with non-zero code — returning success=false to keep label for retry',
         );
       } else {
         this.logger.info(
@@ -589,14 +969,15 @@ Please proceed with addressing the feedback.`;
         );
       }
 
-      return success;
+      return { success, exitCode, timedOut: false };
     } catch (error) {
       clearTimeout(timeoutTimer);
       this.logger.error(
         { error: String(error), timedOut },
-        'Error waiting for CLI process — returning false',
+        'Error waiting for CLI process — returning success=false',
       );
-      return false;
+      // Preserve whatever `timedOut` was set to before the throw.
+      return { success: false, exitCode: null, timedOut };
     }
   }
 
@@ -719,6 +1100,80 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
   }
 
   /**
+   * List the files changed between two git refs. Used by the #1047
+   * per-finding body-gate to decide whether the just-pushed commit(s) touched
+   * any file named by a review-body finding. Follows the shape of
+   * `getHeadShortSha` — returns an empty set on any git failure so the gate
+   * degrades to "nothing touched" (which then flags everything as unaddressed
+   * → Disposition C, the safe direction).
+   *
+   * `<baseRef>..<headRef>` is the natural diff range for a multi-commit
+   * fix cycle (FR-013 partial completion may push more than one commit),
+   * so this deliberately does NOT use `getStatus()` (which is empty after
+   * push).
+   */
+  private async getCommitTouchedFiles(
+    checkoutPath: string,
+    baseRef: string,
+    headRef: string,
+  ): Promise<Set<string>> {
+    try {
+      const result = await executeCommand(
+        'git',
+        ['diff', '--name-only', `${baseRef}..${headRef}`],
+        { cwd: checkoutPath },
+      );
+      if (result.exitCode !== 0) {
+        this.logger.warn(
+          {
+            event: 'get-commit-touched-files-failed',
+            baseRef,
+            headRef,
+            stderr: result.stderr,
+          },
+          'git diff for touched-files enumeration failed — gate will treat cycle as touching nothing',
+        );
+        return new Set();
+      }
+      const files = result.stdout
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
+      return new Set(files);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), baseRef, headRef },
+        'getCommitTouchedFiles threw — gate will treat cycle as touching nothing',
+      );
+      return new Set();
+    }
+  }
+
+  /**
+   * Read the full SHA of the current HEAD commit. Used by the #1047
+   * Finding-2 fix as the pre-fix anchor for the touched-file gate: it must be
+   * captured BEFORE spawning the fixer so `<preFixSha>..HEAD` isolates the
+   * cycle's commits (as opposed to `origin/<base>..HEAD` which returns every
+   * file the PR ever changed). Returns null on git failure — caller falls
+   * back to an empty touched-file set, which flags all body findings as
+   * unaddressed (safe direction).
+   */
+  private async getHeadSha(checkoutPath: string): Promise<string | null> {
+    try {
+      const result = await executeCommand(
+        'git',
+        ['rev-parse', 'HEAD'],
+        { cwd: checkoutPath },
+      );
+      if (result.exitCode !== 0) return null;
+      const sha = result.stdout.trim();
+      return sha.length > 0 ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Read the short SHA of the just-pushed HEAD commit. Returns null when the
    * git command fails; caller falls back to `<unknown>` in the reply body —
    * the SHA is decoration, not termination logic (#883).
@@ -765,6 +1220,213 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
   }
 
   /**
+   * #1070 FR-002: retry-eligible timeout disposition. Monitor will
+   * auto-dispatch the retry on its next poll (up to `retryAttempt < 2`).
+   */
+  private async addBlockedFixerTimeoutLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_FIXER_TIMEOUT_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_FIXER_TIMEOUT_LABEL },
+        'Added blocked:fixer-timeout label (retry-eligible)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_LABEL },
+        'Failed to add blocked:fixer-timeout label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1070 FR-002a: terminal disposition — CLI timed out without pushing any
+   * commit. Retries would not help; human intervention required.
+   */
+  private async addBlockedFixerTimeoutNoProgressLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL },
+        'Added blocked:fixer-timeout-no-progress label (terminal)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_NO_PROGRESS_LABEL },
+        'Failed to add blocked:fixer-timeout-no-progress label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1070 FR-003: terminal disposition — CLI timed out after the auto-retry
+   * budget (2) was exhausted. Human intervention required.
+   */
+  private async addBlockedFixerTimeoutRepeatLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL },
+        'Added blocked:fixer-timeout-repeat label (terminal, budget exhausted)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL },
+        'Failed to add blocked:fixer-timeout-repeat label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * #1073 FR-013: terminal disposition — CLI-self-commit or handler-commit
+   * cycle where the branch HEAD advanced but the reply/resolve batch had zero
+   * successes. Distinct from `blocked:stuck-feedback-loop`: the code is fine;
+   * the GitHub side didn't take. Operator remediation is to check thread state
+   * and GitHub API responses, not fixer transcripts.
+   */
+  private async addBlockedResolveFailedLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_RESOLVE_FAILED_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_RESOLVE_FAILED_LABEL },
+        'Added blocked:resolve-failed label (terminal, resolve batch had zero successes)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_RESOLVE_FAILED_LABEL },
+        'Failed to add blocked:resolve-failed label — non-fatal, waiting-for label persists',
+      );
+    }
+  }
+
+  /**
+   * Apply Disposition C (#1047): the fixer cycle committed changes but did
+   * not touch any file named by an unaddressed review-body finding. Add the
+   * `blocked:body-finding-unaddressed` label and post a marker-keyed top-level
+   * PR comment enumerating the unaddressed findings for operator triage AND
+   * for the next cycle's acknowledgment set (FR-008). Both operations are
+   * best-effort; failures are logged but not thrown so the shared `finally`
+   * still runs.
+   */
+  private async applyDispositionC(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+    issueNumber: number,
+    unaddressed: UnaddressedFinding[],
+    existingCommentBodies: readonly string[],
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [
+        BLOCKED_BODY_FINDING_UNADDRESSED_LABEL,
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_BODY_FINDING_UNADDRESSED_LABEL },
+        'Failed to add blocked:body-finding-unaddressed label — non-fatal, comment carries the same info',
+      );
+    }
+
+    // #1047 Finding 4: skip posting ONLY when a prior marker enumerates the
+    // EXACT SAME unaddressed set (per `contracts/body-findings-unaddressed-marker.md`
+    // § Idempotency). Bare marker-presence is not sufficient — subsequent
+    // reviews can introduce new findings, and each new set must post its own
+    // marker so both the operator triage AND the next cycle's acknowledgment
+    // set contain the current enumeration.
+    const currentKeys = new Set(
+      unaddressed.map((u) => `${u.reviewer}:${u.reviewId}:${u.findingIndex}`),
+    );
+    const priorMarkerBodies = existingCommentBodies.filter((b) =>
+      b.includes(BODY_FINDINGS_UNADDRESSED_MARKER),
+    );
+    const alreadyEnumerated = priorMarkerBodies.some((b) => {
+      const priorKeys = parseSingleMarkerEntries(b);
+      return setsEqual(priorKeys, currentKeys);
+    });
+    if (alreadyEnumerated) {
+      this.logger.debug(
+        {
+          prNumber,
+          issueNumber,
+          unaddressedCount: unaddressed.length,
+          priorMarkerCount: priorMarkerBodies.length,
+        },
+        'Disposition-C marker comment already enumerates this exact set — skipping duplicate post',
+      );
+      return;
+    }
+
+    const body = this.buildDispositionCComment(unaddressed);
+    try {
+      await github.postPrComment(owner, repo, prNumber, body);
+      this.logger.info(
+        { prNumber, issueNumber, unaddressedCount: unaddressed.length },
+        'Posted Disposition-C marker comment (#1047)',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), prNumber, issueNumber },
+        'Failed to post Disposition-C marker comment — non-fatal, label alone conveys the pause',
+      );
+    }
+  }
+
+  /**
+   * Build the marker-keyed Disposition-C comment body per
+   * `contracts/body-findings-unaddressed-marker.md` (#1047). Ordering:
+   * findings sorted by (reviewId asc, findingIndex asc) for readability;
+   * ack-parser is order-insensitive.
+   */
+  private buildDispositionCComment(unaddressed: UnaddressedFinding[]): string {
+    const sorted = [...unaddressed].sort((a, b) => {
+      if (a.reviewId !== b.reviewId) return a.reviewId - b.reviewId;
+      return a.findingIndex - b.findingIndex;
+    });
+    const rows = sorted
+      .map(u => {
+        const files = u.namedFiles.map(f => '`' + f + '`').join(', ');
+        return `- \`${u.reviewer}\` review #${u.reviewId} finding ${u.findingIndex} (files: ${files})`;
+      })
+      .join('\n');
+    return `${BODY_FINDINGS_UNADDRESSED_MARKER}
+
+⚠️ **Body findings not yet addressed by the fixer**
+
+The fixer completed this cycle without touching any file named by the
+following review-body findings. To unblock:
+
+- Address the findings manually, OR
+- Remove the \`${BLOCKED_BODY_FINDING_UNADDRESSED_LABEL}\` label to acknowledge —
+  a subsequent NEW review from the same author will re-gate its findings.
+
+### Unaddressed findings
+
+${rows}
+
+_This is an automated notice from the PR-feedback body-consumption path (#1047)._`;
+  }
+
+  /**
    * Remove the `waiting-for:address-pr-feedback` label from the linked issue.
    */
   private async removeFeedbackLabel(
@@ -805,6 +1467,68 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
         { error: String(error), issueNumber },
         'Failed to remove agent:in-progress label — non-fatal',
       );
+    }
+  }
+
+  /**
+   * #1051 FR-003: react to a `refuse` decision from the pre-push guard.
+   *
+   * - Emit exactly one warn log with `event: 'push-refused'` and the fields
+   *   named in FR-003a — reason, prNumber, branch, owner, repo, issueNumber.
+   * - Apply FR-003b label state: clear `agent:in-progress` unconditionally;
+   *   also add `agent:error` when the linked issue is still `open` (an open
+   *   issue + merged/missing branch is a genuine anomaly worth surfacing).
+   *   Never add `failed:<phase>` — that would invite `/cockpit:resume` to
+   *   re-attempt the refused push and turn the fix into a loop (invariant I-6).
+   *
+   * Best-effort throughout: label failures are non-fatal so the caller's
+   * shared `finally` still runs.
+   */
+  private async handlePushRefused(
+    github: GitHubClient,
+    decision: Extract<PushGuardDecision, { kind: 'refuse' }>,
+  ): Promise<void> {
+    const { reason, prNumber, branch, owner, repo, issueNumber } = decision;
+
+    this.logger.warn(
+      { event: 'push-refused', reason, prNumber, branch, owner, repo, issueNumber },
+      'Refusing push — PR state or remote branch state indicates a resurrection or duplicate-PR attempt',
+    );
+
+    // Read issue.state so FR-003b can decide whether to add `agent:error`.
+    // Best-effort: on read failure, treat as `open` (safer to surface than to
+    // silently swallow — a stale-cache issue can be dismissed by the operator).
+    let issueState: 'open' | 'closed' = 'open';
+    try {
+      const issue = await github.getIssue(owner, repo, issueNumber);
+      issueState = issue.state;
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to read issue state — assuming open',
+      );
+    }
+
+    // Always clear agent:in-progress. The shared `finally` will also try, but
+    // clearing here first bounds the window an observer sees the label pinned.
+    try {
+      await github.removeLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'handlePushRefused: failed to remove agent:in-progress — non-fatal (finally will retry)',
+      );
+    }
+
+    if (issueState === 'open') {
+      try {
+        await github.addLabels(owner, repo, issueNumber, ['agent:error']);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'handlePushRefused: failed to add agent:error — non-fatal',
+        );
+      }
     }
   }
 

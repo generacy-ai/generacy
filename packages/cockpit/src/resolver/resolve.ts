@@ -48,7 +48,9 @@ export async function resolveEpic(
     throw new LoudResolverError('GH_FETCH_FAILED', { cause });
   }
 
-  const parsed = parseEpicBody(body);
+  // #1014 (FR-006): pass the epic's own repo as defaultRepo so bare `#N` refs
+  // in checkbox task-list items resolve to the scope repo automatically.
+  const parsed = parseEpicBody(body, { defaultRepo: epic.repo });
 
   if (options.logger?.warn != null) {
     for (const w of parsed.warnings) options.logger.warn(w);

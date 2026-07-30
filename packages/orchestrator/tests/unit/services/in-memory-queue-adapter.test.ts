@@ -50,12 +50,19 @@ describe('InMemoryQueueAdapter', () => {
 
     it('should reject duplicate item key already in pending', async () => {
       await adapter.enqueue(makeItem());
-      await adapter.enqueue(makeItem());
+      const second = await adapter.enqueue(makeItem());
 
+      expect(second).toBe(false);
       expect(await adapter.getQueueDepth()).toBe(1);
-      expect(logger.debug).toHaveBeenCalledWith(
-        { itemKey: 'test-org/test-repo#42' },
-        'Duplicate item key in pending queue, skipping enqueue'
+      // #1060 / FR-005: drop funnels through emitDropLog with source='enqueue'.
+      // Fixed 2024-01-01 enqueuedAt is > maxRunDurationMs → transition edge → warn.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemKey: 'test-org/test-repo#42',
+          source: 'enqueue',
+          reason: 'in-flight',
+        }),
+        'Dropping enqueue (item already in flight)'
       );
     });
 
@@ -64,12 +71,18 @@ describe('InMemoryQueueAdapter', () => {
       await adapter.claim('worker-1');
 
       // Item is now claimed — enqueue same key again
-      await adapter.enqueue(makeItem());
+      const second = await adapter.enqueue(makeItem());
 
+      expect(second).toBe(false);
       expect(await adapter.getQueueDepth()).toBe(0);
-      expect(logger.debug).toHaveBeenCalledWith(
-        { itemKey: 'test-org/test-repo#42' },
-        'Duplicate item key in claimed set, skipping enqueue'
+      // #1060 / FR-005: drop funnels through emitDropLog with source='enqueue'.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemKey: 'test-org/test-repo#42',
+          source: 'enqueue',
+          reason: 'in-flight',
+        }),
+        'Dropping enqueue (item already in flight)'
       );
     });
 
@@ -280,12 +293,68 @@ describe('InMemoryQueueAdapter', () => {
       expect(await adapter.getActiveWorkerCount()).toBe(0);
     });
 
-    it('should handle release of item not in claimed set gracefully', async () => {
-      // Release an item that was never claimed — should not throw
+    it('should handle release of item not in claimed set gracefully (PR #1065 review finding 1 — no re-queue)', async () => {
+      // Release an item that was never claimed — must not throw and
+      // must NOT re-pend (parity with Redis adapter's null-guard: a
+      // re-queue here would create a phantom pending entry with no
+      // corresponding in-flight-SET membership).
       await adapter.release('unknown-worker', makeItem());
 
-      // Item gets re-queued with attemptCount 0
+      // Contract change: previously re-queued with attemptCount 0.
+      // Now bails to preserve the in-flight = pending ∪ claimed
+      // invariant (nothing was in flight → nothing goes to pending).
+      expect(await adapter.getQueueDepth()).toBe(0);
+    });
+  });
+
+  describe('requeueForResume (#1060 PR #1065 review finding 2)', () => {
+    it('should re-pend at resume priority WITHOUT bumping attemptCount', async () => {
+      const item = makeItem();
+      // Get an item to attemptCount=2 by two release cycles.
+      await adapter.enqueue(item);
+      let claimed = await adapter.claim('worker-1');
+      await adapter.release('worker-1', claimed!);
+      claimed = await adapter.claim('worker-2');
+      await adapter.release('worker-2', claimed!);
+      // Now attemptCount=2. One more `release()` would dead-letter it
+      // (maxRetries=3). A `requeueForResume()` on the same claim must
+      // NOT count toward dead-letter.
+      claimed = await adapter.claim('worker-3');
+      logger.warn.mockClear();
+
+      await adapter.requeueForResume('worker-3', claimed!);
+
+      // Not dead-lettered — still available in pending.
       expect(await adapter.getQueueDepth()).toBe(1);
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.objectContaining({ maxRetries: 3 }),
+        'Item dead-lettered after max retries',
+      );
+      // Re-pended at resume priority (0.x).
+      const items = await adapter.getQueueItems(0, 10);
+      expect(items[0].score).toBeGreaterThan(0);
+      expect(items[0].score).toBeLessThan(1);
+      expect(items[0].item.queueReason).toBe('resume');
+    });
+
+    it('should NOT re-pend on null claim (parity with release() null-guard)', async () => {
+      // Reaper race: nothing was claimed by this worker for this itemKey.
+      await adapter.requeueForResume('never-claimed-worker', makeItem());
+
+      // No re-queue — the item was not in flight, so there's nothing to
+      // resume. A re-queue here would create a phantom pending entry.
+      expect(await adapter.getQueueDepth()).toBe(0);
+    });
+
+    it('should preserve in-flight membership across the re-pend', async () => {
+      await adapter.enqueue(makeItem());
+      const claimed = await adapter.claim('worker-1');
+      expect(await adapter.hasInFlight('test-org/test-repo#42')).toBe(true);
+
+      await adapter.requeueForResume('worker-1', claimed!);
+
+      // Still in flight (moved from claimed back to pending).
+      expect(await adapter.hasInFlight('test-org/test-repo#42')).toBe(true);
     });
   });
 

@@ -159,8 +159,8 @@ export class MergeConflictHandler {
           body: candidate.body ?? '',
           head: { ref: candidate.head.ref },
         };
-        const link = await this.prLinker.linkPrToIssue(github, owner, repo, linkInput);
-        if (link && link.issueNumber === issueNumber) {
+        const linkResult = await this.prLinker.linkPrToIssue(github, owner, repo, linkInput);
+        if (linkResult.kind === 'ok' && linkResult.link.issueNumber === issueNumber) {
           pr = candidate;
           break;
         }

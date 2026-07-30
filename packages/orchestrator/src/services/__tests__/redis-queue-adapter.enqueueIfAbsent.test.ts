@@ -123,6 +123,83 @@ function createMockRedisWithState() {
       state.heartbeats.add(heartbeatKey);
       return first.member;
     }),
+
+    // #1069 mock: mirrors REQUEUE_FOR_RESUME_SCRIPT — [code, attemptCount].
+    requeueForResumeItem: vi.fn(async (
+      _pendingKey: string,
+      claimedKey: string,
+      heartbeatKey: string,
+      itemKey: string,
+      resumePriority: string,
+      baseJson: string,
+    ) => {
+      const workerId = claimedKey.replace('orchestrator:queue:claimed:', '');
+      const claimed = state.claimed.get(workerId)?.get(itemKey);
+      if (!claimed) {
+        state.heartbeats.delete(heartbeatKey);
+        return [0, -1];
+      }
+      const parsed: SerializedQueueItem = JSON.parse(claimed);
+      const base: SerializedQueueItem = JSON.parse(baseJson);
+      base.queueReason = 'resume';
+      base.priority = Number(resumePriority);
+      base.attemptCount = parsed.attemptCount;
+      base.itemKey = itemKey;
+      base.claimedAt = undefined;
+      const repayload = JSON.stringify(base);
+      state.claimed.get(workerId)?.delete(itemKey);
+      state.heartbeats.delete(heartbeatKey);
+      state.pending.set(itemKey, { score: Number(resumePriority), member: repayload });
+      zaddSpy(_pendingKey, Number(resumePriority), repayload);
+      return [1, parsed.attemptCount];
+    }),
+
+    // #1069 mock: mirrors RELEASE_SCRIPT — [code, attemptCount].
+    releaseItem: vi.fn(async (
+      _pendingKey: string,
+      claimedKey: string,
+      heartbeatKey: string,
+      _deadLetterKey: string,
+      _inFlightKey: string,
+      itemKey: string,
+      retryPriority: string,
+      baseJson: string,
+      maxRetriesStr: string,
+      nowMsStr: string,
+    ) => {
+      const workerId = claimedKey.replace('orchestrator:queue:claimed:', '');
+      const claimed = state.claimed.get(workerId)?.get(itemKey);
+      if (!claimed) {
+        state.heartbeats.delete(heartbeatKey);
+        return [0, -1];
+      }
+      const parsed: SerializedQueueItem = JSON.parse(claimed);
+      const attemptCount = parsed.attemptCount + 1;
+      const maxRetries = Number(maxRetriesStr);
+      const base: SerializedQueueItem = JSON.parse(baseJson);
+      base.attemptCount = attemptCount;
+      base.itemKey = itemKey;
+      base.claimedAt = undefined;
+
+      if (attemptCount >= maxRetries) {
+        const dlpayload = JSON.stringify(base);
+        state.claimed.get(workerId)?.delete(itemKey);
+        state.heartbeats.delete(heartbeatKey);
+        state.deadLetter.push({ score: Number(nowMsStr), member: dlpayload });
+        sremSpy(_inFlightKey, itemKey);
+        state.inFlight.delete(itemKey);
+        return [2, attemptCount];
+      }
+
+      base.queueReason = 'retry';
+      base.priority = Number(retryPriority);
+      const repayload = JSON.stringify(base);
+      state.claimed.get(workerId)?.delete(itemKey);
+      state.heartbeats.delete(heartbeatKey);
+      state.pending.set(itemKey, { score: Number(retryPriority), member: repayload });
+      zaddSpy(_pendingKey, Number(retryPriority), repayload);
+      return [1, attemptCount];
+    }),
   };
 
   // Chainable multi() that forwards to the underlying mocks.
@@ -297,21 +374,146 @@ describe('RedisQueueAdapter.enqueueIfAbsent', () => {
     );
   });
 
-  it('rejected enqueueIfAbsent (already in flight) emits structured info drop log (FR-009)', async () => {
+  it('rejected enqueueIfAbsent (already in flight, fresh) emits structured info drop log (FR-009)', async () => {
     const { redis } = createMockRedisWithState();
     const adapter = new RedisQueueAdapter(redis as unknown as import('ioredis').Redis, logger);
 
-    await adapter.enqueueIfAbsent(sampleItem);
+    // #1054 finding 7 — enqueueIfAbsent now seeds the enqueuedAt cache on
+    // success, so subsequent drops for the same itemKey use the cached age
+    // to classify severity. Use a fresh enqueuedAt so the collision drop
+    // is under the maxRunDurationMs threshold (severity = info).
+    const freshItem: QueueItem = {
+      ...sampleItem,
+      enqueuedAt: new Date().toISOString(),
+    };
+
+    await adapter.enqueueIfAbsent(freshItem);
     logger.info.mockClear();
 
-    const second = await adapter.enqueueIfAbsent(sampleItem);
+    const second = await adapter.enqueueIfAbsent(freshItem);
 
     expect(second).toBe(false);
     // #879 / FR-009: adapter-level drop signal. Distinct from Redis-error warn.
+    // Fresh item → ageMs << maxRunDurationMs → severity=info → logger.info.
     expect(logger.info).toHaveBeenCalledWith(
-      { itemKey: 'test-org/test-repo#42', reason: 'in-flight' },
+      expect.objectContaining({ itemKey: 'test-org/test-repo#42', reason: 'in-flight' }),
       'Dropping enqueue (item already in flight)',
     );
+  });
+
+  it('FR-006 / SC-003: drop past maxRunDurationMs emits warn with ageMs > threshold', async () => {
+    const { redis, state } = createMockRedisWithState();
+    const oldEnqueuedAt = new Date(Date.now() - 3_600_000).toISOString(); // 60 min old
+    // Add SCAN/hgetall/exists to the mock for hasInFlightAge.
+    (redis as unknown as Record<string, unknown>).exists = vi.fn(async () => 0);
+    (redis as unknown as Record<string, unknown>).hgetall = vi.fn(async (key: string) => {
+      const workerId = key.replace('orchestrator:queue:claimed:', '');
+      const workerMap = state.claimed.get(workerId);
+      if (!workerMap) return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of workerMap) out[k] = v;
+      return out;
+    });
+    (redis as unknown as Record<string, unknown>).scan = vi.fn(async () => {
+      const keys: string[] = [];
+      for (const workerId of state.claimed.keys()) {
+        keys.push(`orchestrator:queue:claimed:${workerId}`);
+      }
+      return ['0', keys];
+    });
+
+    const adapter = new RedisQueueAdapter(
+      redis as unknown as import('ioredis').Redis,
+      logger,
+      { maxRetries: 3, maxRunDurationMs: 1_800_000 },
+    );
+
+    // Seed a wedged in-flight claim with an old enqueuedAt.
+    state.inFlight.add('test-org/test-repo#42');
+    const workerMap = new Map<string, string>();
+    workerMap.set(
+      'test-org/test-repo#42',
+      JSON.stringify({ ...sampleItem, attemptCount: 0, itemKey: 'test-org/test-repo#42', enqueuedAt: oldEnqueuedAt }),
+    );
+    state.claimed.set('worker-1', workerMap);
+
+    logger.warn.mockClear();
+    const result = await adapter.enqueueIfAbsent(sampleItem);
+
+    expect(result).toBe(false);
+    // The transition-edge fires: severity flips info→warn on this first drop.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemKey: 'test-org/test-repo#42',
+        reason: 'in-flight',
+        ageMs: expect.any(Number),
+      }),
+      'Dropping enqueue (item already in flight)',
+    );
+    const warnCall = logger.warn.mock.calls.find(
+      (c) =>
+        typeof c[0] === 'object' &&
+        (c[0] as Record<string, unknown>).reason === 'in-flight',
+    );
+    expect((warnCall![0] as Record<string, unknown>).ageMs as number).toBeGreaterThan(1_800_000);
+  });
+
+  it('FR-006 transition-edge: subsequent drops for same itemKey (age still > threshold) do NOT re-emit warn', async () => {
+    const { redis, state } = createMockRedisWithState();
+    const oldEnqueuedAt = new Date(Date.now() - 3_600_000).toISOString();
+    (redis as unknown as Record<string, unknown>).exists = vi.fn(async () => 0);
+    (redis as unknown as Record<string, unknown>).hgetall = vi.fn(async (key: string) => {
+      const workerId = key.replace('orchestrator:queue:claimed:', '');
+      const workerMap = state.claimed.get(workerId);
+      if (!workerMap) return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of workerMap) out[k] = v;
+      return out;
+    });
+    (redis as unknown as Record<string, unknown>).scan = vi.fn(async () => {
+      const keys: string[] = [];
+      for (const workerId of state.claimed.keys()) {
+        keys.push(`orchestrator:queue:claimed:${workerId}`);
+      }
+      return ['0', keys];
+    });
+
+    const adapter = new RedisQueueAdapter(
+      redis as unknown as import('ioredis').Redis,
+      logger,
+      { maxRetries: 3, maxRunDurationMs: 1_800_000 },
+    );
+
+    state.inFlight.add('test-org/test-repo#42');
+    const workerMap = new Map<string, string>();
+    workerMap.set(
+      'test-org/test-repo#42',
+      JSON.stringify({ ...sampleItem, attemptCount: 0, itemKey: 'test-org/test-repo#42', enqueuedAt: oldEnqueuedAt }),
+    );
+    state.claimed.set('worker-1', workerMap);
+
+    // First drop: warn transition edge.
+    await adapter.enqueueIfAbsent(sampleItem);
+    logger.warn.mockClear();
+    logger.info.mockClear();
+
+    // Second drop: severity stays warn but isTransitionEdge=false. Per FR-006
+    // anti-spam, emit routes through `logger.info`, NOT `logger.warn`.
+    await adapter.enqueueIfAbsent(sampleItem);
+
+    const warnCalls = logger.warn.mock.calls.filter(
+      (c) =>
+        typeof c[0] === 'object' &&
+        (c[0] as Record<string, unknown>).reason === 'in-flight',
+    );
+    const infoCalls = logger.info.mock.calls.filter(
+      (c) =>
+        typeof c[0] === 'object' &&
+        (c[0] as Record<string, unknown>).reason === 'in-flight',
+    );
+    // Anti-spam: no repeat warn. Emit lands at info instead.
+    expect(warnCalls).toHaveLength(0);
+    expect(infoCalls).toHaveLength(1);
   });
 
   it('hasInFlight returns false and logs warn on Redis error (fail-safe)', async () => {

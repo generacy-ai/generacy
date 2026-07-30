@@ -32,6 +32,36 @@ export interface AuthMiddlewareOptions {
 }
 
 /**
+ * Routes exempted from API-key auth ONLY when the request originates from the
+ * loopback interface. `/cockpit/gates` (and `/cockpit/gates/:id/ack`) are POSTed
+ * by the co-located cockpit MCP over 127.0.0.1 and carry no API key by design —
+ * the MCP gate client has no key path (see
+ * `packages/generacy/src/cli/commands/cockpit/mcp/gates/client.ts`). The
+ * orchestrator HTTP listener binds `0.0.0.0` (config default) and is
+ * host-published, so these state-mutating, cloud-forwarding routes must NOT be
+ * globally exempt like `skipRoutes`; they are allowed only when the TCP peer is
+ * loopback. Network callers still receive 401.
+ */
+const LOOPBACK_ONLY_EXEMPT_PREFIXES = ['/cockpit/gates'];
+
+/** IPv4/IPv6 loopback forms Node reports for a same-host TCP peer. */
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * True when `routePath` is a loopback-only-exempt route AND the request's
+ * un-spoofable TCP peer address is loopback. Uses the raw socket
+ * `remoteAddress` — NOT the trustProxy-derived `request.ip`, which a client
+ * could spoof via `X-Forwarded-For` — because this gates an auth bypass.
+ */
+function isLoopbackExemptRoute(request: FastifyRequest, routePath: string): boolean {
+  if (!LOOPBACK_ONLY_EXEMPT_PREFIXES.some((route) => routePath.startsWith(route))) {
+    return false;
+  }
+  const peer = request.socket?.remoteAddress ?? '';
+  return LOOPBACK_ADDRESSES.has(peer);
+}
+
+/**
  * Create authentication middleware
  */
 export function createAuthMiddleware(options: AuthMiddlewareOptions) {
@@ -56,6 +86,20 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
     if (skipRoutes.some((route) => routePath.startsWith(route))) {
       request.auth = {
         userId: 'anonymous',
+        method: 'api-key',
+        scopes: [],
+      };
+      return;
+    }
+
+    // Loopback-only exemption: the co-located cockpit MCP POSTs gate open/ack
+    // to `/cockpit/gates[/:id/ack]` over 127.0.0.1 with no API key by design.
+    // Exempt these routes ONLY for a loopback TCP peer so the host-published
+    // `0.0.0.0` listener does not expose an unauthenticated, cloud-forwarding
+    // gate surface to the network (a plain `skipRoutes` entry would).
+    if (isLoopbackExemptRoute(request, routePath)) {
+      request.auth = {
+        userId: 'cockpit-mcp-loopback',
         method: 'api-key',
         scopes: [],
       };

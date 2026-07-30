@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/generacy-ai/generacy/specs/1038-issue-1038/contracts/gate-query.schema.json",
+  "title": "Cockpit gate-query wire contract",
+  "description": "Wire shapes for the orchestrator GET /cockpit/gates route and the cluster→cloud proxy call. Mirror consumed by generacy-cloud under specs/1020-part-cockpit-remote-gates/contracts/gate-query.schema.json.",
+  "$defs": {
+    "GateType": {
+      "type": "string",
+      "enum": [
+        "clarification",
+        "artifact-review",
+        "implementation-review",
+        "manual-validation",
+        "escalation",
+        "phase-queue",
+        "filing",
+        "scope-drained"
+      ]
+    },
+    "CloudGateStatus": {
+      "type": "string",
+      "enum": ["open", "answered", "delivered", "applied", "superseded", "failed", "expired"]
+    },
+    "McpFacingStatus": {
+      "type": "string",
+      "enum": ["open", "answered", "absent"],
+      "description": "Three-state collapse of CloudGateStatus per Q2 → C. open=cloud open; answered=cloud answered|delivered|applied; absent=no match | superseded|failed|expired."
+    },
+    "GateIdString": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{24}$",
+      "description": "sha256(gateKey) hex, first 24 chars. gateKey = `${issueRef}:${gateType}:${generation}`."
+    },
+    "GateListEntry": {
+      "type": "object",
+      "required": ["gateId", "gateType", "generation", "status"],
+      "properties": {
+        "gateId": { "$ref": "#/$defs/GateIdString" },
+        "gateType": { "$ref": "#/$defs/GateType" },
+        "generation": {
+          "type": "string",
+          "minLength": 1,
+          "description": "gateType-specific discriminator. Always serialized as string on the wire."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "answered"],
+          "description": "Non-terminal only per Q5 → A. Cloud delivered collapses to answered."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "title": "Status query request (orchestrator GET /cockpit/gates)",
+      "type": "object",
+      "required": ["issueRef", "gateType", "generation"],
+      "properties": {
+        "issueRef": { "type": "string", "minLength": 1 },
+        "gateType": { "$ref": "#/$defs/GateType" },
+        "generation": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    {
+      "title": "List query request (orchestrator GET /cockpit/gates)",
+      "type": "object",
+      "required": ["issueRef"],
+      "properties": {
+        "issueRef": { "type": "string", "minLength": 1 },
+        "gateType": { "$ref": "#/$defs/GateType" }
+      },
+      "additionalProperties": false,
+      "not": { "required": ["generation"] }
+    },
+    {
+      "title": "Status query response (200)",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["gateId", "status"],
+          "properties": {
+            "gateId": { "$ref": "#/$defs/GateIdString" },
+            "status": { "type": "string", "enum": ["open", "answered"] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["gateId", "status"],
+          "properties": {
+            "gateId": { "type": "null" },
+            "status": { "const": "absent" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    {
+      "title": "List query response (200)",
+      "type": "object",
+      "required": ["gates"],
+      "properties": {
+        "gates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GateListEntry" }
+        },
+        "truncated": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

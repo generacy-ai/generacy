@@ -66,7 +66,8 @@ describe('LeaseManager', () => {
 
       // Simulate cloud granting the lease
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: sentMsg.correlationId,
         leaseId: 'lease-abc',
       });
@@ -85,7 +86,8 @@ describe('LeaseManager', () => {
 
       // Clean up pending request
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: sentMsg.correlationId,
         leaseId: 'lease-cleanup',
       });
@@ -97,7 +99,8 @@ describe('LeaseManager', () => {
       const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: sentMsg.correlationId,
         leaseId: 'lease-1',
       });
@@ -125,7 +128,8 @@ describe('LeaseManager', () => {
       };
 
       manager.handleLeaseResponse({
-        type: 'lease_denied',
+        type: 'lease_response',
+        status: 'denied',
         correlationId: sentMsg.correlationId,
         reason: 'at_capacity',
       });
@@ -134,21 +138,120 @@ describe('LeaseManager', () => {
       expect(result).toEqual({ status: 'denied', reason: 'at_capacity' });
     });
 
-    it('logs the denial with reason and correlationId', async () => {
+    it('logs the denial with reason and denial context', async () => {
       const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
       const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
       manager.handleLeaseResponse({
-        type: 'lease_denied',
+        type: 'lease_response',
+        status: 'denied',
+        correlationId: sentMsg.correlationId,
+        reason: 'at_capacity',
+        currentCount: 1,
+        limit: 1,
+      });
+
+      await resultPromise;
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'at_capacity', currentCount: 1, limit: 1 }),
+        'Lease denied',
+      );
+    });
+
+    it('defaults reason to "denied" when the response carries none', async () => {
+      const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
+      const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'denied',
+        correlationId: sentMsg.correlationId,
+      });
+
+      const result = await resultPromise;
+      expect(result).toEqual({ status: 'denied', reason: 'denied' });
+    });
+
+    it('learns userTierLimit from the denial limit field', async () => {
+      expect(manager.userTierLimit).toBeNull();
+
+      const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
+      const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'denied',
+        correlationId: sentMsg.correlationId,
+        reason: 'at_capacity',
+        currentCount: 2,
+        limit: 2,
+      });
+
+      await resultPromise;
+      expect(manager.userTierLimit).toBe(2);
+    });
+
+    it('leaves userTierLimit untouched when the denial carries no limit', async () => {
+      const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
+      const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'denied',
         correlationId: sentMsg.correlationId,
         reason: 'at_capacity',
       });
 
       await resultPromise;
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: 'at_capacity', correlationId: sentMsg.correlationId }),
-        'Lease denied',
-      );
+      expect(manager.userTierLimit).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 2b. Lease request -> error flow (transient cloud failure)
+  // ---------------------------------------------------------------------------
+  describe('requestLease -> error', () => {
+    it('resolves with error status and message', async () => {
+      const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
+      const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'error',
+        correlationId: sentMsg.correlationId,
+        message: 'internal failure',
+      });
+
+      const result = await resultPromise;
+      expect(result).toEqual({ status: 'error', message: 'internal failure' });
+    });
+
+    it('defaults the message when the error response carries none', async () => {
+      const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
+      const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'error',
+        correlationId: sentMsg.correlationId,
+      });
+
+      const result = await resultPromise;
+      expect(result).toEqual({ status: 'error', message: 'unknown cloud error' });
+    });
+
+    it('treats a granted response without a leaseId as an error', async () => {
+      const resultPromise = manager.requestLease('user-1', 'qi-1', 'job-1');
+      const sentMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'granted',
+        correlationId: sentMsg.correlationId,
+      });
+
+      const result = await resultPromise;
+      expect(result).toEqual({ status: 'error', message: 'granted response missing leaseId' });
     });
   });
 
@@ -209,7 +312,8 @@ describe('LeaseManager', () => {
 
       // Late response should be ignored and logged as unknown
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: sentMsg.correlationId,
         leaseId: 'lease-late',
       });
@@ -447,9 +551,10 @@ describe('LeaseManager', () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockClear();
       manager.releaseLease('lease-1');
 
-      // Should have sent lease_release
+      // Should have sent lease_release with a correlationId (cloud requires it)
       expect(mockClient.send).toHaveBeenCalledWith({
         type: 'lease_release',
+        correlationId: expect.any(String),
         leaseId: 'lease-1',
       });
 
@@ -467,8 +572,35 @@ describe('LeaseManager', () => {
       manager.releaseLease('non-existent-lease');
       expect(mockClient.send).toHaveBeenCalledWith({
         type: 'lease_release',
+        correlationId: expect.any(String),
         leaseId: 'non-existent-lease',
       });
+    });
+
+    it('silently consumes the released ack (no unknown-correlation warning)', () => {
+      manager.startHeartbeat('lease-1', 'user-1', 'qi-1', 'worker-1');
+      (mockClient.send as ReturnType<typeof vi.fn>).mockClear();
+      manager.releaseLease('lease-1');
+
+      const releaseMsg = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+        correlationId: string;
+      };
+
+      // Cloud acks the release with a lease_response {status: 'released'}
+      manager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'released',
+        correlationId: releaseMsg.correlationId,
+      });
+
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Received lease response for unknown correlation ID',
+      );
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ correlationId: releaseMsg.correlationId, status: 'released' }),
+        'Lease release acked',
+      );
     });
 
     it('logs warning when send fails during release (non-fatal)', () => {
@@ -617,49 +749,63 @@ describe('LeaseManager', () => {
 
       manager.handleClusterRejected({
         type: 'cluster_rejected',
-        reason: 'Too many active clusters',
-        tier: 'free',
-        maxActiveClusters: 1,
-        currentActiveClusters: 1,
+        reason: 'cluster_limit_reached',
+        tierName: 'free',
+        currentLimit: 1,
+        upgradeHint: 'Upgrade to run more clusters',
       });
 
       expect(manager.isClusterRejected).toBe(true);
     });
 
-    it('emits cluster:rejected event with reason and tier', () => {
+    it('emits cluster:rejected event with reason and tier from tierName', () => {
       const handler = vi.fn();
       manager.on('cluster:rejected', handler);
 
       manager.handleClusterRejected({
         type: 'cluster_rejected',
-        reason: 'Too many active clusters',
-        tier: 'free',
-        maxActiveClusters: 1,
-        currentActiveClusters: 1,
+        reason: 'cluster_limit_reached',
+        tierName: 'free',
+        currentLimit: 1,
       });
 
       expect(handler).toHaveBeenCalledOnce();
       expect(handler).toHaveBeenCalledWith({
-        reason: 'Too many active clusters',
+        reason: 'cluster_limit_reached',
         tier: 'free',
+      });
+    });
+
+    it('emits tier "unknown" when tierName is absent', () => {
+      const handler = vi.fn();
+      manager.on('cluster:rejected', handler);
+
+      manager.handleClusterRejected({
+        type: 'cluster_rejected',
+        reason: 'cluster_limit_reached',
+      });
+
+      expect(handler).toHaveBeenCalledWith({
+        reason: 'cluster_limit_reached',
+        tier: 'unknown',
       });
     });
 
     it('logs the rejection with full details', () => {
       manager.handleClusterRejected({
         type: 'cluster_rejected',
-        reason: 'Cluster limit exceeded',
-        tier: 'basic',
-        maxActiveClusters: 2,
-        currentActiveClusters: 2,
+        reason: 'cluster_limit_reached',
+        tierName: 'basic',
+        currentLimit: 2,
+        upgradeHint: 'Upgrade for more clusters',
       });
 
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({
-          reason: 'Cluster limit exceeded',
-          tier: 'basic',
-          maxActiveClusters: 2,
-          currentActiveClusters: 2,
+          reason: 'cluster_limit_reached',
+          tierName: 'basic',
+          currentLimit: 2,
+          upgradeHint: 'Upgrade for more clusters',
         }),
         'Cluster rejected by cloud',
       );
@@ -669,18 +815,16 @@ describe('LeaseManager', () => {
       manager.handleClusterRejected({
         type: 'cluster_rejected',
         reason: 'first',
-        tier: 'free',
-        maxActiveClusters: 1,
-        currentActiveClusters: 1,
+        tierName: 'free',
+        currentLimit: 1,
       });
       expect(manager.isClusterRejected).toBe(true);
 
       manager.handleClusterRejected({
         type: 'cluster_rejected',
         reason: 'second',
-        tier: 'free',
-        maxActiveClusters: 1,
-        currentActiveClusters: 1,
+        tierName: 'free',
+        currentLimit: 1,
       });
       expect(manager.isClusterRejected).toBe(true);
     });
@@ -692,26 +836,28 @@ describe('LeaseManager', () => {
   describe('handleLeaseResponse for unknown correlationId', () => {
     it('logs a warning and returns for unknown correlationId on granted', () => {
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: 'unknown-id',
         leaseId: 'lease-xyz',
       });
 
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ correlationId: 'unknown-id', type: 'lease_granted' }),
+        expect.objectContaining({ correlationId: 'unknown-id', status: 'granted' }),
         'Received lease response for unknown correlation ID',
       );
     });
 
     it('logs a warning and returns for unknown correlationId on denied', () => {
       manager.handleLeaseResponse({
-        type: 'lease_denied',
+        type: 'lease_response',
+        status: 'denied',
         correlationId: 'unknown-id-2',
         reason: 'at_capacity',
       });
 
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ correlationId: 'unknown-id-2', type: 'lease_denied' }),
+        expect.objectContaining({ correlationId: 'unknown-id-2', status: 'denied' }),
         'Received lease response for unknown correlation ID',
       );
     });
@@ -722,7 +868,8 @@ describe('LeaseManager', () => {
 
       // Handle a response with a DIFFERENT correlationId
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: 'wrong-correlation-id',
         leaseId: 'lease-wrong',
       });
@@ -739,7 +886,8 @@ describe('LeaseManager', () => {
 
       // First response resolves the request
       manager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId: sentMsg.correlationId,
         leaseId: 'lease-1',
       });
@@ -749,7 +897,8 @@ describe('LeaseManager', () => {
 
       // Second response with same correlationId should be treated as unknown
       manager.handleLeaseResponse({
-        type: 'lease_denied',
+        type: 'lease_response',
+        status: 'denied',
         correlationId: sentMsg.correlationId,
         reason: 'duplicate',
       });

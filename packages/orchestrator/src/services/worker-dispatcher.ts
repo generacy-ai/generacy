@@ -61,8 +61,10 @@ export class WorkerDispatcher {
   private leaseManager: LeaseManager | null = null;
   /** Tracks leaseId for each active workerId */
   private readonly workerLeases = new Map<string, string>();
-  /** Whether polling is paused (e.g., after lease_denied, waiting for slot_available) */
+  /** Whether polling is paused (e.g., after lease denial, waiting for slot_available) */
   private pollingPaused = false;
+  /** Backstop timer that resumes polling if slot_available never arrives */
+  private denialResumeTimer: NodeJS.Timeout | null = null;
 
   constructor(
     queue: QueueManager,
@@ -103,6 +105,28 @@ export class WorkerDispatcher {
       'Starting worker dispatcher',
     );
 
+    // #1058 / AD-4 / Q2=B — boot sweep for `IN_FLIGHT_KEY` residue armed at
+    // process start. Fire-and-forget so `start()` returns immediately; the
+    // reaperLoop's first regular sweep runs its own tracker check regardless.
+    // Pre-crash residue armed by boot-sweep completion is repaired at the
+    // first regular sweep (~heartbeatCheckIntervalMs).
+    //
+    // Guarded like the reaper-loop's call to `reconcileInFlight` 500 lines
+    // below (#1054 finding 5): `.catch()` handles rejections only, so a
+    // synchronous throw (undefined `reconcileInFlight` on a hand-rolled
+    // `as unknown as QueueManager` test double) would propagate out of
+    // `start()` and prevent `Promise.all([pollLoop, reaperLoop])` from
+    // ever being reached — killing the dispatcher entirely. A boot sweep
+    // is a nice-to-have that buys one cycle of latency on a repair path;
+    // it must never be able to prevent the dispatcher from starting.
+    try {
+      void this.queue.reconcileInFlight().catch((err) => {
+        this.logger.warn({ err }, 'boot reconcileInFlight failed');
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'boot reconcileInFlight unavailable');
+    }
+
     // Run poll loop and reaper loop concurrently
     await Promise.all([
       this.pollLoop(ac.signal),
@@ -123,6 +147,11 @@ export class WorkerDispatcher {
     this.logger.info('Stopping worker dispatcher');
     this.abortController.abort();
     this.abortController = null;
+
+    if (this.denialResumeTimer) {
+      clearTimeout(this.denialResumeTimer);
+      this.denialResumeTimer = null;
+    }
 
     // Wait for in-flight workers with timeout
     if (this.activeWorkers.size > 0) {
@@ -175,7 +204,7 @@ export class WorkerDispatcher {
 
   /**
    * Inject lease manager for per-user lease gating.
-   * When set, dispatch is gated on lease_granted from the cloud.
+   * When set, dispatch is gated on a granted lease_response from the cloud.
    * When not set, dispatch proceeds without lease gating (graceful fallback).
    */
   setLeaseManager(manager: LeaseManager): void {
@@ -183,14 +212,7 @@ export class WorkerDispatcher {
 
     // On slot:available, resume polling and attempt dispatch
     manager.on('slot:available', () => {
-      if (this.pollingPaused) {
-        this.pollingPaused = false;
-        this.logger.info('Slot available, resuming polling');
-        // Trigger an immediate poll attempt
-        this.pollOnce().catch((error) => {
-          this.logger.error({ err: error }, 'Error during slot:available poll');
-        });
-      }
+      this.resumePolling('slot_available');
     });
 
     // On lease:expired, re-enqueue with resume priority
@@ -201,6 +223,34 @@ export class WorkerDispatcher {
     });
 
     this.logger.info('Lease manager configured for dispatch gating');
+  }
+
+  /**
+   * Pause claiming after a lease denial. slot_available resumes immediately;
+   * a backstop timer (denialResumeMs) resumes anyway in case the broadcast
+   * was missed, converting a potential permanent stall into bounded backoff.
+   */
+  private pausePolling(): void {
+    this.pollingPaused = true;
+    if (this.denialResumeTimer) clearTimeout(this.denialResumeTimer);
+    this.denialResumeTimer = setTimeout(() => {
+      this.resumePolling('denial backstop timer');
+    }, this.config.denialResumeMs);
+    this.denialResumeTimer.unref?.();
+  }
+
+  private resumePolling(reason: string): void {
+    if (this.denialResumeTimer) {
+      clearTimeout(this.denialResumeTimer);
+      this.denialResumeTimer = null;
+    }
+    if (!this.pollingPaused) return;
+    this.pollingPaused = false;
+    this.logger.info({ reason }, 'Resuming polling');
+    // Trigger an immediate poll attempt
+    this.pollOnce().catch((error) => {
+      this.logger.error({ err: error, reason }, 'Error during resume poll');
+    });
   }
 
   private async handleLeaseExpired(data: { leaseId: string; queueItemId: string; workerId: string }): Promise<void> {
@@ -229,24 +279,29 @@ export class WorkerDispatcher {
     this.workerLeases.delete(targetWorkerId);
     this.activeWorkers.delete(targetWorkerId);
 
-    // Re-enqueue with resume priority (0) — check for duplicates first
-    const existingItems = await this.queue.getQueueItems(0, 100);
+    // #1060 PR #1065 review findings 1+2 — use `requeueForResume()`, not
+    // `release()`:
+    //   - Finding 2: `release()` increments `attemptCount` and dead-letters
+    //     at `maxRetries` (default 3). Lease expiry is an infrastructure
+    //     event (relay disconnect, cluster restart, worker OOM-kill) and
+    //     MUST NOT consume a retry attempt — otherwise three unrelated
+    //     restarts would silently dead-letter a blameless issue.
+    //   - Finding 1: both `release()` and `requeueForResume()` now
+    //     null-guard the claim-hash read to avoid a duplicate pending
+    //     member when the reaper HDEL'd the claim first (the reaper's
+    //     re-pend uses a DIFFERENT payload string, so a raw `ZADD` here
+    //     would create a second distinct ZSET member for the same
+    //     itemKey → two concurrent workers on one issue).
+    //   - Priority: `requeueForResume` re-pends at `resume` priority
+    //     (the correct tier for an infrastructure interruption); the
+    //     `release()` retry-branch used `retry` priority, which was the
+    //     wrong tier for this path.
     const itemKey = `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}`;
-    const isDuplicate = existingItems.some(
-      (qi) => `${qi.item.owner}/${qi.item.repo}#${qi.item.issueNumber}` === itemKey,
+    await this.queue.requeueForResume(targetWorkerId, worker.item);
+    this.logger.info(
+      { itemKey, workerId: targetWorkerId },
+      'Re-enqueued via requeueForResume() after lease expiry (attemptCount preserved)',
     );
-
-    if (!isDuplicate) {
-      await this.queue.enqueue({
-        ...worker.item,
-        priority: 0, // Resume priority (highest)
-        queueReason: 'resume',
-        enqueuedAt: new Date().toISOString(),
-      });
-      this.logger.info({ itemKey }, 'Re-enqueued with resume priority after lease expiry');
-    } else {
-      this.logger.info({ itemKey }, 'Skipped re-enqueue (duplicate already in queue)');
-    }
   }
 
   private async pollLoop(signal: AbortSignal): Promise<void> {
@@ -262,7 +317,7 @@ export class WorkerDispatcher {
   }
 
   private async pollOnce(): Promise<void> {
-    // Skip polling if paused (waiting for slot_available after lease_denied)
+    // Skip polling if paused (waiting for slot_available after a denial)
     if (this.pollingPaused) return;
 
     // Skip if cluster has been rejected
@@ -271,7 +326,9 @@ export class WorkerDispatcher {
       return;
     }
 
-    // Worker cap: respect tier limit when lease manager is active
+    // Per-replica cap: each worker container runs exactly one job at a time
+    // (isolation by design — parallelism comes from container replicas, see
+    // class doc). A tier limit of 0 stops dispatch entirely.
     const maxWorkers = this.leaseManager?.userTierLimit != null
       ? Math.min(1, this.leaseManager.userTierLimit)
       : 1;
@@ -291,8 +348,11 @@ export class WorkerDispatcher {
       return;
     }
 
-    // Gate dispatch on lease if lease manager is configured and tier_info has been received
-    if (this.leaseManager && this.leaseManager.userTierLimit != null) {
+    // Gate dispatch on a cloud lease whenever a lease manager is configured
+    // (#1016). Previously this was additionally gated on tier_info having
+    // been received — but the cloud never sends tier_info, so the gate never
+    // engaged and dispatch ran unmetered.
+    if (this.leaseManager) {
       const queueItemId = `${item.owner}/${item.repo}#${item.issueNumber}`;
       const userId = item.userId ?? '';
       const jobId = queueItemId;
@@ -305,26 +365,43 @@ export class WorkerDispatcher {
       const result = await this.leaseManager.requestLease(userId, queueItemId, jobId);
 
       if (result.status === 'denied') {
-        // Re-enqueue and pause polling until slot_available
+        // At capacity: re-enqueue and pause polling. slot_available resumes
+        // immediately; the denialResumeMs backstop covers a missed broadcast
+        // (relay reconnect window) so a replica can never pause forever.
         this.logger.info(
           { reason: result.reason, queueItemId },
           'Lease denied, re-enqueuing and pausing polling',
         );
         await this.queue.release(workerId, item);
-        this.pollingPaused = true;
+        this.pausePolling();
         return;
       }
 
-      if (result.status === 'timeout') {
-        // Re-enqueue with retry priority
-        this.logger.warn({ queueItemId }, 'Lease request timed out, re-enqueuing');
+      if (result.status === 'error') {
+        // The cloud answered but failed transiently — re-enqueue and retry
+        // on a later poll. No pause: no slot_available will follow an error.
+        this.logger.warn(
+          { queueItemId, message: result.message },
+          'Lease request errored, re-enqueuing for retry',
+        );
         await this.queue.release(workerId, item);
         return;
       }
 
-      // Granted — start lease heartbeat and track the lease
-      this.leaseManager.startHeartbeat(result.leaseId, userId, queueItemId, workerId);
-      this.workerLeases.set(workerId, result.leaseId);
+      if (result.status === 'timeout') {
+        // No answer at all — a lease-less cloud or a down relay. Fail open:
+        // blocking here would starve every dispatch against clouds without
+        // an ExecutionLeaseService (which never respond). Entitlement is
+        // enforced by denial when the lease path works.
+        this.logger.warn(
+          { queueItemId },
+          'Lease request timed out — dispatching without lease (fail-open)',
+        );
+      } else {
+        // Granted — start lease heartbeat and track the lease
+        this.leaseManager.startHeartbeat(result.leaseId, userId, queueItemId, workerId);
+        this.workerLeases.set(workerId, result.leaseId);
+      }
     }
 
     this.logger.info(
@@ -519,6 +596,68 @@ export class WorkerDispatcher {
 
       try {
         await this.reapStaleWorkers();
+
+        // #1054 / FR-001 / AD-4: sequential Redis-side reap after the in-memory
+        // pass, so the Redis sweep sees a coherent state. Error-tolerant (R2/R3)
+        // — a Redis error must not skip subsequent cycles.
+        //
+        // #1054 finding 5 — the invocation MUST sit inside the surrounding
+        // try/catch, not outside. `.catch()` handles rejections only; a
+        // synchronous throw (undefined `reapOrphanClaims` on a hand-rolled
+        // `as unknown as QueueManager` mock, or an older adapter instance in
+        // a mixed deploy) would exit the `while (!signal.aborted)` loop
+        // and permanently kill BOTH reap paths for the process lifetime.
+        const report = await this.queue
+          .reapOrphanClaims()
+          .catch((err) => {
+            this.logger.warn({ err }, 'reapOrphanClaims failed');
+            return null;
+          });
+        if (
+          report &&
+          (report.reclaimed.length > 0 ||
+            report.skippedRaceReappeared > 0 ||
+            report.skippedGraceWindow > 0)
+        ) {
+          this.logger.info(
+            {
+              event: 'reap-orphan-claims',
+              scanned: report.scanned,
+              reclaimed: report.reclaimed.length,
+              skippedRaceReappeared: report.skippedRaceReappeared,
+              skippedGraceWindow: report.skippedGraceWindow,
+            },
+            'Reaper cycle complete (Redis-side)',
+          );
+        }
+
+        // #1058 / AD-5: sequential invocation after `reapOrphanClaims` so the
+        // reconciliation snapshot sees a coherent post-reap state. Same
+        // `.catch()` error envelope pattern — a Redis error must not skip
+        // subsequent cycles.
+        const reconcileReport = await this.queue
+          .reconcileInFlight()
+          .catch((err) => {
+            this.logger.warn({ err }, 'reconcileInFlight failed');
+            return null;
+          });
+        if (
+          reconcileReport &&
+          (reconcileReport.reconciled > 0 ||
+            reconcileReport.skippedAlreadyGone > 0 ||
+            reconcileReport.trackedFirstSeen > 0)
+        ) {
+          this.logger.info(
+            {
+              event: 'reconcile-in-flight',
+              scanned: reconcileReport.scanned,
+              reconciled: reconcileReport.reconciled,
+              skippedAlreadyGone: reconcileReport.skippedAlreadyGone,
+              trackedFirstSeen: reconcileReport.trackedFirstSeen,
+            },
+            'Reconcile cycle complete (in-flight residue)',
+          );
+        }
       } catch (error) {
         this.logger.error({ err: error }, 'Error during reaper cycle');
       }

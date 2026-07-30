@@ -10,7 +10,7 @@
  * Represents an active execution lease granted by the cloud.
  */
 export interface Lease {
-  /** Unique lease ID assigned by cloud in lease_granted */
+  /** Unique lease ID assigned by cloud in the granting lease_response */
   leaseId: string;
   /** User ID (cluster owner) this lease is charged against */
   userId: string;
@@ -28,10 +28,17 @@ export interface Lease {
 
 /**
  * Result of a lease request attempt.
+ *
+ * - `granted` / `denied`: definitive cloud answers.
+ * - `error`: the cloud answered but could not process the request (transient) —
+ *   callers should re-enqueue and retry, NOT pause for slot_available.
+ * - `timeout`: no answer at all (lease-less cloud, relay down). Callers may
+ *   fail open — entitlement is enforced server-side when the path works.
  */
 export type LeaseRequestResult =
   | { status: 'granted'; leaseId: string }
   | { status: 'denied'; reason: string }
+  | { status: 'error'; message: string }
   | { status: 'timeout' };
 
 /**
@@ -78,14 +85,16 @@ export interface RelayLeaseRequest {
 /** Sent on workflow pause/complete/fail */
 export interface RelayLeaseRelease {
   type: 'lease_release';
-  /** Lease ID from lease_granted */
+  /** UUID v4 — the cloud refuses releases without one; the ack echoes it */
+  correlationId: string;
+  /** Lease ID from the granting lease_response */
   leaseId: string;
 }
 
 /** Sent every 30s for each active lease */
 export interface RelayLeaseHeartbeat {
   type: 'lease_heartbeat';
-  /** Lease ID from lease_granted */
+  /** Lease ID from the granting lease_response */
   leaseId: string;
 }
 
@@ -93,22 +102,32 @@ export interface RelayLeaseHeartbeat {
 // Relay Message Types (Inbound: Cloud → Orchestrator)
 // =============================================================================
 
-/** Lease approved — dispatch may proceed */
-export interface RelayLeaseGranted {
-  type: 'lease_granted';
-  /** Matches correlationId from lease_request */
+/**
+ * Response to lease_request and lease_release (#1016).
+ *
+ * This is the wire shape the cloud actually sends (generacy-cloud
+ * relay-types.ts `LeaseResponseMessage`) — a single `lease_response` type
+ * discriminated by `status`, NOT separate `lease_granted`/`lease_denied`
+ * message types (which the cloud never emits).
+ */
+export interface RelayLeaseResponse {
+  type: 'lease_response';
+  /** Matches correlationId from lease_request / lease_release */
   correlationId: string;
-  /** Unique lease ID for heartbeat and release */
-  leaseId: string;
-}
-
-/** Lease denied — user at capacity */
-export interface RelayLeaseDenied {
-  type: 'lease_denied';
-  /** Matches correlationId from lease_request */
-  correlationId: string;
-  /** Reason for denial */
-  reason: 'at_capacity' | string;
+  /** Outcome: granted/denied answer a request; released acks a release */
+  status: 'granted' | 'denied' | 'released' | 'error';
+  /** Present when status = granted */
+  leaseId?: string;
+  /** Present when status = granted */
+  ttlSeconds?: number;
+  /** Present when status = denied (e.g. 'at_capacity') */
+  reason?: string;
+  /** Denial context: the user's current active lease count */
+  currentCount?: number;
+  /** Denial context: the tier's max concurrent executions */
+  limit?: number;
+  /** Present when status = error */
+  message?: string;
 }
 
 /** A slot freed up — try dequeuing next item */
@@ -135,17 +154,21 @@ export interface RelayTierInfo {
   maxActiveClusters: number;
 }
 
-/** Cluster connection rejected */
+/**
+ * Cluster connection rejected (tier cluster limit).
+ * Field names match the cloud's `ClusterRejectedMessage`
+ * (reason/currentLimit/tierName/upgradeHint), not the older draft shape.
+ */
 export interface RelayClusterRejected {
   type: 'cluster_rejected';
-  /** Human-readable reason */
+  /** Machine-readable reason, e.g. 'cluster_limit_reached' */
   reason: string;
-  /** User's current tier */
-  tier: string;
-  /** Maximum clusters allowed */
-  maxActiveClusters: number;
-  /** Current active cluster count */
-  currentActiveClusters: number;
+  /** Maximum active clusters allowed by the tier */
+  currentLimit?: number;
+  /** User's current tier name */
+  tierName?: string;
+  /** Human-readable upgrade guidance */
+  upgradeHint?: string;
 }
 
 // =============================================================================
@@ -164,7 +187,7 @@ export interface RelayClusterRejected {
 export interface ILeaseManager {
   requestLease(userId: string, queueItemId: string, jobId: string): Promise<LeaseRequestResult>;
   releaseLease(leaseId: string): void;
-  handleLeaseResponse(msg: RelayLeaseGranted | RelayLeaseDenied): void;
+  handleLeaseResponse(msg: RelayLeaseResponse): void;
   handleSlotAvailable(msg: RelaySlotAvailable): void;
   handleTierInfo(msg: RelayTierInfo): void;
   handleClusterRejected(msg: RelayClusterRejected): void;

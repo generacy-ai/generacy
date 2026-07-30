@@ -168,8 +168,28 @@ describe('resolveEpic', () => {
     }
   });
 
+  // #1014 (T070 / FR-006 / SC-002): resolveEpic auto-supplies the epic's own
+  // owner/repo as `defaultRepo`, so bare `#N` refs in checkbox items inside the
+  // epic body resolve to the scope repo — no warning, no dropped refs.
+  it('#1014 auto-supplies defaultRepo from epic ref — bare `#N` in checkbox resolves (FR-006)', async () => {
+    const body = ['### Phase 1', '- [ ] #223'].join('\n');
+    const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body }));
+    const r = await resolveEpic({ epicRef: 'my-org/my-repo#1', gh });
+    expect(r.parsed.allRefs).toEqual([{ repo: 'my-org/my-repo', number: 223 }]);
+    expect(r.parsed.phases[0]!.refs).toEqual([
+      { repo: 'my-org/my-repo', number: 223 },
+    ]);
+    expect(r.parsed.warnings).toEqual([]);
+  });
+
   it('forwards parser warnings to options.logger.warn', async () => {
-    const body = ['### S1', '- [ ] #8', '- [ ] owner/repo#1'].join('\n');
+    // #1014 (FR-004): a bare `#8` would now resolve under the auto-supplied
+    // `defaultRepo`, so use a bad-path URL to trigger a warning that survives.
+    const body = [
+      '### S1',
+      '- [ ] https://github.com/owner/repo/commit/abc123',
+      '- [ ] owner/repo#1',
+    ].join('\n');
     const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body }));
     const warnings: string[] = [];
     await resolveEpic({
@@ -178,6 +198,6 @@ describe('resolveEpic', () => {
       logger: { warn: (m) => warnings.push(m) },
     });
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('#8');
+    expect(warnings[0]).toContain('URL path not /(issues|pull)/N');
   });
 });

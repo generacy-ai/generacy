@@ -22,6 +22,12 @@ import { cockpitAwaitEvents } from './tools/cockpit_await_events.js';
 import { cockpitScopeAdd } from './tools/cockpit_scope_add.js';
 import { cockpitScopeRemove } from './tools/cockpit_scope_remove.js';
 import { cockpitRelayClarifyAnswers } from './tools/cockpit_relay_clarify_answers.js';
+import { cockpitClaim } from './tools/cockpit_claim.js';
+import { cockpitRelease } from './tools/cockpit_release.js';
+import { cockpitGateOpen } from './tools/cockpit_gate_open.js';
+import { cockpitGateAck } from './tools/cockpit_gate_ack.js';
+import { cockpitGateStatus } from './tools/cockpit_gate_status.js';
+import { cockpitGateList } from './tools/cockpit_gate_list.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -32,11 +38,27 @@ import {
   CockpitScopeAddInputSchema,
   CockpitScopeRemoveInputSchema,
   CockpitRelayClarifyAnswersInputSchema,
+  CockpitClaimInputSchema,
+  CockpitReleaseInputSchema,
+  CockpitGateOpenInputSchema,
+  CockpitGateAckInputSchema,
+  CockpitGateStatusInputSchema,
+  CockpitGateListInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
 export interface BuildMcpServerDeps {
   runner?: CommandRunner;
+  /**
+   * #1022 — remote-gate tools only. Base URL of the in-cluster orchestrator.
+   * Precedence: arg > `$ORCHESTRATOR_URL` > `http://127.0.0.1:3100` (resolved in
+   * `gates/options.ts`, not here).
+   */
+  orchestratorUrl?: string;
+  /** #1022 — per-request HTTP timeout in ms for remote-gate tools. Default 5000. */
+  orchestratorTimeoutMs?: number;
+  /** #1022 — test-only fetch override for remote-gate tools. Production leaves undefined. */
+  fetchImpl?: typeof fetch;
 }
 
 function toCallToolResult<T>(result: ToolResult<T>): CallToolResult {
@@ -144,6 +166,26 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
   );
 
   server.registerTool(
+    'cockpit_claim',
+    {
+      description:
+        'Idempotent acquire-or-refresh-or-takeover of the active-driver claim on a scope. Called at arm time and per-wake by /cockpit:auto.',
+      inputSchema: CockpitClaimInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitClaim(args as never, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_release',
+    {
+      description:
+        'Explicit release of the active-driver claim. Idempotent — no-op success when caller is not the holder or when no claim exists.',
+      inputSchema: CockpitReleaseInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitRelease(args as never, deps)),
+  );
+
+  server.registerTool(
     'cockpit_await_events',
     {
       description:
@@ -151,6 +193,67 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
       inputSchema: AwaitEventsInputSchema,
     },
     async (args) => toCallToolResult(await cockpitAwaitEvents(args as never, deps)),
+  );
+
+  // #1022 — Design-invariant-#1 exception (Q3 → A):
+  //
+  // The other 12 cockpit MCP tools wrap standalone `generacy cockpit <verb>`
+  // CLI commands so an operator can drive them by hand. `cockpit_gate_open`
+  // and `cockpit_gate_ack` intentionally do NOT ship a `generacy cockpit
+  // gate-open|gate-ack` CLI twin: they are only meaningful inside an active
+  // `/cockpit:auto` session (opening a gate outside that ledger is a bug, not
+  // a feature). Mocked-orchestrator unit tests cover the same code paths a
+  // CLI twin would exercise (see gates/__tests__/client.test.ts and the
+  // parity-gate-*.test.ts suites). See spec.md § "Clarified decisions" and
+  // research.md R8 for the full rationale.
+  server.registerTool(
+    'cockpit_gate_open',
+    {
+      description:
+        "Open a remote gate on the orchestrator so it surfaces in the generacy.ai operator inbox. Thin HTTP client; cluster-not-cloud-activated and network failures collapse to class:'transport' for the local AskUserQuestion fallback.",
+      inputSchema: CockpitGateOpenInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateOpen(args, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_gate_ack',
+    {
+      description:
+        "Ack a previously-opened gate with a terminal outcome ('applied' | 'superseded' | 'failed'). Emits the frozen gate-outcome record over POST /cockpit/gates/:id/ack.",
+      inputSchema: CockpitGateAckInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateAck(args, deps)),
+  );
+
+  // #1038 — Design-invariant-#1 exception (mirrors the #1022 comment above):
+  //
+  // `cockpit_gate_status` and `cockpit_gate_list` are read-only query tools
+  // and intentionally do NOT ship `generacy cockpit gate-status | gate-list`
+  // CLI twins. They only make sense inside an active `/cockpit:auto` sweep
+  // step — an operator invoking them by hand has no legitimate use case.
+  // Observer independence (FR-012 / SC-005) is enforced by a static import-
+  // scan test: neither of these files may import `../gates/client.js`,
+  // `./cockpit_gate_open.js`, `./cockpit_gate_ack.js`, or any `retain*`
+  // module. See spec.md § "Clarified decisions" and research.md R12.
+  server.registerTool(
+    'cockpit_gate_status',
+    {
+      description:
+        "Query the cloud for a single gate identified by (issueRef, gateType, generation). Read-only. Returns { gateId, status: 'open' | 'answered' | 'absent' }. Distinct class:'query-unreachable' on sustained cloud outage — MUST NOT be conflated with 'absent'.",
+      inputSchema: CockpitGateStatusInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateStatus(args, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_gate_list',
+    {
+      description:
+        "List non-terminal gates for an issueRef (optional gateType filter). Read-only. Primary sweep primitive for skip-if-any-open — project-wide scope. Distinct class:'query-unreachable' on sustained cloud outage.",
+      inputSchema: CockpitGateListInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateList(args, deps)),
   );
 
   return server;

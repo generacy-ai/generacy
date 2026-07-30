@@ -278,6 +278,59 @@ describe('classify()', () => {
     });
   });
 
+  describe('#1070: blocked:fixer-timeout-* precedence in the waiting tier', () => {
+    it('D-3: blocked:fixer-timeout-no-progress (terminal) outranks waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:fixer-timeout-no-progress']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:fixer-timeout-no-progress',
+      });
+    });
+
+    it('D-3: blocked:fixer-timeout-repeat (terminal) outranks waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:fixer-timeout-repeat']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:fixer-timeout-repeat',
+      });
+    });
+
+    it('Q4=A: blocked:fixer-timeout (retry-eligible) sorts BELOW waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:fixer-timeout']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'waiting-for:address-pr-feedback',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop still outranks the new #1070 terminal labels (preservation of #883)', () => {
+      expect(
+        classify([
+          'blocked:stuck-feedback-loop',
+          'blocked:fixer-timeout-no-progress',
+          'waiting-for:address-pr-feedback',
+        ]),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+  });
+
+  describe('#1073: blocked:resolve-failed precedence in the waiting tier', () => {
+    it('D-4: blocked:resolve-failed (terminal) outranks waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:resolve-failed']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:resolve-failed',
+      });
+    });
+  });
+
   describe('#943: blocked:* labels in the error tier', () => {
     it('blocked:stuck-merge-conflicts alone classifies as error', () => {
       expect(classify(['blocked:stuck-merge-conflicts'])).toEqual({

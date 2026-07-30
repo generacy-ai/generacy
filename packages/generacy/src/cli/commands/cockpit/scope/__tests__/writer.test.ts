@@ -24,6 +24,15 @@ describe('detectShape', () => {
   it('L4 headings do not make body phased', () => {
     expect(detectShape('#### notes\n- [ ] owner/repo#1')).toBe('flat');
   });
+
+  // #1014 (T071 / FR-011): phase-shaped H4 makes body 'phased' — mirrors parser.
+  it('#1014 phase-shaped `#### P1 — Scaffold` makes body phased', () => {
+    expect(detectShape('#### P1 — Scaffold\n- [ ] owner/repo#1')).toBe('phased');
+  });
+
+  it('#1014 phase-shaped `#### Phase 2: Foundation` makes body phased', () => {
+    expect(detectShape('#### Phase 2: Foundation\n- [ ] owner/repo#1')).toBe('phased');
+  });
 });
 
 describe('applyScopeMutation — add', () => {
@@ -91,6 +100,19 @@ describe('applyScopeMutation — add', () => {
     const body = '- [ ] [owner/repo#5](https://x.test)\n';
     const result = applyScopeMutation(body, { kind: 'add', ref: ref('owner/repo', 5) });
     expect(result.noop).toBe(true);
+  });
+
+  // #1014 (T071 / FR-011): on an H4-phased body, `scope add` places the new
+  // ad-hoc ref under a `## Ad-hoc` section at the tail — mirrors the H3-phased
+  // path, not the flat path (which would just append at EOF).
+  it('#1014 H4-phased body — add creates `## Ad-hoc` section at tail', () => {
+    const body = ['#### P1 — Scaffold', '- [ ] owner/repo#1', ''].join('\n');
+    const result = applyScopeMutation(body, { kind: 'add', ref: ref('owner/repo', 99) });
+    expect(result.noop).toBe(false);
+    expect(result.shape).toBe('phased');
+    expect(result.body).toBe(
+      ['#### P1 — Scaffold', '- [ ] owner/repo#1', '', '## Ad-hoc', '', '- [ ] owner/repo#99', ''].join('\n'),
+    );
   });
 });
 

@@ -103,6 +103,9 @@ export {
   type PrReviewEvent,
   type PrToIssueLink,
   type GitHubPrReviewWebhookPayload,
+  type ReapReport,
+  type ReclaimedItem,
+  type ReconcileReport,
 } from './monitor.js';
 
 // SSE Types
@@ -159,8 +162,7 @@ export {
   type GitRemoteInfo,
   type RelayBridgeOptions,
   type RelayLeaseRequest,
-  type RelayLeaseGranted,
-  type RelayLeaseDenied,
+  type RelayLeaseResponse,
   type RelayLeaseRelease,
   type RelayLeaseHeartbeat,
   type RelaySlotAvailable,

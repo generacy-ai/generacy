@@ -8,6 +8,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SNIPLINK_BODY = readFileSync(join(HERE, 'fixtures', 'epic-826-sniplink.md'), 'utf-8');
 const TETRAD_88_BODY = readFileSync(join(HERE, 'fixtures', 'epic-826-tetrad-88.md'), 'utf-8');
 const SNAPPOLL_BODY = readFileSync(join(HERE, 'fixtures', 'epic-1006-snappoll.md'), 'utf-8');
+const BARE_REFS_1014_BODY = readFileSync(
+  join(HERE, 'fixtures', 'epic-1014-bare-refs.md'),
+  'utf-8',
+);
 
 // Ground truth for fixtures/epic-826-sniplink.md (T003 — read the markdown).
 const SNIPLINK_EXPECTED: Array<{ heading: string; refs: Array<{ repo: string; number: number }> }> = [
@@ -156,11 +160,14 @@ describe('parseEpicBody', () => {
 
     expect(result.phases[0]!.heading).toBe('S2 — single-source discovery');
     expect(result.phases[0]!.token).toBe('s2');
+    // #1014 (FR-002): non-phase-shaped `#### notes` is transparent — `owner/repo#99`
+    // continues to attribute to the S2 phase. adhocRefs stays empty here.
     expect(result.phases[0]!.refs).toEqual([
       { repo: 'owner/repo', number: 1 },
       { repo: 'owner/repo', number: 2 },
       { repo: 'owner/repo', number: 3 },
       { repo: 'owner/other-repo', number: 4 },
+      { repo: 'owner/repo', number: 99 },
     ]);
 
     expect(result.phases[1]!.heading).toBe('S3 — cleanup');
@@ -170,9 +177,7 @@ describe('parseEpicBody', () => {
       { repo: 'owner/repo', number: 1 },
     ]);
 
-    // #935: refs after `####+` terminator are now collected as adhoc rather
-    // than silently dropped, so #99 joins allRefs and adhocRefs.
-    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 99 }]);
+    expect(result.adhocRefs).toEqual([]);
     expect(result.allRefs).toEqual([
       { repo: 'owner/other-repo', number: 4 },
       { repo: 'owner/repo', number: 1 },
@@ -185,7 +190,7 @@ describe('parseEpicBody', () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it('level-4 heading closes the current phase', () => {
+  it('#1014 (FR-002): non-phase-shaped level-4 heading is transparent (no phase close)', () => {
     const body = [
       '### S1 alpha',
       '- [ ] owner/repo#1',
@@ -194,7 +199,11 @@ describe('parseEpicBody', () => {
     ].join('\n');
     const result = parseEpicBody(body);
     expect(result.phases).toHaveLength(1);
-    expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    expect(result.phases[0]!.refs).toEqual([
+      { repo: 'owner/repo', number: 1 },
+      { repo: 'owner/repo', number: 2 },
+    ]);
+    expect(result.adhocRefs).toEqual([]);
   });
 
   it('level-2 heading is ignored (does not open or close)', () => {
@@ -312,7 +321,7 @@ describe('parseEpicBody', () => {
     expect(r2.adhocRefs).toEqual([{ repo: 'owner/repo', number: 2 }]);
   });
 
-  it('refs after a ####+ terminator become adhoc (#935)', () => {
+  it('#1014 (FR-002): refs after a non-phase-shaped `####+` stay in the current phase (transparent H4)', () => {
     const body = [
       '### Phase 1',
       '- [ ] owner/repo#1',
@@ -321,8 +330,11 @@ describe('parseEpicBody', () => {
     ].join('\n');
     const result = parseEpicBody(body);
     expect(result.phases).toHaveLength(1);
-    expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
-    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 77 }]);
+    expect(result.phases[0]!.refs).toEqual([
+      { repo: 'owner/repo', number: 1 },
+      { repo: 'owner/repo', number: 77 },
+    ]);
+    expect(result.adhocRefs).toEqual([]);
   });
 
   it('a ref that appears in both a phase and adhoc dedups in allRefs; each container keeps its own copy (#935 I-4)', () => {
@@ -459,14 +471,47 @@ describe('parseEpicBody', () => {
   describe("H4 phase-header detector (#1006)", () => {
     const MARKER = "phase headers must be '###'";
 
-    it('fires on the snappoll fixture (all-adhoc + zero-populated phases + phase-shaped ####)', () => {
+    // #1014 (SC-001): the snappoll fixture is re-pinned. Phase-shaped `####`
+    // headings now open flat-sibling phases carrying their child refs; the
+    // `#1006` `phase headers must be '###'` warning no longer fires because
+    // `phases.every(p.refs.length === 0)` is now false. Kept for regression:
+    // the guard is intact; only the fixture's parse outcome changed.
+    it('no longer fires on the snappoll fixture — #1014 rescues H4 phases (SC-001)', () => {
       const result = parseEpicBody(SNAPPOLL_BODY);
-      expect(result.warnings).toEqual(
-        expect.arrayContaining([expect.stringContaining(MARKER)]),
-      );
-      expect(result.phases.length).toBeGreaterThan(0);
-      expect(result.phases.every((p) => p.refs.length === 0)).toBe(true);
-      expect(result.adhocRefs).toHaveLength(12);
+      expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
+      // Five phases: `### Delivery phases` (empty) + P1/P2/P3/P4 (populated).
+      expect(result.phases).toHaveLength(5);
+      expect(result.phases[0]!.heading).toBe('Delivery phases');
+      expect(result.phases[0]!.refs).toEqual([]);
+      expect(result.phases[1]!.heading).toBe('P1 — Scaffold');
+      expect(result.phases[1]!.refs).toEqual([
+        { repo: 'christrudelpw/snappoll', number: 2 },
+      ]);
+      expect(result.phases[2]!.heading).toBe('P2 — Foundation');
+      expect(result.phases[2]!.refs).toEqual([
+        { repo: 'christrudelpw/snappoll', number: 3 },
+        { repo: 'christrudelpw/snappoll', number: 4 },
+      ]);
+      expect(result.phases[3]!.heading).toBe('P3 — Core functionality');
+      expect(result.phases[3]!.refs).toEqual([
+        { repo: 'christrudelpw/snappoll', number: 5 },
+        { repo: 'christrudelpw/snappoll', number: 6 },
+        { repo: 'christrudelpw/snappoll', number: 7 },
+        { repo: 'christrudelpw/snappoll', number: 8 },
+      ]);
+      expect(result.phases[4]!.heading).toBe('P4 — Polish & delivery');
+      expect(result.phases[4]!.refs).toEqual([
+        { repo: 'christrudelpw/snappoll', number: 9 },
+        { repo: 'christrudelpw/snappoll', number: 10 },
+        { repo: 'christrudelpw/snappoll', number: 11 },
+        { repo: 'christrudelpw/snappoll', number: 12 },
+        { repo: 'christrudelpw/snappoll', number: 13 },
+      ]);
+      expect(result.adhocRefs).toEqual([]);
+      // #1014 (FR-012): mixed `###` + phase-shaped `####` → single warning.
+      expect(
+        result.warnings.filter((w) => w.includes('mixed phase heading levels')),
+      ).toHaveLength(1);
     });
 
     // Q1=C false-positive gates: `#### Notes` / `#### Follow-ups` /
@@ -514,15 +559,17 @@ describe('parseEpicBody', () => {
       expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
     });
 
-    // Empty-phases-but-no-phase-shaped-####: H4 closes the phase, ref falls
-    // to adhoc, but `#### Notes` does not match the detector. Guard (d)
-    // load-bearing.
+    // #1014 (FR-002): `#### Notes` is transparent, so `owner/repo#1` attributes
+    // to Phase S1. The `#1006` warning still doesn't fire (guard (d) intact:
+    // `sawPhaseShapedH4` is false because Notes isn't phase-shaped). Test kept
+    // as a guard-(d) regression witness; assertions updated for the new
+    // transparency semantics.
     it('does not fire when the only #### heading is not phase-shaped (guard (d) load-bearing)', () => {
       const body = ['### S1', '#### Notes', '- [ ] owner/repo#1'].join('\n');
       const result = parseEpicBody(body);
       expect(result.phases).toHaveLength(1);
-      expect(result.phases[0]!.refs).toEqual([]);
-      expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+      expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+      expect(result.adhocRefs).toEqual([]);
       expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
     });
 
@@ -532,6 +579,258 @@ describe('parseEpicBody', () => {
       const source = readFileSync(join(HERE, '..', 'parse-epic-body.ts'), 'utf-8');
       const matches = source.match(/phase headers must be '###'/g) ?? [];
       expect(matches).toHaveLength(1);
+    });
+  });
+
+  // #1014 (T050 / FR-001, FR-002): phase-shaped `####` headings open flat-sibling
+  // phases and carry their child refs; non-phase-shaped `####` inside a phase is
+  // transparent (child refs continue to attribute to the surrounding phase).
+  describe('#1014 H4 promotion (US1)', () => {
+    it('phase-shaped `#### P1 …` opens a phase and carries its refs (FR-001)', () => {
+      const body = [
+        '#### P1 — Scaffold',
+        '- [ ] owner/repo#2',
+        '',
+        '#### P2 — Foundation',
+        '- [ ] owner/repo#3',
+        '- [ ] owner/repo#4',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toHaveLength(2);
+      expect(result.phases[0]!.heading).toBe('P1 — Scaffold');
+      expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 2 }]);
+      expect(result.phases[1]!.heading).toBe('P2 — Foundation');
+      expect(result.phases[1]!.refs).toEqual([
+        { repo: 'owner/repo', number: 3 },
+        { repo: 'owner/repo', number: 4 },
+      ]);
+      expect(result.adhocRefs).toEqual([]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('phase-shaped `#### Phase 1: …` opens a phase (word-boundaried \\bphase\\b)', () => {
+      const body = ['#### Phase 1: Kickoff', '- [ ] owner/repo#7'].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toHaveLength(1);
+      expect(result.phases[0]!.heading).toBe('Phase 1: Kickoff');
+      expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 7 }]);
+      expect(result.adhocRefs).toEqual([]);
+    });
+
+    it('non-phase-shaped `#### Notes` inside `### Phase 1` — following ref attributes to Phase 1 (FR-002)', () => {
+      const body = [
+        '### Phase 1',
+        '- [ ] owner/repo#1',
+        '#### Notes',
+        '- [ ] owner/repo#2',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toHaveLength(1);
+      expect(result.phases[0]!.refs).toEqual([
+        { repo: 'owner/repo', number: 1 },
+        { repo: 'owner/repo', number: 2 },
+      ]);
+      expect(result.adhocRefs).toEqual([]);
+    });
+
+    it('non-phase-shaped `#### Notes` outside any open phase is a no-op (FR-002)', () => {
+      const body = ['#### Notes', '- [ ] owner/repo#1'].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toEqual([]);
+      expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    });
+  });
+
+  // #1014 (T051 / FR-012): mixed `###` + phase-shaped `####` — flat siblings +
+  // exactly one warning with the stable marker substring.
+  describe('#1014 mixed heading levels warning (US1)', () => {
+    const MIXED_MARKER = 'mixed phase heading levels';
+
+    it('body with both `### Phase 1` and `#### Phase 2` produces two flat siblings + exactly one mixed warning (FR-012)', () => {
+      const body = [
+        '### Phase 1',
+        '- [ ] owner/repo#1',
+        '#### Phase 2',
+        '- [ ] owner/repo#2',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toHaveLength(2);
+      expect(result.phases[0]!.heading).toBe('Phase 1');
+      expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+      expect(result.phases[1]!.heading).toBe('Phase 2');
+      expect(result.phases[1]!.refs).toEqual([{ repo: 'owner/repo', number: 2 }]);
+      expect(
+        result.warnings.filter((w) => w.includes(MIXED_MARKER)),
+      ).toHaveLength(1);
+    });
+
+    it('warning count is 1 regardless of how many phase-shaped headings appear (FR-012)', () => {
+      const body = [
+        '### Phase 1',
+        '#### Phase 2',
+        '### Phase 3',
+        '#### P4',
+        '#### P5',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(
+        result.warnings.filter((w) => w.includes(MIXED_MARKER)),
+      ).toHaveLength(1);
+    });
+
+    it('body with only `###` phases does NOT emit the mixed warning', () => {
+      const body = ['### Phase 1', '### Phase 2'].join('\n');
+      const result = parseEpicBody(body);
+      expect(
+        result.warnings.some((w) => w.includes(MIXED_MARKER)),
+      ).toBe(false);
+    });
+
+    it('body with only phase-shaped `####` phases does NOT emit the mixed warning', () => {
+      const body = ['#### P1', '#### P2'].join('\n');
+      const result = parseEpicBody(body);
+      expect(
+        result.warnings.some((w) => w.includes(MIXED_MARKER)),
+      ).toBe(false);
+    });
+  });
+
+  // #1014 (T052 / FR-004, FR-005): bare `#N` in checkbox items resolves under
+  // `defaultRepo`; without options, today's rejection behavior is preserved.
+  describe('#1014 bare `#N` in checkboxes under `defaultRepo` (US2)', () => {
+    it('positive (FR-004): `- [ ] #223` with defaultRepo resolves to that repo, no warning', () => {
+      const body = '- [ ] #223 body';
+      const result = parseEpicBody(body, { defaultRepo: 'my-org/my-repo' });
+      expect(result.adhocRefs).toEqual([{ repo: 'my-org/my-repo', number: 223 }]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('negative (FR-005): same body without options preserves the bare-#N warning', () => {
+      const body = '- [ ] #223 body';
+      const result = parseEpicBody(body);
+      expect(result.adhocRefs).toEqual([]);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain("bare '#N'");
+    });
+
+    it('positive: bare `- [x] #8` in a phase resolves under defaultRepo', () => {
+      const body = ['### S1', '- [x] #8'].join('\n');
+      const result = parseEpicBody(body, { defaultRepo: 'o/r' });
+      expect(result.phases[0]!.refs).toEqual([{ repo: 'o/r', number: 8 }]);
+      expect(result.warnings).toEqual([]);
+    });
+  });
+
+  // #1014 (T053 / FR-013): bare `#N` outside checkbox items is NOT scanned.
+  // (T053 / FR-007): cross-repo qualified refs inside checkboxes stay qualified.
+  describe('#1014 checkbox-only scope + qualified-ref preservation (US2)', () => {
+    it('FR-013: bare `- #99` (plain bullet, no checkbox) produces no refs and no warnings', () => {
+      const body = ['### S1', '- #99'].join('\n');
+      const result = parseEpicBody(body, { defaultRepo: 'o/r' });
+      expect(result.phases[0]!.refs).toEqual([]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('FR-013: bare `1. #99` (ordered list) produces no refs and no warnings', () => {
+      const body = ['### S1', '1. #99'].join('\n');
+      const result = parseEpicBody(body, { defaultRepo: 'o/r' });
+      expect(result.phases[0]!.refs).toEqual([]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('FR-013: prose `see #99` (no bullet) produces no refs and no warnings', () => {
+      const body = ['### S1', 'see #99'].join('\n');
+      const result = parseEpicBody(body, { defaultRepo: 'o/r' });
+      expect(result.phases[0]!.refs).toEqual([]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('FR-007: cross-repo qualified `other/other-repo#5` inside a checkbox stays qualified even under defaultRepo', () => {
+      const body = ['### S1', '- [ ] other/other-repo#5'].join('\n');
+      const result = parseEpicBody(body, { defaultRepo: 'scope/scope-repo' });
+      expect(result.phases[0]!.refs).toEqual([
+        { repo: 'other/other-repo', number: 5 },
+      ]);
+      expect(result.warnings).toEqual([]);
+    });
+  });
+
+  // #1014 (T054 / FR-003): malformed defaultRepo → exactly one warning +
+  // behaves as if the option were absent (bare `#N` inside checkbox rejected).
+  describe('#1014 malformed `defaultRepo` fails safe (US2)', () => {
+    const INVALID_MARKER = 'invalid defaultRepo';
+
+    for (const raw of ['not-owner-repo', 'owner/repo/extra', '']) {
+      it(`FR-003: defaultRepo='${raw}' emits exactly one warning + treats bare #N as unqualified`, () => {
+        const body = ['### S1', '- [ ] #10'].join('\n');
+        const result = parseEpicBody(body, { defaultRepo: raw });
+        expect(
+          result.warnings.filter((w) => w.includes(INVALID_MARKER)),
+        ).toHaveLength(1);
+        // With defaultRepo rejected, bare `#10` behaves as no-options → rejected.
+        expect(result.phases[0]!.refs).toEqual([]);
+        // Compare with no-options behavior: both should treat bare #10 identically.
+        const noOpts = parseEpicBody(body);
+        expect(result.phases[0]!.refs).toEqual(noOpts.phases[0]!.refs);
+      });
+    }
+  });
+
+  // #1014 (T061 / FR-009 / SC-001): `epic-1014-bare-refs.md` fixture — under
+  // scope-repo defaultRepo, all bare `#N` in checkbox items resolve; without
+  // options, they all warn.
+  describe('#1014 fixture: epic-1014-bare-refs.md', () => {
+    it('positive (with defaultRepo): 4 refs in phase 1 + 1 ref in phase 2 + no warnings', () => {
+      const result = parseEpicBody(BARE_REFS_1014_BODY, {
+        defaultRepo: 'scope/scope-repo',
+      });
+      expect(result.phases).toHaveLength(2);
+      expect(result.phases[0]!.refs).toEqual([
+        { repo: 'scope/scope-repo', number: 223 },
+        { repo: 'scope/scope-repo', number: 224 },
+        { repo: 'scope/scope-repo', number: 225 },
+        { repo: 'other/other-repo', number: 226 },
+      ]);
+      expect(result.phases[1]!.refs).toEqual([
+        { repo: 'scope/scope-repo', number: 227 },
+      ]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('negative (without defaultRepo): 4 bare-#N warnings, bare refs collapse', () => {
+      const result = parseEpicBody(BARE_REFS_1014_BODY);
+      const bareWarnings = result.warnings.filter((w) =>
+        w.includes("bare '#N'"),
+      );
+      expect(bareWarnings).toHaveLength(4);
+      // Only the cross-repo qualified ref survives in phase 1.
+      expect(result.phases[0]!.refs).toEqual([
+        { repo: 'other/other-repo', number: 226 },
+      ]);
+      expect(result.phases[1]!.refs).toEqual([]);
+    });
+  });
+
+  // #1014 (T072 / SC-005): direct `parseEpicBody(body)` (no options) behavior
+  // is byte-identical to `parseEpicBody(body, undefined)`.
+  describe('#1014 SC-005 byte-identical regression', () => {
+    it('parseEpicBody(body) and parseEpicBody(body, undefined) deep-equal', () => {
+      const body = [
+        '## Overview',
+        '',
+        '### S1 — planning',
+        '- [ ] owner/repo#1',
+        '- [ ] owner/repo#2',
+        '',
+        '### S2',
+        '- [ ] owner/repo#3',
+        '',
+        '## Ad-hoc',
+        '- [ ] owner/repo#99',
+      ].join('\n');
+      const noOpts = parseEpicBody(body);
+      const undefinedOpts = parseEpicBody(body, undefined);
+      expect(undefinedOpts).toEqual(noOpts);
     });
   });
 });

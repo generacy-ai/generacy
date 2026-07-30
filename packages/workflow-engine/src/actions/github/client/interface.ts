@@ -9,6 +9,7 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  Review,
   ReviewThread,
 } from '../../../types/github.js';
 
@@ -216,6 +217,23 @@ export interface GitHubClient {
   getPRReviewThreads(owner: string, repo: string, number: number): Promise<ReviewThread[]>;
 
   /**
+   * List submitted reviews on a PR via
+   * `GET /repos/{owner}/{repo}/pulls/{number}/reviews`.
+   *
+   * Fetches submissions only — inline review-thread comments are NOT
+   * included; use `getPRReviewThreads` for those. Every state is returned;
+   * `state` filtering (e.g. to `{CHANGES_REQUESTED, COMMENTED}`) is
+   * caller-side. Paginated internally when the response exceeds per-page
+   * limits.
+   *
+   * Consumed by the PR-feedback body-consumption path (#1047).
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on any other non-zero exit.
+   */
+  listReviews(owner: string, repo: string, prNumber: number): Promise<Review[]>;
+
+  /**
    * Reply to a PR comment
    */
   replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment>;
@@ -256,6 +274,19 @@ export interface GitHubClient {
    * Find PR for the current branch
    */
   findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null>;
+
+  /**
+   * Find a PR for a branch across all states (open, closed, merged).
+   *
+   * Mirrors `findPRForBranch` but passes `--state all` to `gh pr list`, so
+   * callers can detect merged/closed PRs on a branch — used by the push-guard
+   * (#1051 FR-002) to refuse pushes to branches whose PR has already merged.
+   *
+   * Do NOT use this in place of `findPRForBranch` at existing call sites:
+   * five callers depend on the open-only default and a silent state widening
+   * would create foot-guns. See #1051 clarification Q2.
+   */
+  findPRForBranchAnyState(owner: string, repo: string, branch: string): Promise<PullRequest | null>;
 
   // ==========================================================================
   // Label Operations

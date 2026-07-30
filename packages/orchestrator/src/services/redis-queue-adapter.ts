@@ -1,7 +1,20 @@
 import type { Redis } from 'ioredis';
-import type { QueueItem, QueueItemWithScore, QueueManager, SerializedQueueItem } from '../types/index.js';
+import type {
+  QueueItem,
+  QueueItemWithScore,
+  QueueManager,
+  ReapReport,
+  ReclaimedItem,
+  ReconcileReport,
+  SerializedQueueItem,
+} from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
 import { getPriorityScore } from './queue-priority.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
 
 const PENDING_KEY = 'orchestrator:queue:pending';
 const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
@@ -11,6 +24,12 @@ const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
 
 /**
  * Lua script for atomic in-flight-checked enqueue.
+ *
+ * #1060 — `enqueue()` and `enqueueIfAbsent()` both call this script (via
+ * the single `enqueueIfAbsent` command registration). Their at-Redis-layer
+ * behavior is identical; the two public methods differ only in how they
+ * translate the boolean return (see PR #1065 review findings 5 + 6).
+ *
  * KEYS[1] = pending sorted set
  * KEYS[2] = in-flight SET
  * ARGV[1] = itemKey
@@ -18,6 +37,17 @@ const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
  * ARGV[3] = serialized item JSON
  *
  * Returns 1 if enqueued, 0 if already in flight.
+ *
+ * Contains, in strict order (single-source-of-truth for the
+ * `redis-queue-adapter.script-wiring.test.ts` static assertion):
+ *   1. SISMEMBER KEYS[2] ARGV[1]
+ *   2. SADD KEYS[2] ARGV[1]        (guarded by the SISMEMBER result)
+ *   3. ZADD KEYS[1] ARGV[2] ARGV[3]
+ *
+ * If a future dedupe upgrade needs a per-itemKey hash (D6-a from #1060's
+ * plan), add KEYS[3] here and bump `numberOfKeys` to 3. Under Redis
+ * Cluster all declared keys must hash to the same slot, so the current
+ * two-key registration is CROSSSLOT-safe by construction.
  */
 const ENQUEUE_IF_ABSENT_SCRIPT = `
 local exists = redis.call('SISMEMBER', KEYS[2], ARGV[1])
@@ -30,13 +60,29 @@ return 1
 `;
 
 /**
+ * Exported for the script-wiring static-assertion tests only
+ * (`__tests__/redis-queue-adapter.script-wiring.test.ts`). Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _ENQUEUE_IF_ABSENT_SCRIPT_FOR_TESTS = ENQUEUE_IF_ABSENT_SCRIPT;
+
+/**
  * Lua script for atomic claim: ZPOPMIN + HSET claimed + SET heartbeat.
  * KEYS[1] = pending sorted set
  * KEYS[2] = claimed hash for this worker
  * KEYS[3] = heartbeat key for this worker
  * ARGV[1] = heartbeat TTL in seconds
+ * ARGV[2] = ISO-8601 claimedAt timestamp (client-computed at call time)
  *
- * Returns the serialized item string, or nil if queue is empty.
+ * #1054 finding 3 — stamps `claimedAt` into the persisted claim payload
+ * so the reaper's grace-window can measure age-since-CLAIM rather than
+ * age-since-ENQUEUE (an item that waited hours in pending must not skip
+ * the grace window the instant it's claimed). Legacy payloads written
+ * before this field existed fall back to `enqueuedAt` on the reap side.
+ *
+ * Returns the serialized item string (with claimedAt injected), or nil
+ * if queue is empty.
  */
 const CLAIM_SCRIPT = `
 local result = redis.call('ZPOPMIN', KEYS[1], 1)
@@ -45,11 +91,265 @@ if #result == 0 then
 end
 local member = result[1]
 local parsed = cjson.decode(member)
+parsed.claimedAt = ARGV[2]
+local reserialized = cjson.encode(parsed)
 local itemKey = parsed.itemKey
-redis.call('HSET', KEYS[2], itemKey, member)
+redis.call('HSET', KEYS[2], itemKey, reserialized)
 redis.call('SET', KEYS[3], '1', 'EX', tonumber(ARGV[1]))
-return member
+return reserialized
 `;
+
+/**
+ * #1054 — Reclaim an orphaned claim atomically. Server-side re-check of the
+ * heartbeat key (US2 race safety) and grace-window guard (FR-005) live
+ * inside the script body — the outer-loop `EXISTS` check the caller does
+ * before invoking this script is a fast-path optimization; this script is
+ * the load-bearing guard.
+ *
+ * #1054 finding 1 — this script does NOT SREM the in-flight SET. A
+ * reclaimed item is legitimately still in flight (moved from claimed back
+ * to pending), so the in-flight = pending ∪ claimed invariant would be
+ * broken by SREM + ZADD together — the ZSET would then hold two distinct
+ * members for the same itemKey (Redis ZSETs key on the member string,
+ * and the reclaim payload differs from any future monitor re-enqueue).
+ * This mirrors `release()`'s retry-branch pattern (HDEL + DEL + ZADD, no
+ * SREM), which only `complete()` and the dead-letter branch fire.
+ *
+ * KEYS[1] = orchestrator:queue:claimed:<workerId>
+ * KEYS[2] = orchestrator:worker:<workerId>:heartbeat
+ * KEYS[3] = orchestrator:queue:pending
+ * ARGV[1] = itemKey
+ * ARGV[2] = ageMs (client-computed: now - Date.parse(claimed.claimedAt ?? claimed.enqueuedAt))
+ * ARGV[3] = graceWindowMs
+ * ARGV[4] = resumePriority (numeric string; "0" for 'resume')
+ * ARGV[5] = pre-serialized reclaim-item JSON (reclaimCount++, queueReason='resume')
+ *
+ * Return codes:
+ *   0 = no-op (claim hash field absent; concurrent reclaim already ran)
+ *   1 = reclaimed
+ *   2 = heartbeat re-appeared server-side (US2 abort)
+ *   3 = within grace window (FR-005 abort)
+ */
+const RECLAIM_ORPHAN_SCRIPT = `
+local claimed = redis.call('HGET', KEYS[1], ARGV[1])
+if not claimed then
+  return 0
+end
+
+if redis.call('EXISTS', KEYS[2]) == 1 then
+  return 2
+end
+
+if tonumber(ARGV[2]) < tonumber(ARGV[3]) then
+  return 3
+end
+
+redis.call('HDEL', KEYS[1], ARGV[1])
+if redis.call('HLEN', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[1])
+end
+
+redis.call('ZADD', KEYS[3], tonumber(ARGV[4]), ARGV[5])
+
+return 1
+`;
+
+/**
+ * #1069 — Atomic read-and-re-pend for lease-expiry events. Folds the
+ * previous `HGET` + client-side `MULTI: HDEL + DEL + ZADD` into a single
+ * Lua script so the orphan reaper cannot interleave between the read and
+ * the re-pend (which would produce two distinct pending members for the
+ * same itemKey — the failure sequence #1060/#1065 closed for `enqueue()`,
+ * arriving here via `requeueForResume` instead).
+ *
+ * Mirrors `RECLAIM_ORPHAN_SCRIPT`'s three-key shape. Preserves
+ * `attemptCount` verbatim (FR-003) — lease expiry is infrastructure, not a
+ * work failure.
+ *
+ * KEYS[1] = orchestrator:queue:pending
+ * KEYS[2] = orchestrator:queue:claimed:<workerId>
+ * KEYS[3] = orchestrator:worker:<workerId>:heartbeat
+ * ARGV[1] = itemKey
+ * ARGV[2] = resumePriority (numeric string)
+ * ARGV[3] = pre-serialized base item JSON (client-side JSON.stringify(item))
+ *
+ * Returns Lua array {code, attemptCount}:
+ *   {0, -1} = no-op (claim already cleared — reaper race)
+ *   {1, N}  = re-pended at resume priority; N is preserved attemptCount
+ */
+const REQUEUE_FOR_RESUME_SCRIPT = `
+local claimed = redis.call('HGET', KEYS[2], ARGV[1])
+if not claimed then
+  redis.call('DEL', KEYS[3])
+  return {0, -1}
+end
+
+local parsed = cjson.decode(claimed)
+local base = cjson.decode(ARGV[3])
+base.queueReason = 'resume'
+base.priority = tonumber(ARGV[2])
+base.attemptCount = parsed.attemptCount or 0
+base.itemKey = ARGV[1]
+base.claimedAt = nil
+local repayload = cjson.encode(base)
+
+redis.call('HDEL', KEYS[2], ARGV[1])
+redis.call('DEL', KEYS[3])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), repayload)
+
+return {1, parsed.attemptCount}
+`;
+
+/**
+ * Exported for the script-wiring static-assertion tests only. Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _REQUEUE_FOR_RESUME_SCRIPT_FOR_TESTS = REQUEUE_FOR_RESUME_SCRIPT;
+
+/**
+ * #1069 — Atomic read-and-re-pend (retry branch) OR read-and-dead-letter
+ * (max-retries branch). Both branches folded into a single Lua script per
+ * Clarifications Q1 → A so SC-004's "exactly 1 round trip" invariant is
+ * satisfied on both.
+ *
+ * `attemptCount` is read from the claim payload inside Lua (via
+ * `cjson.decode`), incremented, and dispatched — passing it in as ARGV
+ * would reintroduce the exact TOCTOU hazard being closed (the caller
+ * would still read via a separate `HGET` first).
+ *
+ * KEYS[1] = orchestrator:queue:pending
+ * KEYS[2] = orchestrator:queue:claimed:<workerId>
+ * KEYS[3] = orchestrator:worker:<workerId>:heartbeat
+ * KEYS[4] = orchestrator:queue:dead-letter
+ * KEYS[5] = orchestrator:queue:in-flight-items
+ * ARGV[1] = itemKey
+ * ARGV[2] = retryPriority (numeric string)
+ * ARGV[3] = pre-serialized base item JSON
+ * ARGV[4] = maxRetries (numeric string; dead-letter dispatch threshold)
+ * ARGV[5] = nowMs (numeric string; ZADD score for dead-letter entry)
+ *
+ * Returns Lua array {code, attemptCount}:
+ *   {0, -1} = no-op (claim already cleared — reaper race)
+ *   {1, N}  = retry re-pended; N is `parsed.attemptCount + 1`
+ *   {2, N}  = dead-lettered; N is `parsed.attemptCount + 1`
+ *
+ * FR-006 in-flight-SET invariant:
+ *   - Retry branch (code 1): NO SREM — item stays in flight (pending).
+ *   - Dead-letter branch (code 2): SREM inside the script — item is
+ *     permanently out of flight.
+ *   - No-op branch (code 0): untouched — whichever concurrent actor won
+ *     the race owns the invariant.
+ */
+const RELEASE_SCRIPT = `
+local claimed = redis.call('HGET', KEYS[2], ARGV[1])
+if not claimed then
+  redis.call('DEL', KEYS[3])
+  return {0, -1}
+end
+
+local parsed = cjson.decode(claimed)
+local attemptCount = (parsed.attemptCount or 0) + 1
+local maxRetries = tonumber(ARGV[4])
+local base = cjson.decode(ARGV[3])
+base.attemptCount = attemptCount
+base.itemKey = ARGV[1]
+base.claimedAt = nil
+
+if attemptCount >= maxRetries then
+  local dlpayload = cjson.encode(base)
+  redis.call('HDEL', KEYS[2], ARGV[1])
+  redis.call('DEL', KEYS[3])
+  redis.call('ZADD', KEYS[4], tonumber(ARGV[5]), dlpayload)
+  redis.call('SREM', KEYS[5], ARGV[1])
+  return {2, attemptCount}
+end
+
+base.queueReason = 'retry'
+base.priority = tonumber(ARGV[2])
+local repayload = cjson.encode(base)
+redis.call('HDEL', KEYS[2], ARGV[1])
+redis.call('DEL', KEYS[3])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), repayload)
+
+return {1, attemptCount}
+`;
+
+/**
+ * Exported for the script-wiring static-assertion tests only. Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _RELEASE_SCRIPT_FOR_TESTS = RELEASE_SCRIPT;
+
+/**
+ * #1058 / FR-001 / FR-002 — atomic remove + presence-report for a
+ * two-sweep-confirmed residue candidate. NOT a race guard: `SREM` on a
+ * non-member is already a no-op, so `SISMEMBER`+guarded-`SREM` is
+ * behaviourally identical to a bare `SREM`. What the `SISMEMBER` buys is
+ * the distinguishable return value (1 vs 0) so the adapter can report
+ * whether the member was actually present at Lua time.
+ *
+ * Safety of this sweep rests on TWO invariants outside this script:
+ *
+ *   (1) The two-sweep tracker in the adapter (`reconcileTracker`) — it
+ *       makes snapshot-interleaving artifacts self-clear before they can
+ *       reach an `SREM`.
+ *
+ *   (2) The SADD-guard invariant: **every** code path that inserts into
+ *       `IN_FLIGHT_KEY` is itself gated on `SISMEMBER IN_FLIGHT_KEY`
+ *       returning 0 (currently only `ENQUEUE_IF_ABSENT_SCRIPT`, shared
+ *       by `enqueue()` at #1060/PR #1065 and `enqueueIfAbsent()`). A
+ *       residue member is by definition present in `IN_FLIGHT_KEY`, so
+ *       every guarded `SADD` drops rather than inserts for the itemKeys
+ *       this sweep operates on. There is no code path that can re-add a
+ *       residue member during the reconcile window.
+ *
+ *   **If you add an unguarded `SADD` against `IN_FLIGHT_KEY` (e.g. a
+ *   bulk-requeue admin verb), invariant (2) breaks and this sweep can
+ *   `SREM` a live item.** Gate any new `SADD` on the same
+ *   `SISMEMBER == 0` check, or extend this script to re-verify absence
+ *   from pending/claimed inside Lua.
+ *
+ * KEYS[1] = orchestrator:queue:in-flight-items
+ * ARGV[1] = itemKey
+ *
+ * Returns:
+ *   1 = reconciled (SREM fired)
+ *   0 = skipped-already-gone (item was absent from the SET at Lua time;
+ *       under invariant (2) above, this can only mean a concurrent
+ *       `complete()`/`release()`/`reapOrphanClaims()` fired the `SREM`
+ *       between snapshot and this Lua invocation)
+ *
+ * Contains, in strict order (single-source-of-truth for the
+ * `redis-queue-adapter.script-wiring.test.ts` static assertion):
+ *   1. SISMEMBER KEYS[1] ARGV[1]
+ *   2. SREM KEYS[1] ARGV[1]        (guarded by the SISMEMBER result)
+ *
+ * `numberOfKeys: 1` — CROSSSLOT-safe by construction under Redis Cluster.
+ */
+const RECONCILE_IN_FLIGHT_SCRIPT = `
+local exists = redis.call('SISMEMBER', KEYS[1], ARGV[1])
+if exists == 0 then
+  return 0
+end
+redis.call('SREM', KEYS[1], ARGV[1])
+return 1
+`;
+
+/**
+ * Exported for the script-wiring static-assertion tests only. Not part of
+ * the runtime API.
+ * @internal
+ */
+export const _RECONCILE_IN_FLIGHT_SCRIPT_FOR_TESTS = RECONCILE_IN_FLIGHT_SCRIPT;
+
+/**
+ * #1058 / FR-004 / Q4=B — max individual `orphan-in-flight-reconciled` warn
+ * lines per reconcileInFlight cycle. Beyond this cap, suppress and emit one
+ * aggregate `orphan-in-flight-reconciled-batch` warn with sample keys.
+ */
+const RECONCILE_LOG_CAP = 100;
 
 interface Logger {
   info(msg: string): void;
@@ -83,13 +383,68 @@ export class RedisQueueAdapter implements QueueManager {
   private readonly redis: Redis;
   private readonly logger: Logger;
   private readonly maxRetries: number;
+  private readonly maxRunDurationMs: number;
+  private readonly heartbeatCheckIntervalMs: number;
   private claimCommandDefined = false;
   private enqueueIfAbsentCommandDefined = false;
+  private reclaimOrphanCommandDefined = false;
+  private requeueForResumeCommandDefined = false;
+  private releaseCommandDefined = false;
+  /**
+   * #1058 / FR-001 — Lua command registration guard, mirrors the existing
+   * `ensureXCommand()` pattern (e.g. `ensureReclaimOrphanCommand()`).
+   */
+  private reconcileInFlightCommandDefined = false;
+  /**
+   * #1058 / FR-001 / Q1=D — two-sweep tracker for residue candidates. Keyed
+   * by itemKey; value is the sweep-id at which the candidate was first
+   * observed as residue. On the next sweep, if the itemKey is still
+   * residue AND `firstSeenSweepId < currentSweepId`, the atomic
+   * `RECONCILE_IN_FLIGHT_SCRIPT` fires.
+   *
+   * Bounded by residue population: entries insert on first-sweep,
+   * delete on successful `SREM` OR when the itemKey re-appears in
+   * pending/claimed (transient race artifact self-clears). AD-2: lives
+   * in process-local memory, not Redis — a dispatcher crash re-arms via
+   * the boot sweep.
+   */
+  private readonly reconcileTracker = new Map<string, number>();
+  /**
+   * #1058 / FR-001 — monotonically increasing sweep counter. Incremented
+   * once per `reconcileInFlight()` invocation to distinguish first-sweep
+   * from subsequent-sweep sightings.
+   */
+  private reconcileSweepCounter = 0;
+  /**
+   * #1054 / FR-006 — per-itemKey severity state for the `enqueueIfAbsent`
+   * drop-log transition-edge decision. Cleared on `complete()` (R6 mitigation)
+   * and on successful reclaim (via `reapOrphanClaims`) to keep growth bounded.
+   */
+  private readonly dropLogState = new Map<string, DropTransitionState>();
+  /**
+   * #1054 finding 7 — amortized `enqueuedAt` cache. The collision path (fired
+   * every ~5 min per in-flight issue by four monitors — hot in practice,
+   * contrary to the earlier "not hot" comment) reads from this cache first
+   * so `hasInFlightAge` doesn't fan out into an O(workers) SCAN + HGET per
+   * drop. Populated by (a) `enqueueIfAbsent` on successful enqueue, (b) the
+   * reaper on every HGETALL, (c) any explicit `hasInFlightAge` scan fallback.
+   * Cleared by `complete()`, dead-letter, and successful reclaim.
+   */
+  private readonly enqueuedAtCache = new Map<string, number>();
 
-  constructor(redis: Redis, logger: Logger, config?: Pick<DispatchConfig, 'maxRetries'>) {
+  constructor(
+    redis: Redis,
+    logger: Logger,
+    config?: Pick<
+      DispatchConfig,
+      'maxRetries' | 'maxRunDurationMs' | 'heartbeatCheckIntervalMs'
+    >,
+  ) {
     this.redis = redis;
     this.logger = logger;
     this.maxRetries = config?.maxRetries ?? 3;
+    this.maxRunDurationMs = config?.maxRunDurationMs ?? 1_800_000;
+    this.heartbeatCheckIntervalMs = config?.heartbeatCheckIntervalMs ?? 15_000;
   }
 
   private ensureClaimCommand(): void {
@@ -108,6 +463,48 @@ export class RedisQueueAdapter implements QueueManager {
       lua: ENQUEUE_IF_ABSENT_SCRIPT,
     });
     this.enqueueIfAbsentCommandDefined = true;
+  }
+
+  private ensureReclaimOrphanCommand(): void {
+    if (this.reclaimOrphanCommandDefined) return;
+    this.redis.defineCommand('reclaimOrphan', {
+      numberOfKeys: 3,
+      lua: RECLAIM_ORPHAN_SCRIPT,
+    });
+    this.reclaimOrphanCommandDefined = true;
+  }
+
+  private ensureRequeueForResumeCommand(): void {
+    if (this.requeueForResumeCommandDefined) return;
+    // Command name uses the `Item` suffix so it does not shadow this
+    // class's own `requeueForResume` method on the ioredis client object.
+    this.redis.defineCommand('requeueForResumeItem', {
+      numberOfKeys: 3,
+      lua: REQUEUE_FOR_RESUME_SCRIPT,
+    });
+    this.requeueForResumeCommandDefined = true;
+  }
+
+  private ensureReleaseCommand(): void {
+    if (this.releaseCommandDefined) return;
+    // Same `Item` suffix rationale as `ensureRequeueForResumeCommand`.
+    this.redis.defineCommand('releaseItem', {
+      numberOfKeys: 5,
+      lua: RELEASE_SCRIPT,
+    });
+    this.releaseCommandDefined = true;
+  }
+
+  private ensureReconcileInFlightCommand(): void {
+    if (this.reconcileInFlightCommandDefined) return;
+    // Command name uses the `Item` suffix so it does not shadow this
+    // class's own `reconcileInFlight` method on the ioredis client object
+    // (same convention as `ensureRequeueForResumeCommand`, `ensureReleaseCommand`).
+    this.redis.defineCommand('reconcileInFlightItem', {
+      numberOfKeys: 1,
+      lua: RECONCILE_IN_FLIGHT_SCRIPT,
+    });
+    this.reconcileInFlightCommandDefined = true;
   }
 
   async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
@@ -131,6 +528,12 @@ export class RedisQueueAdapter implements QueueManager {
       );
       const enqueued = result === 1;
       if (enqueued) {
+        // #1054 finding 7 — seed the enqueuedAt cache so subsequent drop-path
+        // reads don't fan out into an O(workers) SCAN.
+        const enqueuedAtMs = Date.parse(item.enqueuedAt);
+        if (!Number.isNaN(enqueuedAtMs)) {
+          this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+        }
         this.logger.info(
           { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
           'Item enqueued to Redis sorted set (in-flight-checked)',
@@ -138,8 +541,21 @@ export class RedisQueueAdapter implements QueueManager {
       } else {
         // #879 / FR-009: structured drop signal for the in-flight-collision path.
         // Distinct from the Redis-error warn path below.
-        this.logger.info(
-          { itemKey, reason: 'in-flight' },
+        // #1054 / FR-006: severity escalates from `info` to `warn` on the
+        // transition edge when the wedged in-flight entry's age crosses
+        // `maxRunDurationMs`. Structured fields preserved verbatim so
+        // downstream log queries and alerts key on unchanged shape.
+        const ageMs = await this.hasInFlightAge(itemKey);
+        const decision = classifyDropSeverity(
+          itemKey,
+          ageMs,
+          this.maxRunDurationMs,
+          this.dropLogState,
+        );
+        emitDropLog(
+          this.logger,
+          decision,
+          { itemKey, reason: 'in-flight', ageMs },
           'Dropping enqueue (item already in flight)',
         );
       }
@@ -163,7 +579,495 @@ export class RedisQueueAdapter implements QueueManager {
     }
   }
 
-  async enqueue(item: QueueItem): Promise<void> {
+  /**
+   * #1054 / FR-006 / FR-007 — return the age in ms of the given itemKey's
+   * in-flight entry (pending OR claimed), or `null` if not in flight or on
+   * transport error (fail-safe per AD-11).
+   *
+   * #1054 finding 8 — checks BOTH pending (ZSET) and claimed (per-worker
+   * hashes) so the drop-log severity dispatcher escalates for pending-side
+   * wedges too, matching `InMemoryQueueAdapter.hasInFlightAge`. Without
+   * pending coverage, a reclaimed item sitting in pending while dispatch
+   * is stalled (worker cap / lease-denied pausePolling) never crosses the
+   * warn threshold and reproduces the invisible-wedge shape #1054 set out
+   * to eliminate.
+   *
+   * #1054 finding 7 — cache-first read path amortizes the O(workers) SCAN
+   * across drops. `enqueuedAtCache` is populated by `enqueueIfAbsent`,
+   * `reapOrphanClaims`, and this method's own fallback scan. Cache miss
+   * falls back to a full scan (pending + claimed) and populates.
+   */
+  async hasInFlightAge(itemKey: string): Promise<number | null> {
+    const now = Date.now();
+    const cached = this.enqueuedAtCache.get(itemKey);
+    if (cached !== undefined) {
+      return now - cached;
+    }
+
+    try {
+      // Pending-side scan (finding 8 — parity with in-memory adapter). ZSCAN
+      // over member strings would require parsing each; simpler + correct to
+      // ZRANGE the whole set. Called only on cache miss, not every drop.
+      const pendingMembers = await this.redis.zrange(PENDING_KEY, 0, -1);
+      for (const member of pendingMembers) {
+        try {
+          const parsed: SerializedQueueItem = JSON.parse(member);
+          if (parsed.itemKey !== itemKey) continue;
+          const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+          if (Number.isNaN(enqueuedAtMs)) return null;
+          this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+          return now - enqueuedAtMs;
+        } catch {
+          continue;
+        }
+      }
+
+      // Claimed-side scan.
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          'MATCH',
+          `${CLAIMED_KEY_PREFIX}*`,
+          'COUNT',
+          100,
+        );
+        cursor = nextCursor;
+        for (const key of keys) {
+          const payload = await this.redis.hget(key, itemKey);
+          if (!payload) continue;
+          try {
+            const parsed: SerializedQueueItem = JSON.parse(payload);
+            const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+            if (Number.isNaN(enqueuedAtMs)) return null;
+            this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+            return now - enqueuedAtMs;
+          } catch {
+            return null;
+          }
+        }
+      } while (cursor !== '0');
+      return null;
+    } catch (error) {
+      this.logger.warn(
+        { err: error, itemKey },
+        'Redis error in hasInFlightAge',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * #1054 / FR-001 / FR-002 / FR-004 — Redis-side reap sweep. Reclaims
+   * `orchestrator:queue:claimed:*` hashes whose owning worker heartbeat is
+   * absent, re-enqueues with `queueReason: 'resume'` and `attemptCount++`.
+   *
+   * Race safety (US2): the outer-loop `EXISTS` check is an optimization;
+   * the load-bearing guard is the server-side re-check inside the Lua
+   * script. Grace window (FR-005): claims younger than
+   * `2 × heartbeatCheckIntervalMs` are skipped.
+   *
+   * Never throws. On transport error mid-sweep: `warn` + return the
+   * partial report so subsequent cycles retry.
+   *
+   * #1054 finding 6 — KNOWN RESIDUE (now closed by #1058): the sweep is
+   * candidate-set-driven by `claimed:*` keys, so an in-flight-SET member
+   * whose backing claim hash was evicted / HDEL'd without a paired SREM
+   * is unreachable from this direction. The chosen direction is right for
+   * the reported incident (heartbeat-ABSENT candidates), and the two-
+   * directional sweep is intentionally split (rather than unified) because
+   * `reapOrphanClaims` and `reconcileInFlight` guard different failure
+   * classes with different atomicity primitives: this method re-checks
+   * live heartbeat state inside Lua; `reconcileInFlight` uses a two-sweep
+   * in-memory tracker plus a minimal single-key atomic `SISMEMBER`+`SREM`
+   * (see `RECONCILE_IN_FLIGHT_SCRIPT`). See `reconcileInFlight` for the
+   * residue-repair path.
+   */
+  async reapOrphanClaims(now: number = Date.now()): Promise<ReapReport> {
+    this.ensureReclaimOrphanCommand();
+
+    const report: ReapReport = {
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    };
+    const graceWindowMs = 2 * this.heartbeatCheckIntervalMs;
+    const resumePriority = getPriorityScore('resume');
+
+    try {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          'MATCH',
+          `${CLAIMED_KEY_PREFIX}*`,
+          'COUNT',
+          100,
+        );
+        cursor = nextCursor;
+
+        for (const claimedKey of keys) {
+          const workerId = claimedKey.slice(CLAIMED_KEY_PREFIX.length);
+          const heartbeatKey = buildHeartbeatKey(workerId);
+
+          let fields: Record<string, string>;
+          try {
+            fields = await this.redis.hgetall(claimedKey);
+          } catch (error) {
+            this.logger.warn(
+              { err: error, workerId },
+              'Redis error in reapOrphanClaims (HGETALL), continuing sweep',
+            );
+            continue;
+          }
+          if (!fields || Object.keys(fields).length === 0) continue;
+
+          // Fast-path optimization: skip whole worker if heartbeat is alive.
+          try {
+            const alive = await this.redis.exists(heartbeatKey);
+            if (alive === 1) {
+              // scanned counts per-(workerId, itemKey) pair; even though we
+              // fast-skip we still counted them (they existed in the hash).
+              report.scanned += Object.keys(fields).length;
+              continue;
+            }
+          } catch (error) {
+            this.logger.warn(
+              { err: error, workerId },
+              'Redis error in reapOrphanClaims (EXISTS), continuing sweep',
+            );
+            continue;
+          }
+
+          for (const [itemKey, payload] of Object.entries(fields)) {
+            report.scanned += 1;
+
+            let parsed: SerializedQueueItem;
+            try {
+              parsed = JSON.parse(payload);
+            } catch (error) {
+              this.logger.warn(
+                { err: error, workerId, itemKey },
+                'Malformed claim payload in reapOrphanClaims, skipping',
+              );
+              continue;
+            }
+
+            // #1054 finding 3 — grace-window measures age-since-CLAIM, not
+            // age-since-ENQUEUE. Fall back to enqueuedAt for legacy claim
+            // payloads written before CLAIM_SCRIPT stamped claimedAt.
+            const ageBasisIso = parsed.claimedAt ?? parsed.enqueuedAt;
+            const ageBasisMs = Date.parse(ageBasisIso);
+            if (Number.isNaN(ageBasisMs)) {
+              this.logger.warn(
+                { workerId, itemKey, claimedAt: parsed.claimedAt, enqueuedAt: parsed.enqueuedAt },
+                'Unparseable claim age timestamp in reapOrphanClaims, skipping',
+              );
+              continue;
+            }
+            const ageMs = now - ageBasisMs;
+            // Refresh the enqueue-time cache from the claim payload — the
+            // collision path's `hasInFlightAge` reads this instead of
+            // re-scanning every drop (finding 7).
+            const enqueuedAtMs = Date.parse(parsed.enqueuedAt);
+            if (!Number.isNaN(enqueuedAtMs)) {
+              this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+            }
+
+            // #1054 finding 9 — bump `reclaimCount`, NOT `attemptCount`.
+            // `release()`'s dead-letter gate reads `attemptCount`; letting
+            // infra events (cluster restart → heartbeat gone → reap) inflate
+            // it would condemn blameless items after N restarts.
+            const attemptCountBefore = parsed.attemptCount;
+            const attemptCountAfter = attemptCountBefore;
+            const reclaimCountBefore = parsed.reclaimCount ?? 0;
+            const reclaimCountAfter = reclaimCountBefore + 1;
+            const reclaimItem: SerializedQueueItem = {
+              ...parsed,
+              // attemptCount deliberately unchanged.
+              reclaimCount: reclaimCountAfter,
+              queueReason: 'resume',
+              priority: resumePriority,
+              // claimedAt is a claim-lifecycle field; strip it when re-pending
+              // so the next claim stamps a fresh one.
+              claimedAt: undefined,
+            };
+            const reclaimItemJSON = JSON.stringify(reclaimItem);
+
+            let result: number;
+            try {
+              result = (await (this.redis as any).reclaimOrphan(
+                claimedKey,
+                heartbeatKey,
+                PENDING_KEY,
+                itemKey,
+                String(ageMs),
+                String(graceWindowMs),
+                String(resumePriority),
+                reclaimItemJSON,
+              )) as number;
+            } catch (error) {
+              this.logger.warn(
+                { err: error, workerId, itemKey },
+                'Redis error in reapOrphanClaims (Lua), continuing sweep',
+              );
+              continue;
+            }
+
+            if (result === 1) {
+              const reclaimed: ReclaimedItem = {
+                workerId,
+                itemKey,
+                ageMs,
+                attemptCountBefore,
+                attemptCountAfter,
+                reclaimCountBefore,
+                reclaimCountAfter,
+              };
+              report.reclaimed.push(reclaimed);
+              // FR-008: per-reclaim `warn` line. Not gated by transition-edge
+              // tracking — the reclaim itself is one-shot. Complements the
+              // in-memory reaper warn in worker-dispatcher.ts so log queries
+              // can differentiate the two paths.
+              this.logger.warn(
+                {
+                  event: 'orphan-claim-reclaimed',
+                  workerId,
+                  itemKey,
+                  ageMs,
+                  attemptCountBefore,
+                  attemptCountAfter,
+                  reclaimCountBefore,
+                  reclaimCountAfter,
+                  reason: 'orphaned-claim-no-heartbeat',
+                },
+                'Reclaimed orphaned queue claim (worker heartbeat absent)',
+              );
+              // Bound the transition-edge Map growth (R6).
+              this.dropLogState.delete(itemKey);
+            } else if (result === 2) {
+              report.skippedRaceReappeared += 1;
+            } else if (result === 3) {
+              report.skippedGraceWindow += 1;
+            }
+            // result === 0 → no-op (already reclaimed by another dispatcher)
+          }
+        }
+      } while (cursor !== '0');
+    } catch (error) {
+      this.logger.warn(
+        { err: error },
+        'Redis error in reapOrphanClaims sweep, returning partial report',
+      );
+    }
+
+    return report;
+  }
+
+  /**
+   * #1058 / FR-001 — reconciliation sweep for `IN_FLIGHT_KEY` residue
+   * (members with no matching pending or claim). Two-sweep confirmation
+   * gate (Q1=D): a candidate must be observed as residue in two
+   * consecutive sweeps before `SREM` fires. Cross-sweep state lives in
+   * the process-local `reconcileTracker` Map (AD-2).
+   *
+   * Cadence: called from `WorkerDispatcher.reaperLoop` immediately after
+   * `reapOrphanClaims` (AD-5), plus one boot sweep at process start (Q2=B).
+   *
+   * Never throws. Transport error during snapshot: `warn` + return partial
+   * report so subsequent cycles retry. Per-candidate Lua error: `warn`,
+   * continue, retain tracker entry for next cycle.
+   *
+   * @param now epoch-ms; parameterized for testability (default `Date.now()`)
+   */
+  async reconcileInFlight(now: number = Date.now()): Promise<ReconcileReport> {
+    this.reconcileSweepCounter += 1;
+    const sweepId = this.reconcileSweepCounter;
+    this.ensureReconcileInFlightCommand();
+
+    const report: ReconcileReport = {
+      scanned: 0,
+      reconciled: 0,
+      skippedAlreadyGone: 0,
+      trackedFirstSeen: 0,
+    };
+
+    const inFlightSet = new Set<string>();
+    const pendingSet = new Set<string>();
+    const claimedSet = new Set<string>();
+
+    try {
+      // (1) Snapshot in-flight via SSCAN batches.
+      let cursor = '0';
+      do {
+        const [nextCursor, batch] = await this.redis.sscan(
+          IN_FLIGHT_KEY,
+          cursor,
+          'COUNT',
+          100,
+        );
+        cursor = nextCursor;
+        for (const key of batch) inFlightSet.add(key);
+      } while (cursor !== '0');
+      report.scanned = inFlightSet.size;
+
+      // (2) Snapshot pending itemKeys via ZRANGE + JSON.parse.
+      const pendingMembers = await this.redis.zrange(PENDING_KEY, 0, -1);
+      for (const member of pendingMembers) {
+        try {
+          const parsed: SerializedQueueItem = JSON.parse(member);
+          if (parsed.itemKey) pendingSet.add(parsed.itemKey);
+        } catch {
+          // Malformed member — separate correctness concern per spec Out of Scope.
+        }
+      }
+
+      // (3) Snapshot claimed itemKeys via SCAN claimed:* + HKEYS per hash.
+      let claimedCursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          claimedCursor,
+          'MATCH',
+          `${CLAIMED_KEY_PREFIX}*`,
+          'COUNT',
+          100,
+        );
+        claimedCursor = nextCursor;
+        for (const claimedKey of keys) {
+          const fields = await this.redis.hkeys(claimedKey);
+          for (const itemKey of fields) claimedSet.add(itemKey);
+        }
+      } while (claimedCursor !== '0');
+    } catch (error) {
+      this.logger.warn(
+        { err: error, event: 'reconcile-in-flight-snapshot-error' },
+        'Redis error during reconcileInFlight snapshot, returning partial report',
+      );
+      return report;
+    }
+
+    // (4) Client-side set-difference → residue candidates.
+    const residue = new Set<string>();
+    for (const itemKey of inFlightSet) {
+      if (!pendingSet.has(itemKey) && !claimedSet.has(itemKey)) {
+        residue.add(itemKey);
+      }
+    }
+
+    // (5) Two-sweep gate.
+    let emittedCount = 0;
+    const suppressed: string[] = [];
+
+    for (const itemKey of residue) {
+      const firstSeenSweepId = this.reconcileTracker.get(itemKey);
+      if (firstSeenSweepId === undefined) {
+        this.reconcileTracker.set(itemKey, sweepId);
+        this.logger.debug(
+          { event: 'orphan-in-flight-tracked', itemKey, firstSeenSweepId: sweepId },
+          'Residue candidate observed (first sweep) — armed for two-sweep confirmation',
+        );
+        report.trackedFirstSeen += 1;
+        continue;
+      }
+      if (firstSeenSweepId >= sweepId) {
+        // Defensive: only fire on strictly-earlier first sighting.
+        continue;
+      }
+
+      let result: number;
+      try {
+        result = (await (this.redis as any).reconcileInFlightItem(
+          IN_FLIGHT_KEY,
+          itemKey,
+        )) as number;
+      } catch (error) {
+        this.logger.warn(
+          { err: error, event: 'orphan-in-flight-lua-error', itemKey },
+          'Redis error in RECONCILE_IN_FLIGHT_SCRIPT, retaining tracker entry for next cycle',
+        );
+        continue;
+      }
+
+      if (result === 1) {
+        // AD-6: full cache cleanup matches complete() / dead-letter / reclaim.
+        // `enqueuedAtCache` is process-local and `IN_FLIGHT_KEY` carries no
+        // timestamps, so residue predating this process (the boot-sweep
+        // repair population) resolves to `undefined` — expected, not a bug.
+        // Omit the field entirely rather than emit `null` so its absence
+        // reads as "not applicable" instead of "lookup failed".
+        const enqueuedAtMs = this.enqueuedAtCache.get(itemKey);
+        const ageMs = enqueuedAtMs !== undefined ? now - enqueuedAtMs : null;
+        this.reconcileTracker.delete(itemKey);
+        this.enqueuedAtCache.delete(itemKey);
+        this.dropLogState.delete(itemKey);
+        report.reconciled += 1;
+        // FR-004 / Q4=B — per-cycle log cap.
+        if (emittedCount < RECONCILE_LOG_CAP) {
+          this.logger.warn(
+            {
+              event: 'orphan-in-flight-reconciled',
+              itemKey,
+              ...(ageMs !== null ? { ageMs } : {}),
+              reason: 'in-flight-no-pending-no-claim',
+            },
+            'Reconciled orphaned in-flight-SET member (no pending, no claim)',
+          );
+          emittedCount += 1;
+        } else {
+          suppressed.push(itemKey);
+        }
+      } else {
+        // result === 0: item was absent from `IN_FLIGHT_KEY` at Lua time.
+        // Under the SADD-guard invariant documented on
+        // `RECONCILE_IN_FLIGHT_SCRIPT`, this can only mean a concurrent
+        // `complete()`/`release()`/`reapOrphanClaims()` fired the `SREM`
+        // between snapshot and Lua. Retain tracker entry; next sweep
+        // re-evaluates.
+        report.skippedAlreadyGone += 1;
+      }
+    }
+
+    // Transient race artifact self-clear: tracker entries not in current residue.
+    for (const itemKey of this.reconcileTracker.keys()) {
+      if (!residue.has(itemKey)) {
+        this.reconcileTracker.delete(itemKey);
+      }
+    }
+
+    if (suppressed.length > 0) {
+      this.logger.warn(
+        {
+          event: 'orphan-in-flight-reconciled-batch',
+          count: suppressed.length,
+          sampledItemKeys: suppressed.slice(0, 10),
+        },
+        'Reconciled orphaned in-flight-SET members (batch — cap exceeded)',
+      );
+    }
+
+    return report;
+  }
+
+  /**
+   * #1060 — Atomic in-flight-checked enqueue. Shares its Lua script and
+   * `defineCommand` registration with `enqueueIfAbsent` (PR #1065 review
+   * findings 5+6: two identical scripts is drift-prone; two registrations
+   * of the same body with different `numberOfKeys` is asymmetric-noise).
+   *
+   * Semantics differ from `enqueueIfAbsent` only in the ERROR contract
+   * (PR #1065 review finding 4): this method **throws** on Redis transport
+   * error rather than swallowing it. Callers on this path need to
+   * distinguish "already in flight" (safe to `markProcessed` for dedup)
+   * from "Redis blip" (must NOT `markProcessed` — the next poll must
+   * retry). Conflating the two into `boolean` false silently drops issues.
+   *
+   * @returns true if enqueued, false if dropped because the itemKey is
+   *          already in flight.
+   * @throws  the underlying Redis error on transport failure.
+   */
+  async enqueue(item: QueueItem): Promise<boolean> {
+    this.ensureEnqueueIfAbsentCommand();
     const itemKey = buildItemKey(item);
     const priority = getPriorityScore(item.queueReason);
     const serialized: SerializedQueueItem = {
@@ -173,18 +1077,46 @@ export class RedisQueueAdapter implements QueueManager {
       itemKey,
     };
 
-    try {
-      await this.redis.zadd(PENDING_KEY, priority, JSON.stringify(serialized));
+    // NOTE: intentionally no outer try/catch — see docstring. A Redis error
+    // MUST propagate so the caller can leave dedup state unmarked and let
+    // the next poll cycle retry.
+    const result = await (this.redis as any).enqueueIfAbsent(
+      PENDING_KEY,
+      IN_FLIGHT_KEY,
+      itemKey,
+      String(priority),
+      JSON.stringify(serialized),
+    );
+    const enqueued = result === 1;
+    if (enqueued) {
+      // #1054 finding 7 — seed the enqueuedAt cache so subsequent drop-path
+      // reads don't fan out into an O(workers) SCAN.
+      const enqueuedAtMs = Date.parse(item.enqueuedAt);
+      if (!Number.isNaN(enqueuedAtMs)) {
+        this.enqueuedAtCache.set(itemKey, enqueuedAtMs);
+      }
       this.logger.info(
-        { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority },
-        'Item enqueued to Redis sorted set'
+        { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
+        'Item enqueued to Redis sorted set (in-flight-checked)',
       );
-    } catch (error) {
-      this.logger.warn(
-        { err: error, itemKey },
-        'Redis error in enqueue, item not added to queue'
-      );
+      return true;
     }
+    // #1060 / FR-005: in-flight-collision drop, mirrors enqueueIfAbsent's
+    // transition-edge log path so both verbs emit the same shape.
+    const ageMs = await this.hasInFlightAge(itemKey);
+    const decision = classifyDropSeverity(
+      itemKey,
+      ageMs,
+      this.maxRunDurationMs,
+      this.dropLogState,
+    );
+    emitDropLog(
+      this.logger,
+      decision,
+      { itemKey, source: 'enqueue', reason: 'in-flight', ageMs },
+      'Dropping enqueue (item already in flight)',
+    );
+    return false;
   }
 
   async claim(workerId: string): Promise<QueueItem | null> {
@@ -194,13 +1126,17 @@ export class RedisQueueAdapter implements QueueManager {
     const claimedKey = buildClaimedKey(workerId);
     const heartbeatKey = buildHeartbeatKey(workerId);
     const ttlSeconds = Math.ceil(30000 / 1000); // Default; actual TTL managed by dispatcher's heartbeat refresh
+    // #1054 finding 3 — stamp claimedAt so the reaper's grace-window
+    // measures age-since-CLAIM (see CLAIM_SCRIPT docstring).
+    const claimedAt = new Date().toISOString();
 
     try {
       const result = await (this.redis as any).claimItem(
         pendingKey,
         claimedKey,
         heartbeatKey,
-        ttlSeconds
+        ttlSeconds,
+        claimedAt,
       );
 
       if (!result) {
@@ -233,63 +1169,136 @@ export class RedisQueueAdapter implements QueueManager {
     }
   }
 
+  /**
+   * #1069 — Atomic read-and-re-pend or read-and-dead-letter via
+   * `RELEASE_SCRIPT`. The two-round-trip `HGET` + client-side `MULTI`
+   * this replaced could interleave with the orphan reaper's
+   * `RECLAIM_ORPHAN_SCRIPT` between the read and the re-pend, producing
+   * two distinct pending members for the same itemKey → two concurrent
+   * worker claims. Folding both branches into one Lua script closes the
+   * TOCTOU window; the caller only dispatches on the returned code and
+   * preserves the existing log-line shape for both branches (FR-005 /
+   * SC-007).
+   */
   async release(workerId: string, item: QueueItem): Promise<void> {
+    this.ensureReleaseCommand();
     const itemKey = buildItemKey(item);
     const claimedKey = buildClaimedKey(workerId);
     const heartbeatKey = buildHeartbeatKey(workerId);
+    const retryPriority = getPriorityScore('retry');
 
     try {
-      // Get the claimed item to check attempt count
-      const claimedRaw = await this.redis.hget(claimedKey, itemKey);
-      let attemptCount = 0;
-      if (claimedRaw) {
-        const parsed: SerializedQueueItem = JSON.parse(claimedRaw);
-        attemptCount = parsed.attemptCount + 1;
-      }
+      const [code, attemptCount] = (await (this.redis as any).releaseItem(
+        PENDING_KEY,
+        claimedKey,
+        heartbeatKey,
+        DEAD_LETTER_KEY,
+        IN_FLIGHT_KEY,
+        itemKey,
+        String(retryPriority),
+        JSON.stringify(item),
+        String(this.maxRetries),
+        String(Date.now()),
+      )) as [number, number];
 
-      if (attemptCount >= this.maxRetries) {
-        // Dead-letter: too many retries. Co-atomically remove from in-flight SET.
-        const deadLetterItem: SerializedQueueItem = {
-          ...item,
-          attemptCount,
-          itemKey,
-        };
-        await this.redis
-          .multi()
-          .hdel(claimedKey, itemKey)
-          .del(heartbeatKey)
-          .zadd(DEAD_LETTER_KEY, Date.now(), JSON.stringify(deadLetterItem))
-          .srem(IN_FLIGHT_KEY, itemKey)
-          .exec();
-        this.logger.warn(
-          { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
-          'Item dead-lettered after max retries'
-        );
-      } else {
-        // Re-queue with retry priority. Item stays in in-flight SET (still in flight).
-        const retryPriority = getPriorityScore('retry');
-        const requeueItem: SerializedQueueItem = {
-          ...item,
-          queueReason: 'retry',
-          priority: retryPriority,
-          attemptCount,
-          itemKey,
-        };
-        await this.redis
-          .multi()
-          .hdel(claimedKey, itemKey)
-          .del(heartbeatKey)
-          .zadd(PENDING_KEY, retryPriority, JSON.stringify(requeueItem))
-          .exec();
-        this.logger.info(
-          { workerId, itemKey, attemptCount },
-          'Item released back to pending queue'
-        );
+      switch (code) {
+        case 0:
+          this.logger.info(
+            { workerId, itemKey },
+            'release() called on already-cleared claim (reaper race) — skipping re-pend to avoid duplicate pending member',
+          );
+          return;
+        case 1:
+          this.logger.info(
+            { workerId, itemKey, attemptCount },
+            'Item released back to pending queue',
+          );
+          return;
+        case 2:
+          // #1054 / R6: bound the transition-edge Map growth.
+          this.dropLogState.delete(itemKey);
+          // #1054 finding 7 — dead-letter fully removes the item from
+          // flight; clear the enqueuedAt cache to bound growth alongside
+          // dropLogState. Script preserves the SREM in-flight invariant.
+          this.enqueuedAtCache.delete(itemKey);
+          this.logger.warn(
+            { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
+            'Item dead-lettered after max retries',
+          );
+          return;
       }
     } catch (error) {
       this.logger.warn(
         { err: error, workerId, itemKey },
-        'Redis error in release'
+        'Redis error in release',
+      );
+    }
+  }
+
+  /**
+   * #1060 PR #1065 review finding 2 — re-pend an item after a lease-expiry
+   * event WITHOUT consuming a retry attempt.
+   *
+   * Lease expiry is an INFRASTRUCTURE event (relay disconnect, cluster
+   * restart, worker OOM-kill). It says nothing about whether the work
+   * itself is failing. Routing it through `release()` (which increments
+   * `attemptCount` and dead-letters at `maxRetries`) would condemn an
+   * issue to `orchestrator:queue:dead-letter` after 3 lease expiries —
+   * even if none of the underlying handler runs failed.
+   *
+   * Semantics (mirrors `release()`'s retry branch minus the attempt bump):
+   *   - Best-effort `HDEL claimed` + `DEL heartbeat` (idempotent on null).
+   *   - If the claim hash entry is already gone (reaper race — same
+   *     scenario as `release()`'s null-guard), skip `ZADD pending` to
+   *     avoid a duplicate pending member.
+   *   - Otherwise `ZADD pending` at `resume` priority, preserving the
+   *     original `attemptCount` verbatim.
+   *   - `IN_FLIGHT_KEY` membership is preserved throughout (`SREM` is
+   *     never issued) — the item was and remains in flight.
+   *
+   * Never throws; on Redis error logs `warn` and returns (matches the
+   * `release()` / `complete()` error contract).
+   */
+  async requeueForResume(workerId: string, item: QueueItem): Promise<void> {
+    this.ensureRequeueForResumeCommand();
+    const itemKey = buildItemKey(item);
+    const claimedKey = buildClaimedKey(workerId);
+    const heartbeatKey = buildHeartbeatKey(workerId);
+    const resumePriority = getPriorityScore('resume');
+
+    try {
+      const [code, attemptCount] = (await (this.redis as any).requeueForResumeItem(
+        PENDING_KEY,
+        claimedKey,
+        heartbeatKey,
+        itemKey,
+        String(resumePriority),
+        JSON.stringify(item),
+      )) as [number, number];
+
+      switch (code) {
+        case 0:
+          this.logger.info(
+            { workerId, itemKey },
+            'requeueForResume() called on already-cleared claim (reaper race) — skipping re-pend',
+          );
+          return;
+        case 1:
+          this.logger.info(
+            {
+              workerId,
+              itemKey,
+              attemptCount,
+              reason: 'lease-expiry',
+            },
+            'Item re-pended at resume priority (attemptCount preserved)',
+          );
+          return;
+      }
+    } catch (error) {
+      this.logger.warn(
+        { err: error, workerId, itemKey },
+        'Redis error in requeueForResume',
       );
     }
   }
@@ -306,6 +1315,11 @@ export class RedisQueueAdapter implements QueueManager {
         .del(heartbeatKey)
         .srem(IN_FLIGHT_KEY, itemKey)
         .exec();
+      // #1054 / R6: bound the transition-edge Map growth.
+      this.dropLogState.delete(itemKey);
+      // #1054 finding 7 — complete fully removes the item from flight;
+      // clear the enqueuedAt cache to bound growth alongside dropLogState.
+      this.enqueuedAtCache.delete(itemKey);
       this.logger.info(
         { workerId, itemKey },
         'Item completed and removed from claimed set + in-flight index'

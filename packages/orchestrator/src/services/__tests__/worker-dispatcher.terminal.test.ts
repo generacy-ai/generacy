@@ -49,6 +49,7 @@ function createQueue() {
   return {
     claim: vi.fn().mockResolvedValueOnce(item).mockResolvedValue(null),
     release: vi.fn().mockResolvedValue(undefined),
+    requeueForResume: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     enqueue: vi.fn().mockResolvedValue(undefined),
     getQueueDepth: vi.fn().mockResolvedValue(0),
@@ -56,6 +57,13 @@ function createQueue() {
     getActiveWorkerCount: vi.fn().mockResolvedValue(0),
     enqueueIfAbsent: vi.fn().mockResolvedValue(true),
     hasInFlight: vi.fn().mockResolvedValue(false),
+    reapOrphanClaims: vi.fn().mockResolvedValue({
+      scanned: 0,
+      reclaimed: [],
+      skippedRaceReappeared: 0,
+      skippedGraceWindow: 0,
+    }),
+    hasInFlightAge: vi.fn().mockResolvedValue(null),
   } as unknown as QueueManager & Record<string, any>;
 }
 

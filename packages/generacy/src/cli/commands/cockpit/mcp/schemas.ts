@@ -7,6 +7,15 @@
  */
 import { z } from 'zod';
 import { listGates } from '../gate-vocabulary.js';
+import { SESSION_ID_REGEX } from './claim/payload.js';
+import {
+  GateOpenInputSchema as InternalGateOpenInputSchema,
+  GateAckInputSchema as InternalGateAckInputSchema,
+} from './gates/schemas.js';
+import {
+  CockpitGateStatusInputSchema as InternalGateStatusInputSchema,
+  CockpitGateListInputSchema as InternalGateListInputSchema,
+} from './gates/query-schemas.js';
 
 /** Structured issue/epic reference. */
 export const IssueRefObjectSchema = z
@@ -126,6 +135,41 @@ export const CockpitMergeInputSchema = z
  * strings (as they arrive over MCP) and coerces to numeric keys for the
  * downstream formatter's `Record<number, string>` API.
  */
+/**
+ * #1015 — `cockpit_claim` (idempotent acquire-or-refresh-or-takeover).
+ *
+ * `sessionId` is opaque to the claim mechanism; the regex is a shape check
+ * only. `takeover` is explicit — default `false` (never implicit).
+ */
+export const CockpitClaimInputSchema = z
+  .object({
+    scope: IssueRefInputSchema,
+    sessionId: z.string().regex(SESSION_ID_REGEX, {
+      message: 'sessionId must be 16-64 hex chars',
+    }),
+    ledger: z.string().min(1).max(512),
+    takeover: z.boolean().default(false),
+  })
+  .strict();
+export type CockpitClaimInput = z.infer<typeof CockpitClaimInputSchema>;
+
+/**
+ * #1015 — `cockpit_release` (explicit release by session id).
+ *
+ * No `takeover` — release is by-session-id only. Forcibly clearing a
+ * non-owned claim is a two-step: `cockpit_claim` with `takeover: true`
+ * followed by `cockpit_release`.
+ */
+export const CockpitReleaseInputSchema = z
+  .object({
+    scope: IssueRefInputSchema,
+    sessionId: z.string().regex(SESSION_ID_REGEX, {
+      message: 'sessionId must be 16-64 hex chars',
+    }),
+  })
+  .strict();
+export type CockpitReleaseInput = z.infer<typeof CockpitReleaseInputSchema>;
+
 export const CockpitRelayClarifyAnswersInputSchema = z
   .object({
     issue: IssueRefInputSchema,
@@ -146,3 +190,32 @@ export const CockpitRelayClarifyAnswersInputSchema = z
 export type CockpitRelayClarifyAnswersInput = z.infer<
   typeof CockpitRelayClarifyAnswersInputSchema
 >;
+
+/**
+ * #1022 / #843 — remote-gate MCP-boundary schemas. Re-exported from
+ * `./gates/schemas.ts` so the tool handlers (and the parity/audit tests)
+ * consume a stable public-import surface. These are the SEMANTIC inputs: the
+ * plugin passes semantic + presentation fields and `cockpit_gate_open` derives
+ * gateKey/gateId and assembles the frozen `type:'gate-open'` record; the ack
+ * input carries the closed `outcome` enum and the tool emits `gate-outcome`.
+ * Both are flat `z.object`s so the MCP `inputSchema` has a `.shape`
+ * (gen#1032/#1033). Wire contract: cockpit-remote-gates-plan.md § "Wire
+ * contracts".
+ */
+export const CockpitGateOpenInputSchema = InternalGateOpenInputSchema;
+export type CockpitGateOpenInput = z.infer<typeof CockpitGateOpenInputSchema>;
+
+export const CockpitGateAckInputSchema = InternalGateAckInputSchema;
+export type CockpitGateAckInput = z.infer<typeof CockpitGateAckInputSchema>;
+
+/**
+ * #1038 — read-only gate-query MCP-boundary schemas. Re-exported from
+ * `./gates/query-schemas.ts` so tool-schema-audit sees them on the public
+ * import surface. See specs/1038-issue-1038/contracts/cockpit_gate_status.md
+ * and cockpit_gate_list.md.
+ */
+export const CockpitGateStatusInputSchema = InternalGateStatusInputSchema;
+export type CockpitGateStatusInput = z.infer<typeof CockpitGateStatusInputSchema>;
+
+export const CockpitGateListInputSchema = InternalGateListInputSchema;
+export type CockpitGateListInput = z.infer<typeof CockpitGateListInputSchema>;

@@ -168,6 +168,14 @@ export interface IssueStateResult {
 }
 
 export interface IssueComment {
+  /**
+   * REST-numeric comment id (matches the GraphQL `databaseId`).
+   * Sourced by extracting the trailing `<n>` from `url` (format
+   * `.../issues/<n>#issuecomment-<id>`). Zero when `url` is absent or
+   * malformed — callers that need `id` (e.g. `editIssueComment`,
+   * `deleteIssueComment`) must guard against `id === 0`.
+   */
+  id: number;
   body: string;
   author: string;
   createdAt: string;
@@ -214,6 +222,18 @@ export interface GhWrapper {
   fetchIssueLabels(repo: string, issue: number): Promise<IssueLabelsResult>;
   fetchIssueState(repo: string, issue: number): Promise<IssueStateResult>;
   postIssueComment(repo: string, issue: number, body: string): Promise<{ url: string }>;
+  /**
+   * Edit an issue comment by REST numeric id.
+   * Uses `gh api -X PATCH repos/{repo}/issues/comments/{commentId}`.
+   * Overwrites the entire body (unconditional; callers verify via re-discover).
+   */
+  editIssueComment(repo: string, commentId: number, body: string): Promise<void>;
+  /**
+   * Delete an issue comment by REST numeric id.
+   * Uses `gh api -X DELETE repos/{repo}/issues/comments/{commentId}`.
+   * Treats 404 / "not found" as idempotent success.
+   */
+  deleteIssueComment(repo: string, commentId: number): Promise<void>;
   addAssignees(repo: string, issue: number, logins: string[]): Promise<void>;
   fetchIssueTimeline(repo: string, issue: number): Promise<unknown[]>;
   fetchIssueComments(repo: string, issue: number): Promise<IssueComment[]>;
@@ -768,6 +788,22 @@ function failIfNonZero(result: { stdout: string; stderr: string; exitCode: numbe
   if (result.exitCode !== 0) {
     throw new Error(`gh ${op} failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
   }
+}
+
+function extractCommentIdFromUrl(url: string): number {
+  const match = /#issuecomment-(\d+)$/.exec(url);
+  if (match === null) return 0;
+  const parsed = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isNotFoundStderr(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes('http 404') ||
+    lower.includes('not found') ||
+    lower.includes('status: 404')
+  );
 }
 
 export interface GhCliWrapperOptions {
@@ -1601,6 +1637,39 @@ export class GhCliWrapper implements GhWrapper {
     return { url };
   }
 
+  async editIssueComment(
+    repo: string,
+    commentId: number,
+    body: string,
+  ): Promise<void> {
+    const result = await this.runner('gh', [
+      'api',
+      '-X',
+      'PATCH',
+      `repos/${repo}/issues/comments/${commentId}`,
+      '-f',
+      `body=${body}`,
+    ]);
+    failIfNonZero(result, 'api issues/comments (PATCH)');
+  }
+
+  async deleteIssueComment(
+    repo: string,
+    commentId: number,
+  ): Promise<void> {
+    const result = await this.runner('gh', [
+      'api',
+      '-X',
+      'DELETE',
+      `repos/${repo}/issues/comments/${commentId}`,
+    ]);
+    if (result.exitCode === 0) return;
+    if (isNotFoundStderr(result.stderr)) return;
+    throw new Error(
+      `gh api issues/comments (DELETE) failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+
   async addAssignees(
     repo: string,
     issue: number,
@@ -1676,12 +1745,16 @@ export class GhCliWrapper implements GhWrapper {
         `gh fetchIssueComments JSON shape mismatch: ${shape.error.message}`,
       );
     }
-    return shape.data.comments.map<IssueComment>((c) => ({
-      body: c.body,
-      author: c.author?.login ?? '',
-      createdAt: c.createdAt,
-      url: c.url ?? '',
-    }));
+    return shape.data.comments.map<IssueComment>((c) => {
+      const url = c.url ?? '';
+      return {
+        id: extractCommentIdFromUrl(url),
+        body: c.body,
+        author: c.author?.login ?? '',
+        createdAt: c.createdAt,
+        url,
+      };
+    });
   }
 
   async getCurrentUser(): Promise<string> {

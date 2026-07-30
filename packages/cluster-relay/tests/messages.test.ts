@@ -167,10 +167,17 @@ describe('messages', () => {
   });
 
   describe('RelayMessageSchema', () => {
-    it('validates all 11 message types', () => {
-      const types = ['api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error', 'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close'];
+    it('validates all 19 message types', () => {
+      const types = [
+        'api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error',
+        'lease_request', 'lease_release', 'lease_heartbeat', 'lease_response', 'slot_available',
+        'cluster_rejected', 'tier_info',
+        'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close',
+        'cluster.cockpit.reply',
+      ];
+      expect(types).toHaveLength(19);
       // Confirm schema accepts these types by checking discriminator key
-      expect(RelayMessageSchema.options).toHaveLength(11);
+      expect(RelayMessageSchema.options).toHaveLength(19);
     });
   });
 
@@ -315,6 +322,121 @@ describe('messages', () => {
     });
   });
 
+  describe('lease protocol message types (#1016)', () => {
+    it('parses a valid lease_request message', () => {
+      const msg = {
+        type: 'lease_request',
+        correlationId: 'corr-1',
+        queueItemId: 'owner/repo#42',
+        jobId: 'owner/repo#42',
+        userId: 'user-1',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a lease_request without optional userId', () => {
+      const msg = {
+        type: 'lease_request',
+        correlationId: 'corr-1',
+        queueItemId: 'owner/repo#42',
+        jobId: 'owner/repo#42',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a valid lease_release message', () => {
+      const msg = {
+        type: 'lease_release',
+        correlationId: 'corr-2',
+        leaseId: 'lease-1',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('rejects a lease_release without correlationId (cloud requires it)', () => {
+      const msg = { type: 'lease_release', leaseId: 'lease-1' };
+      expect(parseRelayMessage(msg)).toBeNull();
+    });
+
+    it('parses a valid lease_heartbeat message', () => {
+      const msg = { type: 'lease_heartbeat', leaseId: 'lease-1' };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a granted lease_response with full payload', () => {
+      const msg = {
+        type: 'lease_response',
+        correlationId: 'corr-1',
+        status: 'granted',
+        leaseId: 'lease-1',
+        ttlSeconds: 300,
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a denied lease_response with limit context', () => {
+      const msg = {
+        type: 'lease_response',
+        correlationId: 'corr-1',
+        status: 'denied',
+        reason: 'at_capacity',
+        currentCount: 1,
+        limit: 1,
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses released and error lease_response statuses', () => {
+      expect(
+        parseRelayMessage({ type: 'lease_response', correlationId: 'c', status: 'released' }),
+      ).not.toBeNull();
+      expect(
+        parseRelayMessage({ type: 'lease_response', correlationId: 'c', status: 'error', message: 'boom' }),
+      ).not.toBeNull();
+    });
+
+    it('rejects a lease_response with an unknown status', () => {
+      const msg = { type: 'lease_response', correlationId: 'c', status: 'maybe' };
+      expect(parseRelayMessage(msg)).toBeNull();
+    });
+
+    it('parses a slot_available broadcast (org-broadcast shape)', () => {
+      const msg = {
+        type: 'slot_available',
+        userId: 'user-1',
+        orgId: 'org-1',
+        timestamp: '2026-07-21T00:00:00.000Z',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a minimal slot_available with only userId', () => {
+      const msg = { type: 'slot_available', userId: 'user-1' };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a cluster_rejected message with cloud field names', () => {
+      const msg = {
+        type: 'cluster_rejected',
+        reason: 'cluster_limit_reached',
+        currentLimit: 1,
+        tierName: 'free',
+        upgradeHint: 'Upgrade to run more clusters.',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a tier_info message', () => {
+      const msg = {
+        type: 'tier_info',
+        tier: 'professional',
+        maxConcurrentWorkflows: 5,
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+  });
+
   describe('tunnel message types', () => {
     it('parses a valid tunnel_open message', () => {
       const msg = {
@@ -410,6 +532,111 @@ describe('messages', () => {
         status: 'pending',
       });
       expect(result).toBeNull();
+    });
+  });
+
+  describe('cluster.cockpit.reply (#1063)', () => {
+    it('parses a valid accepted:true reply with wroteDoc:created', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+        wroteDoc: 'created',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid accepted:false reply with reason:invalid-payload', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-outcome',
+        gateId: 'gate-abc',
+        accepted: false,
+        reason: 'invalid-payload',
+        priorStatus: 'unknown',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('preserves unknown top-level fields via .passthrough() (SC-003)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+        futureField: 'x',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).not.toBeNull();
+      expect((result as unknown as Record<string, unknown>).futureField).toBe('x');
+    });
+
+    it('accepts unrecognised reason / frameType / wroteDoc values (Q2=A open enums)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-xyz',
+        frameType: 'some-new-frame-type-we-do-not-know',
+        gateId: 'gate-abc',
+        accepted: false,
+        reason: 'brand-new-drop-class',
+        wroteDoc: 'freshly-invented-verb',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('accepts a non-null frameId (correlation id for #1059 steps 4-7)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-42',
+        frameType: 'gate-open',
+        gateId: 'gate-abc',
+        accepted: true,
+        gateKey: 'run-42/open-abc',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('returns null when required gateId is missing (FR-008)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: null,
+        frameType: 'gate-open',
+        accepted: true,
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toBeNull();
+    });
+
+    // Cloud's unknown-subtype reply (generacy-cloud message-handler.ts) sends
+    // gateId: '' when the incoming frame carried none. This reply is the
+    // rollout-window observability path — dropping it defeats the purpose of
+    // the schema loosening in #1063.
+    it('accepts an empty-string gateId (unknown-subtype reply)', () => {
+      const msg = {
+        type: 'cluster.cockpit.reply',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        frameId: 'frame-xyz',
+        frameType: 'unknown',
+        gateId: '',
+        accepted: false,
+        reason: 'unknown-subtype',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
     });
   });
 });

@@ -11,6 +11,13 @@ import type { CockpitStreamEvent } from '../watch/stream-event.js';
 export interface SubscribeEmitOptions {
   stdout: { write(chunk: string, cb?: () => void): boolean | void };
   onEmit?: (event: CockpitStreamEvent) => void;
+  /**
+   * Event `type` values to skip writing to stdout. The cursor advances past
+   * skipped entries as normal, so downstream consumers see them via
+   * `bus.waitFor`. Used to avoid double stdout writes when another producer
+   * (e.g. `AnswersFileSource`) writes gate-answer events directly.
+   */
+  skipTypes?: readonly string[];
 }
 
 export type SubscribeUnsubscribe = () => void;
@@ -50,11 +57,12 @@ export function subscribeAndEmit(
       if (stopped) return;
       for (const entry of result.r.entries) {
         if (stopped) return;
+        sinceCursor = entry.cursor;
+        if (options.skipTypes?.includes(entry.event.type)) continue;
         const line = lineForEvent(entry.event);
         await new Promise<void>((resolve) => {
           options.stdout.write(line, () => resolve());
         });
-        sinceCursor = entry.cursor;
         options.onEmit?.(entry.event);
       }
     }

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cluster-cockpit-reply.schema.json",
+  "title": "ClusterCockpitReplyMessage",
+  "description": "Cloud → cluster acknowledgement for every gate frame (accepted:true or drop). Sender: generacy-cloud#887. Consumer: packages/cluster-relay in the generacy repo. Unknown top-level fields are preserved (.passthrough() in Zod); frameType, wroteDoc, and reason are open strings (Q2=A) — enumerated values are informational only.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "cluster.cockpit.reply"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "Cloud-side send time. Format is loose — not required to be strict ISO 8601."
+    },
+    "frameId": {
+      "type": ["string", "null"],
+      "description": "Correlation id echoed from the outbound gate frame. `null` today (orchestrator's outbound GateOpenSchema strips unknown keys); becomes a real id in #1059 steps 4–7."
+    },
+    "frameType": {
+      "type": "string",
+      "description": "Which frame class this reply acknowledges. Known values (informational): 'gate-open', 'gate-outcome', 'unknown'."
+    },
+    "gateId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Cloud-assigned gate id."
+    },
+    "gateKey": {
+      "type": "string",
+      "description": "Present when cloud resolved a run-scoped gate identity; absent otherwise."
+    },
+    "accepted": {
+      "type": "boolean",
+      "description": "Router branches on this. true → debug log with full parsed object. false → info log with reason + frameType + gateId + priorStatus."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Short reason code. Present on drop paths and sometimes on happy path. Open string (Q2=A) — informational values include 'schema-invalid', 'stale', etc."
+    },
+    "priorStatus": {
+      "type": "string",
+      "description": "Present on some drop classes; undefined on `accepted: true`."
+    },
+    "wroteDoc": {
+      "type": "string",
+      "description": "Present only on `accepted: true`. Known values (informational): 'created', 'rebound'."
+    }
+  },
+  "required": ["type", "timestamp", "frameId", "frameType", "gateId", "accepted"],
+  "additionalProperties": true
+}

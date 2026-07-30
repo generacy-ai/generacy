@@ -35,6 +35,7 @@ export type {
   IssueRef,
   ParsedPhase,
   ParsedEpicBody,
+  ParseEpicBodyOptions,
   ResolvedEpic,
   ResolveEpicOptions,
 } from './resolver/types.js';
@@ -81,3 +82,65 @@ export {
   type RateLimitScheduler,
   type RateLimitProbeResult,
 } from './gh/rate-limit-scheduler.js';
+
+// Wire contracts — the frozen cockpit remote-gate contract (Shapes 1/2/3).
+// See tetrad-development/docs/cockpit-remote-gates-plan.md § "Wire contracts".
+// The single source is packages/cockpit/src/gates/schema.ts.
+// NB: gates' object `IssueRef` type collides with resolver's `IssueRef`
+// (resolver = { owner, repo, issueNumber }; gates = { owner, repo, number }).
+// We re-export the gates version as `GateIssueRef`. `IssueRefSchema` is unique so
+// it stays unaliased. The wire shapes carry issueRef/epicRef as flat strings.
+export {
+  // Wire shapes (Shapes 1/2/3)
+  GateOpenSchema,
+  GateOutcomeSchema,
+  GateAnswerSchema,
+  type GateOpen,
+  type GateOutcome,
+  type GateAnswer,
+  // Enum + option
+  GateTypeSchema,
+  GATE_TYPES,
+  GateOptionSchema,
+  ArtifactReviewKindSchema,
+  ARTIFACT_REVIEW_KINDS,
+  type GateType,
+  type ArtifactReviewKind,
+  type GateOption,
+  // Object ref helper (cluster-local; not a wire type)
+  IssueRefSchema,
+  issueRefToString,
+  type IssueRef as GateIssueRef,
+  // Derivation
+  deriveGateKey,
+  deriveGateId,
+  deriveClarificationGeneration,
+  deriveArtifactReviewGeneration,
+  deriveImplementationReviewGeneration,
+  deriveManualValidationGeneration,
+  deriveEscalationGeneration,
+  derivePhaseQueueGeneration,
+  deriveFilingGeneration,
+  deriveScopeDrainedGeneration,
+  // #1038 — canonical clarification-batch hash (input to deriveClarificationGeneration)
+  computeClarificationAnswerSetHash,
+  type ClarificationQuestion,
+  type ComputeClarificationAnswerSetHashInput,
+  // Fixtures
+  VALID_FIXTURES,
+  MALFORMED_FIXTURES,
+  VALID_ANSWER_FIXTURES,
+  VALID_ACK_FIXTURES,
+  CLARIFICATION_ANSWER_SET_FIXTURES,
+  type ClarificationAnswerSetFixture,
+  // Wire-frame fixture builders (#1024 integration harness)
+  gateOpenFixture,
+  gateOutcomeFixture,
+  answerLineFixture,
+  DEFAULT_WIRE_SCOPE,
+  DEFAULT_WIRE_EPIC_REF,
+  type WireScope,
+  type GateOpenFixtureOverrides,
+  type GateOutcomeFixtureOverrides,
+  type AnswerLineFixtureOverrides,
+} from './gates/index.js';

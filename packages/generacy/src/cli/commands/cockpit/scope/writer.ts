@@ -19,6 +19,9 @@ const AD_HOC_HEADING_RE = /^##\s+ad-hoc\s*$/i;
 const HEADING_L2_RE = /^##\s+/;
 const HEADING_L1_RE = /^#\s+/;
 const TASK_LIST_RE = /^\s*-\s*\[[ xX]\]\s+(.+?)\s*$/;
+// #1014 (FR-011): MUST match parseEpicBody's PHASE_SHAPED_H4_RE byte-for-byte (invariant I-2).
+const HEADING_L4_PLUS_RE = /^####+\s+/;
+const PHASE_SHAPED_H4_RE = /^\s*(?:P\d+\b|.*\bphase\b)/i;
 
 function refKey(ref: IssueRef): string {
   return `${ref.repo}#${ref.number}`;
@@ -32,6 +35,10 @@ export function detectShape(body: string): BodyShape {
   const lines = body.split(/\r?\n/);
   for (const line of lines) {
     if (HEADING_L3_RE.test(line)) return 'phased';
+    if (HEADING_L4_PLUS_RE.test(line)) {
+      const text = line.replace(/^####+\s+/, '').trim();
+      if (PHASE_SHAPED_H4_RE.test(text)) return 'phased';
+    }
   }
   return 'flat';
 }

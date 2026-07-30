@@ -13,6 +13,27 @@ export interface PrLinkInput {
 }
 
 /**
+ * Result of attempting to link a PR to an orchestrated issue.
+ *
+ * Discriminated so the caller can distinguish the three failure modes
+ * for FR-005 gate-naming in log lines.
+ */
+export type PrLinkResult =
+  | { kind: 'ok'; link: PrToIssueLink }
+  | { kind: 'no-link' }
+  | { kind: 'no-issue'; issueNumber: number }
+  | { kind: 'not-orchestrated'; issueNumber: number };
+
+/**
+ * Orchestration evidence: any of these label prefixes on the linked issue
+ * marks the issue as speckit-orchestrated for the purpose of the PR-feedback
+ * guard. `phase:*` is intentionally excluded — it's the least durable prefix
+ * (removed at phase start/complete/cleanup) and load-bearing for
+ * LabelMonitorService bookkeeping. See clarifications.md Q4=B.
+ */
+const ORCHESTRATION_PREFIXES = ['agent:', 'workflow:', 'completed:'] as const;
+
+/**
  * Utility class that resolves the link between a pull request and its
  * orchestrated issue.
  *
@@ -21,8 +42,10 @@ export interface PrLinkInput {
  *   2. Parse the leading issue number from the branch name (`42-feature-name`)
  *
  * After a candidate issue number is found, the class verifies that the issue
- * exists and carries an `agent:*` label (i.e. it is orchestrated). PRs that
- * are not linked to an orchestrated issue return `null`.
+ * exists and carries orchestration evidence (any `agent:*`, `workflow:*`, or
+ * `completed:*` label). PRs that are not linked to an orchestrated issue
+ * return a discriminated failure result (`no-link` / `no-issue` /
+ * `not-orchestrated`).
  */
 export class PrLinker {
   /**
@@ -81,15 +104,16 @@ export class PrLinker {
    *   2. Branch name prefix         (e.g. `42-feature-name`)
    *
    * After resolving a candidate, the linked issue is fetched to verify it
-   * exists and carries an `agent:*` label. Returns `null` when no valid
-   * link can be established.
+   * exists and carries orchestration evidence (any `agent:*`, `workflow:*`,
+   * or `completed:*` label). Returns a `PrLinkResult` discriminated union so
+   * callers can distinguish the three failure modes.
    */
   async linkPrToIssue(
     github: GitHubClient,
     owner: string,
     repo: string,
     pr: PrLinkInput,
-  ): Promise<PrToIssueLink | null> {
+  ): Promise<PrLinkResult> {
     // 1. Try PR body keywords first
     let issueNumber = this.parsePrBody(pr.body);
     let linkMethod: PrToIssueLink['linkMethod'] = 'pr-body';
@@ -105,29 +129,31 @@ export class PrLinker {
         { prNumber: pr.number, owner, repo },
         'No issue link found in PR body or branch name',
       );
-      return null;
+      return { kind: 'no-link' };
     }
 
-    // 3. Verify the issue exists and is orchestrated (has agent:* label)
+    // 3. Verify the issue exists and is orchestrated (agent:* / workflow:* / completed:*)
     let issueAssignees: string[];
     try {
       const issue = await github.getIssue(owner, repo, issueNumber);
-      const isOrchestrated = issue.labels.some((l) => l.name.startsWith('agent:'));
+      const isOrchestrated = issue.labels.some((l) =>
+        ORCHESTRATION_PREFIXES.some((prefix) => l.name.startsWith(prefix)),
+      );
       issueAssignees = issue.assignees;
 
       if (!isOrchestrated) {
         this.logger.debug(
           { prNumber: pr.number, issueNumber, owner, repo },
-          'Linked issue does not have an agent:* label — skipping non-orchestrated issue',
+          'Linked issue carries no orchestration evidence (no agent:*, workflow:*, or completed:* label) — skipping non-orchestrated issue',
         );
-        return null;
+        return { kind: 'not-orchestrated', issueNumber };
       }
     } catch (error) {
       this.logger.warn(
         { prNumber: pr.number, issueNumber, owner, repo, err: error },
         'Failed to fetch linked issue — it may not exist',
       );
-      return null;
+      return { kind: 'no-issue', issueNumber };
     }
 
     this.logger.info(
@@ -136,10 +162,13 @@ export class PrLinker {
     );
 
     return {
-      prNumber: pr.number,
-      issueNumber,
-      linkMethod,
-      assignees: issueAssignees,
+      kind: 'ok',
+      link: {
+        prNumber: pr.number,
+        issueNumber,
+        linkMethod,
+        assignees: issueAssignees,
+      },
     };
   }
 }

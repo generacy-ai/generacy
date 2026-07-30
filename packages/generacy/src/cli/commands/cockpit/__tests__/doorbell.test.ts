@@ -3,6 +3,8 @@ import { runDoorbell, classifyForm } from '../doorbell.js';
 import { EpicEventBus } from '../mcp/event-bus.js';
 import type { Acquired } from '../mcp/event-bus-registry.js';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
+import { AnswersFileSource } from '../doorbell/answers-file-source.js';
+import { SmeeDoorbellSource } from '../doorbell/smee-source.js';
 
 function makeIssueTransition(number: number): CockpitStreamEvent {
   return {
@@ -174,7 +176,9 @@ describe('runDoorbell', () => {
     const code = await runPromise;
     expect(code).toBe(0);
     expect(exitCalls).toEqual([0]);
-    expect(released.count).toBe(1);
+    // Two acquires + releases: one for poll-mode subscribe, one for the
+    // answers-file tailer bridge (#1023).
+    expect(released.count).toBe(2);
   });
 
   it('T2 — Form 2 forwards the positional to acquireBus unchanged', async () => {
@@ -307,7 +311,8 @@ describe('runDoorbell', () => {
     const code = await runPromise;
     expect(code).toBe(0);
     expect(exitCalls).toEqual([0]);
-    expect(released.count).toBe(1);
+    // Two acquires + releases (poll subscribe + answers tailer, #1023).
+    expect(released.count).toBe(2);
 
     // No more writes should happen after teardown.
     const writesBefore = stdout.writes.length;
@@ -344,7 +349,8 @@ describe('runDoorbell', () => {
       .map((w) => (JSON.parse(w.slice(0, -1)) as { type: string }).type);
     expect(types).toContain('epic-complete');
     expect(exitCalls).toEqual([0]);
-    expect(released.count).toBe(1);
+    // Two acquires + releases (poll subscribe + answers tailer, #1023).
+    expect(released.count).toBe(2);
   });
 
   it('T8 — default post-epic-complete keeps polling (no exit without --exit-on-epic-complete)', async () => {
@@ -385,3 +391,252 @@ describe('runDoorbell', () => {
     expect(exitCalls).toEqual([0]);
   });
 });
+
+/**
+ * Answers-file tailer wiring assertions (#1023). Uses a constructor spy for
+ * `AnswersFileSource` — the tailer's own filesystem behaviour is exercised
+ * by `doorbell/__tests__/answers-file-source.*.test.ts`.
+ */
+describe('runDoorbell — answers-file tailer wiring (#1023)', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  interface FakeTailer {
+    startCalls: number;
+    stopCalls: number;
+    opts: ConstructorParameters<typeof AnswersFileSource>[0] | null;
+    instance: AnswersFileSource;
+  }
+
+  function makeFakeTailerFactory(): {
+    factory: (opts: ConstructorParameters<typeof AnswersFileSource>[0]) => AnswersFileSource;
+    captured: FakeTailer;
+  } {
+    const captured: FakeTailer = {
+      startCalls: 0,
+      stopCalls: 0,
+      opts: null,
+      instance: null as unknown as AnswersFileSource,
+    };
+    const factory = (
+      opts: ConstructorParameters<typeof AnswersFileSource>[0],
+    ): AnswersFileSource => {
+      captured.opts = opts;
+      const stub = {
+        start: async () => {
+          captured.startCalls += 1;
+        },
+        stop: async () => {
+          captured.stopCalls += 1;
+        },
+        getState: () => 'tailing' as const,
+      };
+      captured.instance = stub as unknown as AnswersFileSource;
+      return captured.instance;
+    };
+    return { factory, captured };
+  }
+
+  it('form-1 poll mode: constructs AnswersFileSource with correct epicRef and starts it', async () => {
+    const bus = new EpicEventBus({ epic: 'owner/repo#42' });
+    const { acquireBus } = fakeAcquire(bus);
+    const { factory, captured } = makeFakeTailerFactory();
+    const stdout = makeStdout();
+    const abort = new AbortController();
+
+    const runPromise = runDoorbell(
+      'owner/repo#42',
+      {},
+      {
+        acquireBus,
+        answersFileSourceFactory: factory,
+        stdout,
+        exit: recordExit([]),
+        abortSignal: abort.signal,
+      },
+    );
+
+    await flush();
+    expect(captured.opts?.epicRef).toBe('owner/repo#42');
+    expect(captured.startCalls).toBe(1);
+
+    abort.abort();
+    await runPromise;
+    // Stopped cleanly on teardown.
+    expect(captured.stopCalls).toBe(1);
+  });
+
+  it('form-2 tracking mode: constructs AnswersFileSource with the tracking-ref epicRef', async () => {
+    const bus = new EpicEventBus({ epic: 'owner/repo#99' });
+    const { acquireBus } = fakeAcquire(bus);
+    const { factory, captured } = makeFakeTailerFactory();
+    const stdout = makeStdout();
+    const abort = new AbortController();
+
+    const runPromise = runDoorbell(
+      'owner/repo#99',
+      { tracking: true },
+      {
+        acquireBus,
+        answersFileSourceFactory: factory,
+        stdout,
+        exit: recordExit([]),
+        abortSignal: abort.signal,
+      },
+    );
+
+    await flush();
+    expect(captured.opts?.epicRef).toBe('owner/repo#99');
+    expect(captured.startCalls).toBe(1);
+
+    abort.abort();
+    await runPromise;
+    expect(captured.stopCalls).toBe(1);
+  });
+
+  it('form-1 smee mode: tailer is still constructed and started (runs in parallel with smee source)', async () => {
+    const bus = new EpicEventBus({ epic: 'owner/repo#7' });
+    const { acquireBus } = fakeAcquire(bus);
+    const { factory, captured } = makeFakeTailerFactory();
+    const stdout = makeStdout();
+    const abort = new AbortController();
+
+    const fakeSmeeSource = {
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    const smeeFactory = vi.fn().mockReturnValue(fakeSmeeSource);
+
+    const runPromise = runDoorbell(
+      'owner/repo#7',
+      {},
+      {
+        acquireBus,
+        answersFileSourceFactory: factory,
+        smeeSourceFactory: smeeFactory as unknown as never,
+        gh: {} as unknown as never,
+        env: { COCKPIT_DOORBELL_SMEE_URL: 'https://smee.io/xyz' },
+        fs: {
+          readFile: async () => {
+            const err = new Error('nope') as NodeJS.ErrnoException;
+            err.code = 'ENOENT';
+            throw err;
+          },
+        },
+        channelFilePath: '/tmp/nonexistent-1023',
+        stdout,
+        exit: recordExit([]),
+        abortSignal: abort.signal,
+      },
+    );
+
+    await flush();
+    // Smee source started (mode is smee).
+    expect(smeeFactory).toHaveBeenCalled();
+    // Tailer also constructed + started concurrently.
+    expect(captured.opts?.epicRef).toBe('owner/repo#7');
+    expect(captured.startCalls).toBe(1);
+
+    abort.abort();
+    await runPromise;
+    expect(captured.stopCalls).toBe(1);
+    expect(fakeSmeeSource.stop).toHaveBeenCalled();
+  });
+
+  it('SIGINT-style abort: tailer.stop() is invoked alongside source teardown', async () => {
+    const bus = new EpicEventBus({ epic: 'owner/repo#8' });
+    const { acquireBus, released } = fakeAcquire(bus);
+    const { factory, captured } = makeFakeTailerFactory();
+    const stdout = makeStdout();
+    const abort = new AbortController();
+
+    const runPromise = runDoorbell(
+      'owner/repo#8',
+      {},
+      {
+        acquireBus,
+        answersFileSourceFactory: factory,
+        stdout,
+        exit: recordExit([]),
+        abortSignal: abort.signal,
+      },
+    );
+
+    await flush();
+    expect(captured.startCalls).toBe(1);
+    expect(captured.stopCalls).toBe(0);
+
+    abort.abort();
+    const code = await runPromise;
+    expect(code).toBe(0);
+    // Tailer stopped exactly once.
+    expect(captured.stopCalls).toBe(1);
+    // Both bus references released (poll + tailer).
+    expect(released.count).toBe(2);
+  });
+
+  it('bridge onEvent writes stdout via lineForEvent AND emits to bus', async () => {
+    const bus = new EpicEventBus({ epic: 'owner/repo#9' });
+    const { acquireBus } = fakeAcquire(bus);
+    const { factory, captured } = makeFakeTailerFactory();
+    const stdout = makeStdout();
+    const abort = new AbortController();
+
+    const runPromise = runDoorbell(
+      'owner/repo#9',
+      {},
+      {
+        acquireBus,
+        answersFileSourceFactory: factory,
+        stdout,
+        exit: recordExit([]),
+        abortSignal: abort.signal,
+      },
+    );
+
+    await flush();
+    const bridge = captured.opts!.onEvent;
+    expect(bridge).toBeDefined();
+
+    // Drive the bridge with a synthetic gate-answer event.
+    const priorStdoutCount = stdout.writes.length;
+    const priorCursor = (bus as unknown as { nextCursor: number }).nextCursor;
+    await bridge({
+      type: 'gate-answer',
+      ts: '2027-01-14T12:00:00.000Z',
+      gateId: 'g-test',
+      deliveryId: 'd-test',
+      epic: 'owner/repo#9',
+      line: {
+        gateId: 'g-test',
+        deliveryId: 'd-test',
+        scope: { owner: 'owner', repo: 'repo', number: 9 },
+        answer: {},
+        answeredAt: '2027-01-14T12:00:00.000Z',
+      },
+    });
+
+    // One stdout line appended.
+    const newWrites = stdout.writes.slice(priorStdoutCount).filter((w) => w.length > 0);
+    expect(newWrites).toHaveLength(1);
+    const parsed = JSON.parse(newWrites[0]!.slice(0, -1)) as { type: string; gateId: string };
+    expect(parsed.type).toBe('gate-answer');
+    expect(parsed.gateId).toBe('g-test');
+    // Bus cursor advanced.
+    const newCursor = (bus as unknown as { nextCursor: number }).nextCursor;
+    expect(newCursor).toBe(priorCursor + 1);
+
+    abort.abort();
+    await runPromise;
+  });
+});
+// Suppress unused import warning: SmeeDoorbellSource type is imported for
+// documentation of the sibling factory shape; runtime uses smeeSourceFactory.
+void SmeeDoorbellSource;

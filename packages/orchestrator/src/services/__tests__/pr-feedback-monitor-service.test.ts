@@ -121,6 +121,7 @@ function createPrReviewEvent(overrides: Partial<PrReviewEvent> = {}): PrReviewEv
     prBody: 'Fixes #42',
     branchName: '42-feature-branch',
     source: 'webhook',
+    prMerged: false,
     ...overrides,
   };
 }
@@ -602,10 +603,11 @@ describe('PrFeedbackMonitorService', () => {
 
       await service.poll();
 
-      // When getIssue fails in PrLinker, it logs as debug (not a rate limit detection at that level)
-      // The actual rate limit handling happens when listOpenPullRequests fails
-      // This test verifies processing continues after an error
-      expect(logger.debug).toHaveBeenCalled();
+      // When getIssue fails in PrLinker, PrLinker logs at warn ("Failed to
+      // fetch linked issue") and returns { kind: 'no-issue', ... }; the
+      // monitor then emits its own warn for the no-issue drop gate (#1049).
+      // This test verifies processing continues after an error.
+      expect(logger.warn).toHaveBeenCalled();
     });
 
     it('should do nothing when there are no watched repos', async () => {
@@ -1128,14 +1130,18 @@ describe('PrFeedbackMonitorService', () => {
 
       expect(result).toBe(false);
       expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
-      expect(logger.warn).toHaveBeenCalledWith(
+      // #1049: assignees-empty now uses the dropWithGateLog helper — with the
+      // default mock returning 2 unresolved threads, level lifts to `info`.
+      expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'test-org',
           repo: 'test-repo',
           issueNumber: 42,
           prNumber: 10,
+          gate: 'assignees-empty',
+          unresolvedThreads: 2,
         }),
-        expect.stringContaining('no assignees'),
+        expect.stringContaining('assignees-empty'),
       );
 
       serviceWithUser.stopPolling();
@@ -1976,6 +1982,614 @@ describe('PrFeedbackMonitorService', () => {
           typeof c[1] === 'string' && c[1].includes('state change'),
         );
       expect(stateChangeInfos).toHaveLength(0);
+    });
+  });
+
+  // ==========================================================================
+  // #1070: fixer-timeout retry-eligible branch + counter map
+  // ==========================================================================
+
+  describe('#1070 fixer-timeout retry-eligible branch', () => {
+    function trustLiveThreads() {
+      return [
+        {
+          id: 'PRRT_701',
+          rootCommentId: 701,
+          isResolved: false,
+          comments: [{
+            id: 701, body: 'fix this', author: 'reviewer',
+            authorAssociation: 'MEMBER', created_at: '', updated_at: '',
+          }],
+        },
+      ];
+    }
+
+    // Access the internal counter map for assertions. The map is
+    // intentionally private; tests read it via bracket access to avoid
+    // widening the public API surface.
+    function getRetryCounter(stateKey: string): number | undefined {
+      return (service as unknown as {
+        fixerTimeoutRetryCount: Map<string, number>;
+      }).fixerTimeoutRetryCount.get(stateKey);
+    }
+
+    it('SC-002 base case: blocked:fixer-timeout present + counter=0 → removes label, increments to 1, enqueues with retryAttempt:1', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(mockClient.removeLabels).toHaveBeenCalledWith(
+        'test-org', 'test-repo', 42, ['blocked:fixer-timeout'],
+      );
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(1);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+      const [enqueuedItem] = (queueManager.spies.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect((enqueuedItem as { metadata: { retryAttempt: number } }).metadata.retryAttempt).toBe(1);
+
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-retry-dispatch',
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({ priorRetries: 0, newRetries: 1 });
+    });
+
+    it('normal-path metadata always carries retryAttempt (defaults to 0 when counter unset)', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      const [enqueuedItem] = (queueManager.spies.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect((enqueuedItem as { metadata: { retryAttempt: number } }).metadata.retryAttempt).toBe(0);
+    });
+
+    it('SC-003: three consecutive polls exhaust the budget — cycle 4 no-longer dispatches', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+
+      // Cycle 1: counter 0 → dispatch with retryAttempt:1
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(1);
+
+      // Cycle 2: counter 1 → dispatch with retryAttempt:2
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(2);
+
+      // Cycle 3: counter 2 → budget-exhausted branch fires (defense in depth).
+      // Falls through to generic blocked:* skip. Counter stays at 2.
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter('test-org/test-repo#10')).toBe(2);
+
+      // Assert 3 enqueues (cycles 1 & 2, plus the initial cycle 3 — wait, no,
+      // cycle 3 should NOT enqueue).  We asserted 3 processPrReviewEvent calls
+      // but only 2 should have enqueued (the third exhausted-budget branch
+      // falls through to the blocked:* skip check).
+      // Actually — after cycle 2 the itemKey is still in flight. Since the
+      // InMemoryQueueAdapter dedupes via `enqueueIfAbsent`, subsequent
+      // successful re-enqueue attempts return false. So the direct assertion
+      // is on the budget-exhausted warn log.
+      const warnCall = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-budget-exhausted',
+      );
+      expect(warnCall).toBeDefined();
+      expect(warnCall![0]).toMatchObject({ priorRetries: 2 });
+    });
+
+    it('SC-003a: `blocked:fixer-timeout-no-progress` (terminal) does NOT match retry-eligible branch — counter NEVER incremented', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout-no-progress',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+      expect(result).toBe(false);
+      // Counter untouched — no retry-eligible carve-out fired.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // Generic blocked:* short-circuit matched.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-label-present',
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({ blockedLabel: 'blocked:fixer-timeout-no-progress' });
+    });
+
+    it('SC-003a: `blocked:fixer-timeout-repeat` (terminal) does NOT match retry-eligible branch — counter NEVER incremented', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout-repeat',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+      expect(result).toBe(false);
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('SC-003b: Case C reset — counter cleared after all threads resolve', async () => {
+      const stateKey = 'test-org/test-repo#10';
+
+      // Cycle 1: retry-eligible dispatch, counter → 1.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter(stateKey)).toBe(1);
+
+      // Cycle 2 (Case C): all threads resolved → counter deleted.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      // getIssueLabels doesn't matter — Case C returns before the label check.
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter(stateKey)).toBeUndefined();
+
+      // Cycle 3: fresh timeout label → counter starts from 0 again.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+      await service.processPrReviewEvent(createPrReviewEvent());
+      expect(getRetryCounter(stateKey)).toBe(1);
+    });
+
+    it('failure isolation: client.removeLabels throws → retry branch falls through, counter NOT incremented, generic blocked:* skip matches', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+      ]);
+      (mockClient.removeLabels as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('API error'),
+      );
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      // Counter NOT incremented — we did NOT dispatch.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // Fell through to generic blocked:* skip.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+
+      // Warn log for the removal failure.
+      const warnCall = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => typeof c[1] === 'string' && c[1].includes('Failed to remove blocked:fixer-timeout'),
+      );
+      expect(warnCall).toBeDefined();
+    });
+
+    // PR #1072 review regression: guard-before-mutation.
+    //
+    // When a second blocked:* label from another handler (e.g.
+    // blocked:stuck-merge-conflicts) coexists with blocked:fixer-timeout, the
+    // retry-eligible branch must NOT consume the retry budget or remove the
+    // timeout signal. The generic blocked:* skip must fire on the coexisting
+    // label so the timeout label survives and no retry is spent.
+    it('regression: coexisting other blocked:* label → counter unchanged, blocked:fixer-timeout NOT removed', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:fixer-timeout',
+        'blocked:stuck-merge-conflicts',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      // Counter untouched — no retry burned by the guard-before-mutation fix.
+      expect(getRetryCounter('test-org/test-repo#10')).toBeUndefined();
+      // blocked:fixer-timeout signal preserved — the label is NOT removed
+      // because dispatch never committed. The operator can still see it.
+      expect(mockClient.removeLabels).not.toHaveBeenCalled();
+      // No dispatch.
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      // Retry-dispatch info log NOT emitted.
+      const retryDispatchLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-fixer-timeout-retry-dispatch',
+      );
+      expect(retryDispatchLog).toBeUndefined();
+      // Generic blocked:* skip fires. Either coexisting label is a valid
+      // report — the load-bearing signal is that the skip happened and
+      // nothing mutated.
+      const skipLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as { gate?: string })?.gate === 'blocked-label-present',
+      );
+      expect(skipLog).toBeDefined();
+      expect((skipLog![0] as { blockedLabel?: string }).blockedLabel).toMatch(/^blocked:/);
+    });
+  });
+
+  // ==========================================================================
+  // #1049: drop-gate log-level lift + merged-PR gate
+  // ==========================================================================
+
+  describe('#1049 drop-gate logging + merged-PR gate', () => {
+    function unresolvedThread(id = 700) {
+      return {
+        rootCommentId: id,
+        isResolved: false,
+        comments: [{
+          id, body: 'x', author: 'reviewer',
+          authorAssociation: 'MEMBER', created_at: '', updated_at: '',
+        }],
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // G1: merged-pr gate — always info, no PrLinker call, no enqueue
+    // -----------------------------------------------------------------------
+    describe('G1: merged-pr gate', () => {
+      it('INV-5: merged PR → info log with gate=merged-pr, no probe, no enqueue', async () => {
+        const event = createPrReviewEvent({ prMerged: true });
+        const result = await service.processPrReviewEvent(event);
+
+        expect(result).toBe(false);
+        expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+        // PrLinker not consulted → getIssue not called on the linking path
+        expect(mockClient.getIssue).not.toHaveBeenCalled();
+        // Probe not called
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        // Info log emitted with gate: 'merged-pr'
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'merged-pr',
+            owner: 'test-org',
+            repo: 'test-repo',
+            prNumber: 10,
+            source: 'webhook',
+          }),
+          expect.stringContaining('merged-pr'),
+        );
+      });
+
+      it('merged PR with unresolved threads: still no probe (gate bypass)', async () => {
+        // Even if threads are unresolved, merged-pr fires first and skips probe.
+        const event = createPrReviewEvent({ prMerged: true });
+        await service.processPrReviewEvent(event);
+
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // G2: no-link gate — info if ≥1 unresolved thread, else debug
+    // -----------------------------------------------------------------------
+    describe('G2: no-link gate', () => {
+      it('INV-1: no-link + 1 unresolved thread → info with gate=no-link', async () => {
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(701),
+        ]);
+        const event = createPrReviewEvent({
+          prBody: 'No issue reference',
+          branchName: 'feature-no-link',
+        });
+
+        await service.processPrReviewEvent(event);
+
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'no-link',
+            source: 'webhook',
+            unresolvedThreads: 1,
+          }),
+          expect.stringContaining('no-link'),
+        );
+      });
+
+      it('INV-6: no-link + 0 unresolved threads → debug, NOT info', async () => {
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        const event = createPrReviewEvent({
+          prBody: 'No issue reference',
+          branchName: 'feature-no-link',
+        });
+
+        await service.processPrReviewEvent(event);
+
+        // Debug fired with gate=no-link
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'no-link',
+            unresolvedThreads: 0,
+          }),
+          expect.stringContaining('no-link'),
+        );
+        // Info NOT fired for this specific gate
+        const infoWithGate = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => {
+            const obj = c[0] as Record<string, unknown> | undefined;
+            return obj && obj['gate'] === 'no-link';
+          });
+        expect(infoWithGate).toHaveLength(0);
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // G3: not-orchestrated gate — info if ≥1 unresolved thread, else debug
+    // -----------------------------------------------------------------------
+    describe('G3: not-orchestrated gate', () => {
+      it('INV-3: not-orchestrated + 1 unresolved thread → info with gate=not-orchestrated', async () => {
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42,
+          title: 'Test issue',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'bug' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(702),
+        ]);
+
+        const event = createPrReviewEvent();
+        await service.processPrReviewEvent(event);
+
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'not-orchestrated',
+            issueNumber: 42,
+            source: 'webhook',
+            unresolvedThreads: 1,
+          }),
+          expect.stringContaining('not-orchestrated'),
+        );
+      });
+
+      it('SC-003 monitor-side: post-cockpit_advance shape enqueues', async () => {
+        // The linked issue has workflow:* + completed:validate
+        // + completed:implementation-review — the post-advance shape.
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42,
+          title: 'Test issue',
+          body: '',
+          state: 'open',
+          labels: [
+            { name: 'workflow:speckit-feature' },
+            { name: 'completed:validate' },
+            { name: 'completed:implementation-review' },
+          ],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        // Default beforeEach mock returns 2 unresolved threads with MEMBER
+        // authors — the enqueue path fires.
+        const event = createPrReviewEvent();
+        const result = await service.processPrReviewEvent(event);
+
+        expect(result).toBe(true);
+        expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalled();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // G4: assignees-empty gate — info if ≥1 unresolved thread, else debug
+    // -----------------------------------------------------------------------
+    describe('G4: assignees-empty gate', () => {
+      it('INV-2: assignees-empty + 1 unresolved thread → info with gate=assignees-empty', async () => {
+        const serviceWithUser = new PrFeedbackMonitorService(
+          logger, clientFactory, queueManager, defaultConfig,
+          defaultRepos, 'my-user',
+        );
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test', body: '', state: 'open',
+          labels: [{ name: 'agent:in-progress' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(703),
+        ]);
+
+        const event = createPrReviewEvent();
+        await serviceWithUser.processPrReviewEvent(event);
+
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'assignees-empty',
+            issueNumber: 42,
+            source: 'webhook',
+            unresolvedThreads: 1,
+          }),
+          expect.stringContaining('assignees-empty'),
+        );
+
+        serviceWithUser.stopPolling();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // G5: wrong-cluster gate — always debug, no probe (Q3=B)
+    // -----------------------------------------------------------------------
+    describe('G5: wrong-cluster gate', () => {
+      it('INV-4: wrong-cluster + 1 unresolved thread → debug, NOT info', async () => {
+        const serviceWithUser = new PrFeedbackMonitorService(
+          logger, clientFactory, queueManager, defaultConfig,
+          defaultRepos, 'my-user',
+        );
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test', body: '', state: 'open',
+          labels: [{ name: 'agent:in-progress' }],
+          assignees: ['other-user'],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(704),
+        ]);
+
+        const event = createPrReviewEvent();
+        await serviceWithUser.processPrReviewEvent(event);
+
+        // Probe MUST NOT be called for wrong-cluster (contract §G5 explicit)
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        // Debug fired with gate=wrong-cluster
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'wrong-cluster',
+            issueNumber: 42,
+          }),
+          expect.stringContaining('not assigned'),
+        );
+        // Info with gate=wrong-cluster NOT fired
+        const infoWithGate = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => {
+            const obj = c[0] as Record<string, unknown> | undefined;
+            return obj && obj['gate'] === 'wrong-cluster';
+          });
+        expect(infoWithGate).toHaveLength(0);
+
+        serviceWithUser.stopPolling();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // Poll-path suppression: probe skipped + drop-log at debug (steady-state cost guard)
+    // -----------------------------------------------------------------------
+    describe('poll-path suppression', () => {
+      it('no-link + source=poll → no probe, debug log with source=poll', async () => {
+        // Even if unresolved threads exist, poll-source MUST NOT probe.
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(710),
+        ]);
+        const event = createPrReviewEvent({
+          prBody: 'No issue reference',
+          branchName: 'feature-no-link',
+          source: 'poll',
+        });
+
+        await service.processPrReviewEvent(event);
+
+        // Probe MUST NOT be called on the poll path.
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        // Debug log fired with the gate and source.
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({ gate: 'no-link', source: 'poll' }),
+          expect.stringContaining('no-link'),
+        );
+        // No info log for this gate on the poll path (steady-state spam guard).
+        const infoWithGate = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => {
+            const obj = c[0] as Record<string, unknown> | undefined;
+            return obj && obj['gate'] === 'no-link';
+          });
+        expect(infoWithGate).toHaveLength(0);
+      });
+
+      it('not-orchestrated + source=poll → no probe, debug log with source=poll', async () => {
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test issue', body: '', state: 'open',
+          labels: [{ name: 'bug' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(711),
+        ]);
+
+        const event = createPrReviewEvent({ source: 'poll' });
+        await service.processPrReviewEvent(event);
+
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'not-orchestrated',
+            source: 'poll',
+            issueNumber: 42,
+          }),
+          expect.stringContaining('not-orchestrated'),
+        );
+        const infoWithGate = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => {
+            const obj = c[0] as Record<string, unknown> | undefined;
+            return obj && obj['gate'] === 'not-orchestrated';
+          });
+        expect(infoWithGate).toHaveLength(0);
+      });
+
+      it('assignees-empty + source=poll → no probe, debug log with source=poll', async () => {
+        const serviceWithUser = new PrFeedbackMonitorService(
+          logger, clientFactory, queueManager, defaultConfig,
+          defaultRepos, 'my-user',
+        );
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test', body: '', state: 'open',
+          labels: [{ name: 'agent:in-progress' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          unresolvedThread(712),
+        ]);
+
+        const event = createPrReviewEvent({ source: 'poll' });
+        await serviceWithUser.processPrReviewEvent(event);
+
+        expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'assignees-empty',
+            source: 'poll',
+            issueNumber: 42,
+          }),
+          expect.stringContaining('assignees-empty'),
+        );
+
+        serviceWithUser.stopPolling();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // Probe error path — falls back to debug with probeError field
+    // -----------------------------------------------------------------------
+    describe('probe error path', () => {
+      it('probe throws → debug log with probeError field, no error signal', async () => {
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockRejectedValue(
+          new Error('probe blew up'),
+        );
+        const event = createPrReviewEvent({
+          prBody: 'No issue reference',
+          branchName: 'feature-no-link',
+        });
+
+        await service.processPrReviewEvent(event);
+
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gate: 'no-link',
+            probeError: expect.stringContaining('probe blew up'),
+          }),
+          expect.stringContaining('probe failed'),
+        );
+        // NOT logged as error
+        expect(logger.error).not.toHaveBeenCalledWith(
+          expect.objectContaining({ probeError: expect.anything() }),
+          expect.anything(),
+        );
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // SC-001: post-completed:validate PR enqueues (regression anchor)
+    // -----------------------------------------------------------------------
+    describe('SC-001 anchor', () => {
+      it('issue with only completed:validate label → enqueue path runs', async () => {
+        (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+          number: 42, title: 'Test', body: '', state: 'open',
+          labels: [{ name: 'completed:validate' }],
+          assignees: [],
+          created_at: '', updated_at: '',
+        });
+        const event = createPrReviewEvent();
+        const result = await service.processPrReviewEvent(event);
+
+        expect(result).toBe(true);
+        expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalled();
+      });
     });
   });
 });

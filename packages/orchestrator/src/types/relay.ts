@@ -7,12 +7,13 @@
 
 import type { SSESubscriptionManager } from '../sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
-import type { EventMessage } from '@generacy-ai/cluster-relay';
+import type { EventMessage, PendingFrameMeta } from '@generacy-ai/cluster-relay';
 import type { DockerEngineClient } from '@generacy-ai/control-plane';
+
+export type { PendingFrameMeta } from '@generacy-ai/cluster-relay';
 import type {
   RelayLeaseRequest,
-  RelayLeaseGranted,
-  RelayLeaseDenied,
+  RelayLeaseResponse,
   RelayLeaseRelease,
   RelayLeaseHeartbeat,
   RelaySlotAvailable,
@@ -46,6 +47,15 @@ export interface ClusterRelayClient {
 
   /** Send a typed message through the relay. */
   send(message: RelayMessage): void;
+
+  /**
+   * Register a pending correlation entry for an outbound cockpit frame (#1077).
+   * Called by the orchestrator's `POST /cockpit/gates` and
+   * `POST /cockpit/gates/:id/ack` handlers immediately after mint, before
+   * `send()` / retain. Later call for the same `frameId` wins; evicts on
+   * matching `cluster.cockpit.reply` or after 30s TTL.
+   */
+  registerPendingFrame(frameId: string, meta: PendingFrameMeta): void;
 
   /** Register an event handler. */
   on(event: 'message', handler: (msg: RelayMessage) => void): void;
@@ -158,8 +168,7 @@ export type RelayMessage =
   | RelayConversationInput
   | RelayConversationOutput
   | RelayLeaseRequest
-  | RelayLeaseGranted
-  | RelayLeaseDenied
+  | RelayLeaseResponse
   | RelayLeaseRelease
   | RelayLeaseHeartbeat
   | RelaySlotAvailable
@@ -173,8 +182,7 @@ export type RelayMessage =
 // Re-export lease protocol types
 export type {
   RelayLeaseRequest,
-  RelayLeaseGranted,
-  RelayLeaseDenied,
+  RelayLeaseResponse,
   RelayLeaseRelease,
   RelayLeaseHeartbeat,
   RelaySlotAvailable,
@@ -365,4 +373,12 @@ export interface RelayBridgeOptions {
    * shared across all RelayBridge calls.
    */
   engineClient: DockerEngineClient;
+
+  /**
+   * Optional retainer for `cluster.cockpit` events. When present, the bridge
+   * drains its FIFO into the relay client on each reconnect (parallel to the
+   * single-slot `cluster.vscode-tunnel` retainer). Omitted in test builds or
+   * when the cockpit gate routes are not wired.
+   */
+  cockpitRetainer?: import('../routes/retained-cockpit-events.js').RetainedCockpitEvents;
 }

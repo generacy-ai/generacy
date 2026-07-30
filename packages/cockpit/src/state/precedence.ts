@@ -27,10 +27,26 @@ export const WAITING_PIPELINE_ORDER: string[] = [
   // #883: `blocked:stuck-feedback-loop` sorts ahead of every waiting-for:*
   // gate so cockpit surfaces the pause first when both labels coexist.
   'blocked:stuck-feedback-loop',
+  // #1070 D-3: terminal `blocked:fixer-timeout-*` labels outrank
+  // `waiting-for:address-pr-feedback` — a terminal blocked state is the
+  // more-specific and more-urgent thing to surface (mirrors the
+  // `blocked:stuck-feedback-loop` precedent above).
+  'blocked:fixer-timeout-no-progress',
+  'blocked:fixer-timeout-repeat',
+  // #1073 D-4: terminal `blocked:resolve-failed` (CLI-self-commit or
+  // handler-commit landed but reply/resolve batch had zero successes) outranks
+  // `waiting-for:address-pr-feedback` — no auto-retry window exists for a
+  // resolve failure, so the cluster is not still "waiting-for:address-pr-feedback".
+  'blocked:resolve-failed',
   // #926: `waiting-for:address-pr-feedback` outranks every waiting-for:*
   // gate — an actively-rewriting-code state is more-specific than any
   // passive gate it can coexist with (Q1→A, following #883's precedent).
   'waiting-for:address-pr-feedback',
+  // #1070 D-3 / Q4=A: the retry-eligible `blocked:fixer-timeout` sorts
+  // BELOW `waiting-for:address-pr-feedback`. The retry is coming; the
+  // cluster IS still "waiting-for:address-pr-feedback" — that is the
+  // more-informative status for the operator watching the retry window.
+  'blocked:fixer-timeout',
   'waiting-for:spec-review',
   'waiting-for:clarification',
   'waiting-for:plan-review',

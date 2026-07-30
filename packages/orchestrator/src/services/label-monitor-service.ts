@@ -7,9 +7,14 @@ import type {
   PhaseTracker,
   QueueItem,
 } from '../types/index.js';
-import type { RepositoryConfig, MonitorConfig } from '../config/schema.js';
+import type { RepositoryConfig, MonitorConfig, DispatchConfig } from '../config/schema.js';
 import { filterByAssignee } from './identity.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
+import {
+  classifyDropSeverity,
+  emitDropLog,
+  type DropTransitionState,
+} from './drop-log-helper.js';
 
 /**
  * Minimal sink for monitor → health-service callbacks. The real service
@@ -98,6 +103,12 @@ export class LabelMonitorService {
 
   private state: MonitorState;
 
+  // #1054 / FR-006 / FR-007: per-itemKey severity state for the in-flight-drop
+  // transition-edge decision. Instance-scoped per SC-004.
+  private monitorDropState: Map<string, DropTransitionState> = new Map();
+
+  private readonly maxRunDurationMs: number;
+
   constructor(
     logger: Logger,
     createClient: GitHubClientFactory,
@@ -110,6 +121,7 @@ export class LabelMonitorService {
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
     webhooksConfigured: boolean = false,
+    dispatchConfig?: Pick<DispatchConfig, 'maxRunDurationMs'>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -125,6 +137,7 @@ export class LabelMonitorService {
       adaptivePolling: config.adaptivePolling,
       maxConcurrentPolls: config.maxConcurrentPolls,
     };
+    this.maxRunDurationMs = dispatchConfig?.maxRunDurationMs ?? 1_800_000;
 
     this.state = {
       isPolling: false,
@@ -332,6 +345,32 @@ export class LabelMonitorService {
       );
     }
 
+    // #1051 FR-005: dispatch-time closed-issue gate. Drop `process` and
+    // `resume` events whose target issue is closed at the moment of dispatch
+    // — a `resume` event on already-closed generacy-cloud#879 sailed through
+    // this method and reached the git layer, producing the observed
+    // resurrection + duplicate-PR outcome. Zero mutations on drop
+    // (no enqueue, no markProcessed, no label mutation).
+    //
+    // Fallback: if `fetchedIssue` is null (the try/catch above swallowed a
+    // fetch error), the gate does NOT fire — better to enqueue a possibly-
+    // closed issue than to drop a definitely-open one on transient `gh`
+    // failure. FR-002 pre-push guard catches the closed case downstream.
+    if (fetchedIssue && fetchedIssue.state === 'closed') {
+      this.logger.info(
+        {
+          dropped: 'issue-closed',
+          issueNumber,
+          eventType: type,
+          phase: parsedName,
+          owner,
+          repo,
+        },
+        'Dropping label event: issue is closed',
+      );
+      return false;
+    }
+
     // Build queue item
     const queueItem: QueueItem = {
       owner,
@@ -348,15 +387,28 @@ export class LabelMonitorService {
     if (type === 'resume') {
       const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
       if (!enqueued) {
-        this.logger.info(
+        // #1054 / FR-006 / FR-007: transition-edge severity escalation via
+        // shared helper. Context fields (gate/source/etc.) preserved verbatim.
+        const itemKey = `${owner}/${repo}#${issueNumber}`;
+        const ageMs = await this.queueManager.hasInFlightAge(itemKey);
+        const decision = classifyDropSeverity(
+          itemKey,
+          ageMs,
+          this.maxRunDurationMs,
+          this.monitorDropState,
+        );
+        emitDropLog(
+          this.logger,
+          decision,
           {
-            itemKey: `${owner}/${repo}#${issueNumber}`,
+            itemKey,
             gate: parsedName,
             reason: 'in-flight',
             source,
             owner,
             repo,
             issueNumber,
+            ageMs,
           },
           'Dropping resume event (item already in flight)',
         );
@@ -373,13 +425,34 @@ export class LabelMonitorService {
     }
 
     // type === 'process'
-    await this.queueManager.enqueue(queueItem);
-    this.logger.info(
-      { owner, repo, issueNumber, command: queueItem.command, workflowName },
-      'Issue enqueued',
-    );
+    // #1060 / FR-003 (PR #1065 review finding 4): `enqueue()` returns a
+    // boolean but THROWS on transport error. That distinction is
+    // load-bearing — a `false` return means "already in flight" (the
+    // enqueue's intent is satisfied, safe to `markProcessed` for dedup),
+    // but a transport error means the intake was NOT persisted and we
+    // must NOT `markProcessed` (otherwise the next poll's `isDuplicate`
+    // gate skips it and the issue is silently dropped).
+    let enqueued: boolean;
+    try {
+      enqueued = await this.queueManager.enqueue(queueItem);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber, workflowName },
+        'Queue enqueue errored — leaving dedup state unmarked so the next poll retries',
+      );
+      return false;
+    }
+    if (enqueued) {
+      this.logger.info(
+        { owner, repo, issueNumber, command: queueItem.command, workflowName },
+        'Issue enqueued',
+      );
+    }
 
-    // Mark as processed for dedup
+    // Mark as processed for dedup. Reached on:
+    //   - enqueued === true  (fresh enqueue)
+    //   - enqueued === false (already in flight — dedup intent satisfied)
+    // NOT reached on transport error (see try/catch above).
     await this.phaseTracker.markProcessed(owner, repo, issueNumber, parsedName);
 
     // Manage labels via GitHubClient.
