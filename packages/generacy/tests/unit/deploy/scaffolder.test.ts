@@ -110,15 +110,31 @@ describe('scaffoldBundle', () => {
       expect(content.services.orchestrator.environment).toContain('DEPLOYMENT_MODE=cloud');
     });
 
-    it('uses compose-relative ./claude.json bind for volume mode (no named volume)', () => {
+    it('mounts claude.json read-only as a seed, never as the live config', () => {
       const dir = callScaffold();
       const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
 
       const orchVolumes = content.services.orchestrator.volumes as string[];
       const workerVolumes = content.services.worker.volumes as string[];
-      expect(orchVolumes).toContain('./claude.json:/home/node/.claude.json');
-      expect(workerVolumes).toContain('./claude.json:/home/node/.claude.json');
+      expect(orchVolumes).toContain('./claude.json:/seed/claude.json:ro');
+      expect(workerVolumes).toContain('./claude.json:/seed/claude.json:ro');
+      // Binding the live file made every cluster on a host share one config,
+      // so `generacy setup build` in one cluster clobbered another's agency
+      // MCP path. Containers must copy the seed, not write through to it.
+      expect(orchVolumes.some((v) => v.endsWith(':/home/node/.claude.json'))).toBe(false);
+      expect(workerVolumes.some((v) => v.endsWith(':/home/node/.claude.json'))).toBe(false);
       expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
+    });
+
+    it('never binds the host ~/.claude.json into a container', () => {
+      const dir = callScaffold();
+      const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
+
+      const allVolumes = [
+        ...(content.services.orchestrator.volumes as string[]),
+        ...(content.services.worker.volumes as string[]),
+      ];
+      expect(allVolumes.some((v) => v.startsWith('~/.claude.json'))).toBe(false);
     });
 
     it('mounts docker socket at /var/run/docker-host.sock', () => {
