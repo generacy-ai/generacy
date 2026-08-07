@@ -220,7 +220,7 @@ describe('scaffoldProject', () => {
     expect(parsed.services).not.toHaveProperty('cluster');
   });
 
-  it('uses bind mode for claude config in launch', () => {
+  it('seeds claude config read-only rather than binding the host file', () => {
     const projectDir = join(tempDir, 'new-project');
     scaffoldProject(projectDir, mockConfig, 1);
 
@@ -228,7 +228,10 @@ describe('scaffoldProject', () => {
     const parsed = parse(raw);
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
-    expect(orchVolumes).toContain('~/.claude.json:/home/node/.claude.json');
+    expect(orchVolumes).toContain('./claude.json:/seed/claude.json:ro');
+    // Local clusters used to share the host's ~/.claude.json, so launching a
+    // second cluster overwrote the first cluster's agency MCP path.
+    expect(orchVolumes.some((v) => v.startsWith('~/.claude.json'))).toBe(false);
   });
 
   it('sets DEPLOYMENT_MODE=local for launch', () => {

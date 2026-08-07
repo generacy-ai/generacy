@@ -11,7 +11,7 @@ services:
       - \${ORCHESTRATOR_PORT:-3100}
     volumes:
       - workspace:/workspaces
-      - ~/.claude.json:/home/node/.claude.json
+      - ./claude.json:/seed/claude.json:ro
       - claude-config:/home/node/.claude
       - npm-cache:/home/node/.npm
       - generacy-data:/var/lib/generacy
@@ -58,7 +58,7 @@ services:
     deploy:
       replicas: \${WORKER_COUNT:-1}
     volumes:
-      - ~/.claude.json:/home/node/.claude.json
+      - ./claude.json:/seed/claude.json:ro
       - claude-config:/home/node/.claude
       - npm-cache:/home/node/.npm
       - generacy-data:/var/lib/generacy

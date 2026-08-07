@@ -311,14 +311,20 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.worker).not.toHaveProperty('ports');
   });
 
-  it('bind mode binds ~/.claude.json and shares the claude-config dir volume', () => {
+  it('bind mode seeds claude.json read-only and shares the claude-config dir volume', () => {
     scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'bind' });
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
     const workerVolumes = parsed.services.worker.volumes as string[];
-    // ~/.claude.json is bind-mounted (account metadata file).
-    expect(orchVolumes).toContain('~/.claude.json:/home/node/.claude.json');
+    // The account metadata file is a read-only SEED. Binding the host's live
+    // ~/.claude.json made every cluster on a machine share one file, so
+    // `generacy setup build` in one cluster overwrote another's agency MCP
+    // path with one that does not exist in its containers.
+    expect(orchVolumes).toContain('./claude.json:/seed/claude.json:ro');
+    expect(workerVolumes).toContain('./claude.json:/seed/claude.json:ro');
+    expect(orchVolumes.some((v) => v.startsWith('~/.claude.json'))).toBe(false);
+    expect(orchVolumes.some((v) => v.endsWith(':/home/node/.claude.json'))).toBe(false);
     // The .claude DIRECTORY is a shared named volume so workers inherit the
     // orchestrator's Claude auth + speckit commands + conversations.
     expect(orchVolumes).toContain('claude-config:/home/node/.claude');
@@ -340,15 +346,19 @@ describe('scaffoldDockerCompose', () => {
   });
 
   // T002 [US1]: volume-mode contract per scaffolder-volume-mode.md Q2–Q5.
-  it('volume mode mounts ./claude.json on both orchestrator and worker (no named volume)', () => {
+  it('volume mode seeds ./claude.json read-only on both orchestrator and worker', () => {
     scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'volume' });
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
     const workerVolumes = parsed.services.worker.volumes as string[];
 
-    expect(orchVolumes).toContain('./claude.json:/home/node/.claude.json');
-    expect(workerVolumes).toContain('./claude.json:/home/node/.claude.json');
+    expect(orchVolumes).toContain('./claude.json:/seed/claude.json:ro');
+    expect(workerVolumes).toContain('./claude.json:/seed/claude.json:ro');
+    // Containers copy the seed to ~/.claude.json; nothing writes through to it,
+    // so orchestrator and workers cannot clobber each other's MCP config.
+    expect(orchVolumes.some((v) => v.endsWith(':/home/node/.claude.json'))).toBe(false);
+    expect(workerVolumes.some((v) => v.endsWith(':/home/node/.claude.json'))).toBe(false);
     // #737 guard: the named volume must never mount onto the .claude.json FILE.
     expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
     expect(workerVolumes).not.toContain('claude-config:/home/node/.claude.json');
