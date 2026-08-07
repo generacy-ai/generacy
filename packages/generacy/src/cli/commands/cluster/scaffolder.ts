@@ -3,7 +3,8 @@
  *
  * Used by both `launch` and `deploy` commands to ensure consistent file formats.
  */
-import { chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chownSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
 import { getLogger } from '../../utils/logger.js';
@@ -128,13 +129,25 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   const claudeConfigMode = input.claudeConfigMode ?? 'bind';
   const variant = input.variant;
 
-  // Claude config volume: host bind for local, compose-relative file bind for
-  // cloud/deploy. The `volume` branch used to mount a named volume onto a file
-  // path, which Docker rejects with "is not directory" — see #737.
-  const claudeConfigVolume =
-    claudeConfigMode === 'bind'
-      ? '~/.claude.json:/home/node/.claude.json'
-      : './claude.json:/home/node/.claude.json';
+  // Claude account config is mounted READ-ONLY as a seed, never as the live
+  // file. Every container copies it to ~/.claude.json on first start (see the
+  // cluster-base entrypoints) and writes only to its private copy.
+  //
+  // Mounting the live file was a cross-cluster hazard: every cluster on a host
+  // bound the same `~/.claude.json` read-write, and `generacy setup build`
+  // writes an absolute, image-flavour-specific agency CLI path into
+  // `mcpServers.agency`. Whichever cluster bootstrapped last clobbered that
+  // entry for every other cluster on the machine — a source-build cluster would
+  // inherit a `/shared-packages/...` path that does not exist in its
+  // containers, and its Agency MCP server would fail to start.
+  //
+  // The seed is a scaffolded, filtered copy rather than the host file itself so
+  // that host-specific state (`mcpServers`, the operator's `projects` history,
+  // `machineID`) never reaches a container. `bind` seeds from the host's
+  // `~/.claude.json`; `volume` (deploy) ships the seed alongside the compose
+  // file. The `volume` branch used to mount a named volume onto a file path,
+  // which Docker rejects with "is not directory" — see #737.
+  const claudeConfigVolume = './claude.json:/seed/claude.json:ro';
 
   // Port binding: ephemeral for local, fixed for cloud
   const orchestratorPorts =
@@ -298,25 +311,92 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
 
   writeFileSync(join(dir, 'docker-compose.yml'), stringify(compose), 'utf-8');
 
-  if (claudeConfigMode === 'volume') {
-    const claudeJsonPath = join(dir, 'claude.json');
-    if (!existsSync(claudeJsonPath)) {
-      writeFileSync(claudeJsonPath, '{}\n', 'utf-8');
-      // 1000:1000 = the container's `node` user; best-effort, fails silently
-      // on non-root hosts where the scaffolder user lacks CAP_CHOWN.
-      try {
-        chownSync(claudeJsonPath, 1000, 1000);
-      } catch (err) {
-        const errno = (err as NodeJS.ErrnoException | undefined)?.code;
-        if (errno === 'EPERM' || errno === 'EACCES') {
-          getLogger().warn(
-            { path: claudeJsonPath, code: errno },
-            'chown 1000:1000 on claude.json failed; continuing',
-          );
-        } else {
-          throw err;
-        }
+  scaffoldClaudeSeed(dir, claudeConfigMode === 'bind');
+}
+
+/**
+ * Keys carried from the host's `~/.claude.json` into a cluster seed.
+ *
+ * Deliberately excludes:
+ * - `mcpServers` — absolute, image-flavour-specific paths that each container
+ *   regenerates via `generacy setup build`. Copying it is what let one
+ *   cluster's agency path break another's.
+ * - `projects` — the operator's per-directory history, keyed by host paths that
+ *   do not exist in a container (and the bulk of the file's size).
+ * - `machineID` — each container should identify as itself.
+ * - `cachedGrowthBookFeatures` / `cachedExperiment*` — stale caches the CLI
+ *   refetches on its own.
+ *
+ * Auth is NOT in this file: tokens live in `~/.claude/.credentials.json`, which
+ * is a separate per-cluster volume. Seeding a copy therefore cannot break login.
+ */
+const CLAUDE_SEED_KEYS = [
+  'oauthAccount',
+  'userID',
+  'hasCompletedOnboarding',
+  'lastOnboardingVersion',
+  'installMethod',
+  'autoUpdates',
+  'theme',
+] as const;
+
+/**
+ * Build the seed contents from a host `~/.claude.json`.
+ *
+ * Returns an empty object when the source is missing or unreadable — a cluster
+ * must still come up, it just starts from a blank account config.
+ */
+export function buildClaudeSeed(hostClaudeJsonPath: string): Record<string, unknown> {
+  if (!existsSync(hostClaudeJsonPath)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(hostClaudeJsonPath, 'utf-8')) as Record<string, unknown>;
+    const seed: Record<string, unknown> = {};
+    for (const key of CLAUDE_SEED_KEYS) {
+      if (parsed[key] !== undefined) {
+        seed[key] = parsed[key];
       }
+    }
+    return seed;
+  } catch (err) {
+    getLogger().warn(
+      { path: hostClaudeJsonPath, error: String(err) },
+      'Could not read host ~/.claude.json; seeding an empty Claude config',
+    );
+    return {};
+  }
+}
+
+/**
+ * Write the per-cluster `claude.json` seed that containers copy on first start.
+ *
+ * Never overwrites an existing seed: operators may have hand-tuned it, and
+ * re-seeding on every scaffold would silently revert that.
+ */
+export function scaffoldClaudeSeed(dir: string, fromHost: boolean): void {
+  const claudeJsonPath = join(dir, 'claude.json');
+  if (existsSync(claudeJsonPath)) {
+    return;
+  }
+
+  const seed = fromHost ? buildClaudeSeed(join(homedir(), '.claude.json')) : {};
+  writeFileSync(claudeJsonPath, `${JSON.stringify(seed, null, 2)}\n`, 'utf-8');
+
+  // 1000:1000 = the container's `node` user; best-effort, fails silently
+  // on non-root hosts where the scaffolder user lacks CAP_CHOWN.
+  try {
+    chownSync(claudeJsonPath, 1000, 1000);
+  } catch (err) {
+    const errno = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (errno === 'EPERM' || errno === 'EACCES') {
+      getLogger().warn(
+        { path: claudeJsonPath, code: errno },
+        'chown 1000:1000 on claude.json failed; continuing',
+      );
+    } else {
+      throw err;
     }
   }
 }
