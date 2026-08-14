@@ -80,7 +80,7 @@ export interface WebhookSetupResult {
    * Action taken during webhook setup
    * - `created`: New webhook was created
    * - `skipped`: Active webhook already exists (or a foreign hook was left alone)
-   * - `reactivated`: Inactive webhook was reactivated, or persisted-URL match PATCHed
+   * - `reactivated`: Inactive webhook was reactivated, persisted-URL match PATCHed, OR active-hook event set healed to include missing LOCKED_EVENTS (post-#1092)
    * - `failed`: Setup failed (see `error` field)
    */
   action: 'created' | 'skipped' | 'reactivated' | 'failed';
@@ -102,7 +102,7 @@ export interface WebhookSetupSummary {
   created: number;
   /** Number of webhooks skipped (already active) */
   skipped: number;
-  /** Number of webhooks reactivated (was inactive or persisted-URL healed) */
+  /** Number of webhooks reactivated (was inactive, persisted-URL healed, or active-hook event set healed to include missing LOCKED_EVENTS post-#1092) */
   reactivated: number;
   /** Number of repositories that failed webhook setup */
   failed: number;
@@ -111,7 +111,15 @@ export interface WebhookSetupSummary {
 }
 
 /** Locked event set on all Generacy-created/updated webhooks (FR-001). */
-const LOCKED_EVENTS = ['issues', 'pull_request', 'check_run', 'check_suite'] as const;
+const LOCKED_EVENTS = [
+  'issues',
+  'pull_request',
+  'check_run',
+  'check_suite',
+  'pull_request_review',
+  'pull_request_review_comment',
+  'issue_comment',
+] as const;
 
 /** Default location of the persisted smee channel URL (written by SmeeChannelResolver). */
 const DEFAULT_CHANNEL_FILE_PATH = '/var/lib/generacy/smee-channel';
@@ -391,28 +399,36 @@ export class WebhookSetupService {
     if (selection.kind === 'skip-active') {
       const hook = selection.hook;
       const missingEvents = LOCKED_EVENTS.filter((e) => !hook.events.includes(e));
-      if (missingEvents.length > 0) {
-        this._logger.warn(
-          {
-            owner,
-            repo,
-            webhookId: hook.id,
-            currentEvents: hook.events,
-            expectedEvents: ['issues'],
-          },
-          'Existing webhook has event mismatch - events not updated'
+      if (missingEvents.length === 0) {
+        this._logger.info(
+          { owner, repo, webhookId: hook.id, action: 'skipped' },
+          'Webhook already exists and is active'
+        );
+        return { owner, repo, action: 'skipped', webhookId: hook.id };
+      }
+
+      const newEvents = [...new Set([...hook.events, ...LOCKED_EVENTS])];
+      try {
+        await this._updateRepoWebhook(owner, repo, hook.id, { events: newEvents });
+      } catch (error) {
+        return this._handleGhFailure(
+          owner,
+          repo,
+          error,
+          'patch',
+          'Failed to manage webhook for repository',
         );
       }
       this._logger.info(
-        { owner, repo, webhookId: hook.id, action: 'skipped' },
-        'Webhook already exists and is active'
+        { owner, repo, webhookId: hook.id, missingEvents, newEvents },
+        'Existing webhook was missing events — patched',
       );
-      return { owner, repo, action: 'skipped', webhookId: hook.id };
+      return { owner, repo, action: 'reactivated', webhookId: hook.id };
     }
 
     if (selection.kind === 'reactivate') {
       const hook = selection.hook;
-      const mergedEvents = [...new Set([...hook.events, 'issues'])];
+      const mergedEvents = [...new Set([...hook.events, ...LOCKED_EVENTS])];
       try {
         await this._updateRepoWebhook(owner, repo, hook.id, {
           active: true,

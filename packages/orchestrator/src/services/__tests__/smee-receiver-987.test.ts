@@ -216,6 +216,13 @@ describe('SmeeWebhookReceiver #987 extensions', () => {
   });
 
   describe('per-event processing dispatch', () => {
+    // #1092 SC-005: these three tests (6/7/8) pin the smee-receiver's
+    // per-event dispatch for the event families added to LOCKED_EVENTS in
+    // #1092 (pull_request_review, pull_request_review_comment,
+    // issue_comment). Consumer-side dispatch has always been correct — the
+    // fix in #1092 is producer-side (webhook subscription). If a review or
+    // clarification-answer event stops reaching its monitor after the
+    // widening ships, the regression pin lives here.
     it('6. pull_request_review.submitted → prFeedbackMonitor.processPrReviewEvent', async () => {
       const chunk = sseChunk('pull_request_review', {
         action: 'submitted',
