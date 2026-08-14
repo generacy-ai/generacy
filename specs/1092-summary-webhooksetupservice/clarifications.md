@@ -12,7 +12,7 @@
 - B: Add distinct `action: 'healed'` + new `WebhookSetupSummary.healed` counter. Grep-able (`grep 'action":"healed"'` picks out exactly the event-heal case) and the summary log line at boot cleanly reports how many stale hooks were repaired. Public API widens: `WebhookSetupResult.action` union grows one member; existing consumers of the summary need to sum `reactivated + healed` for a "total-repairs" number. Requires patch to `packages/orchestrator/src/services/webhook-setup-service.ts` type exports plus test-suite updates.
 - C: Reuse `WebhookSetupSummary.reactivated++` counter (no schema change) but emit the log-line `action` field as `'healed'` for grep purposes. Hybrid — preserves the summary's public shape but the boot log still discriminates. Cost: one extra branch reading `result.action` differently from the log-line `action` string is a footgun for future contributors who assume they match.
 
-**Answer**: *Pending*
+**Answer**: A — Reuse `action: 'reactivated'` + `WebhookSetupSummary.reactivated++` for the event-heal outcome. The FR-004 URL-heal already set this precedent (PATCHes an active hook, reports `reactivated`, discriminates via a distinct log message string, not a new action value). Keeps the public `WebhookSetupResult.action` union and all existing `.reactivated` test assertions intact; extend the doc comment to name the event-heal case.
 
 ---
 
@@ -26,7 +26,7 @@
 - B: Reuse `_updateRepoWebhookConfig(owner, repo, id, {url: smeeChannelUrl, active: true, events: [...new Set([...hook.events, ...LOCKED_EVENTS])]})` — matches FR-002's "same shape as update-url heal" text literally. Rewrites URL (redundant — already matches) and `content_type=json` (accidentally beneficial if operator manually flipped to form). Larger PATCH body.
 - C: Add a new helper `_updateRepoWebhookEvents(owner, repo, id, events)` — narrow purpose, clearest naming, single-responsibility. Small new gh-cli surface (contradicts FR-002's "no new gh-cli surface" phrasing, but is arguably a re-alignment of the existing surface, not a new one).
 
-**Answer**: *Pending*
+**Answer**: A — Reuse `_updateRepoWebhook(owner, repo, id, { events: [...new Set([...hook.events, ...LOCKED_EVENTS])] })`, the events-only PATCH. The heal fires in the skip-active branch where the hook is already active and URL-matched, so events is the only field that needs to change; this is the same helper the adjacent reactivate branch uses. Do not rewrite `config.url`/`content_type` (redundant) and do not add a new helper.
 
 ---
 
@@ -40,7 +40,7 @@
 - B: Keep the warn (with FR-004's `expectedEvents: LOCKED_EVENTS` correction) AND emit a follow-up info on successful PATCH. Two lines per heal; warn text amended to "Existing webhook has event mismatch — patching to add missing events". Preserves the warn signal for operators who already alert on it.
 - C: Downgrade the warn to info on heal — one line, phrased as "Existing webhook was missing events — patched" with `missingEvents` and `newEvents` fields. Preserves grep discoverability without the misleading "not updated" tail.
 
-**Answer**: *Pending*
+**Answer**: C — Replace the warn with a single `logger.info` line: "Existing webhook was missing events — patched", carrying structured `{owner, repo, webhookId, missingEvents, newEvents}` fields. A successful self-heal is not a warn-level condition, and the "events not updated" text becomes false post-fix; mirrors the URL-heal's single-info precedent (oldUrl/newUrl). Also drop the stale `expectedEvents: ['issues']` field.
 
 ---
 
@@ -54,4 +54,4 @@
 - B: Add an integration test extending the `relay-integration.integration.test.ts` pattern to inject a synthetic `pull_request_review` webhook body into the orchestrator's `/webhooks` route and assert `PrFeedbackMonitorService` is dispatched. Highest confidence; requires extending the harness to smee events (new scope inside this PR).
 - C: Add a unit test in `smee-receiver.test.ts` that a synthetic `pull_request_review.submitted` payload wired into the existing per-event dispatch table lands in the `PrFeedbackMonitorService` mock. Mid-level: proves the seam without booting the full integration harness. Requires no test-infrastructure changes.
 
-**Answer**: *Pending*
+**Answer**: C — Add unit tests in the smee-receiver suite asserting a synthetic `pull_request_review.submitted` (and `issue_comment.created`) payload dispatches to the monitor mocks — the pattern already exists in `smee-receiver-987.test.ts` tests 6–7, so extend that suite. No new integration-harness scope in this PR; end-to-end live-cluster verification remains a post-deploy smoke check, not a CI gate.
