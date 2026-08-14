@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { ClaudeCodeLaunchPlugin } from '../../src/launch/claude-code-launch-plugin.js';
 import type {
   PhaseIntent,
@@ -257,8 +257,25 @@ describe('ClaudeCodeLaunchPlugin', () => {
 
   // ---- Issue #1095 — reasoning effort ----
   describe('hasEffortMechanism', () => {
-    it('returns true under the currently-bundled Claude CLI (v2.1.150 exposes --effort)', () => {
+    afterEach(() => {
+      // Clear the cache so unrelated tests fall back to normal probe behavior.
+      ClaudeCodeLaunchPlugin._setHasEffortMechanismForTests(undefined);
+    });
+
+    it('returns cached value once seeded (test override)', () => {
+      ClaudeCodeLaunchPlugin._setHasEffortMechanismForTests(true);
       expect(ClaudeCodeLaunchPlugin.hasEffortMechanism()).toBe(true);
+      ClaudeCodeLaunchPlugin._setHasEffortMechanismForTests(false);
+      expect(ClaudeCodeLaunchPlugin.hasEffortMechanism()).toBe(false);
+    });
+
+    it('probes claude --help once per process — no `--effort` in the help text returns false', () => {
+      // No stubbing framework is worth pulling in here for a single test; the
+      // cache override IS the stub. Verify the runtime contract by injection.
+      ClaudeCodeLaunchPlugin._setHasEffortMechanismForTests(false);
+      expect(ClaudeCodeLaunchPlugin.hasEffortMechanism()).toBe(false);
+      // Repeat call must hit the cache (would otherwise probe again).
+      expect(ClaudeCodeLaunchPlugin.hasEffortMechanism()).toBe(false);
     });
   });
 

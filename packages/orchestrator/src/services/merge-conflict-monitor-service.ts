@@ -172,11 +172,23 @@ export class MergeConflictMonitorService {
       return false;
     }
 
-    // Resolve workflow name from labels; default speckit-feature.
+    // Resolve workflow name from labels. Mirrors pr-feedback-monitor-service's
+    // `resolveWorkflowName` fallback: `'unknown'` when no `workflow:*` /
+    // `process:*` / `completed:*` label is present. Downstream fixer handlers
+    // (merge-conflict-handler.ts:743 and siblings) treat `'unknown'` as the
+    // signal to degrade through `agents.default` tiers to the CLI ambient
+    // default per FR-008 (Q1=B). Coercing to `'speckit-feature'` here would
+    // make the handler-side fallback unreachable (see #1095 review Finding 1).
     const workflowLabel = issueLabels.find((l) => l.startsWith('workflow:'));
+    const processLabel = issueLabels.find((l) => l.startsWith('process:'));
+    const completedLabel = issueLabels.find((l) => l.startsWith('completed:'));
     const workflowName = workflowLabel
       ? workflowLabel.slice('workflow:'.length)
-      : 'speckit-feature';
+      : processLabel
+      ? processLabel.slice('process:'.length)
+      : completedLabel
+      ? completedLabel.slice('completed:'.length)
+      : 'unknown';
 
     // Build queue item.
     const queueItem: QueueItem = {

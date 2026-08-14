@@ -15,7 +15,7 @@ import {
   ConfigValidationError,
   type GeneracyConfig,
 } from '../../config/index.js';
-import { loadConfigWithWarnings } from '../../config/loader.js';
+import { collectEffortWarnings, loadConfigWithWarnings } from '../../config/loader.js';
 import { getLogger } from '../utils/logger.js';
 import { readFileSync } from 'node:fs';
 
@@ -139,6 +139,12 @@ export function validateCommand(): Command {
           // Read and parse the file
           const content = readFileSync(configPath, 'utf-8');
           config = parseConfig(content);
+
+          // #1096 review Finding 4: route the explicit-path branch through
+          // the same effort-drop warning surface as auto-discovery so the
+          // Q3=D validate-time warning fires regardless of which entry path
+          // the operator uses.
+          warnings = collectEffortWarnings(config);
 
           if (!quiet && !jsonOutput) {
             logger.info({ path: configPath }, 'Validating config file');

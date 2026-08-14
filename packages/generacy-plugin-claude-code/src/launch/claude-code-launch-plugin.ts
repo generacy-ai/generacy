@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import type {
   ClaudeCodeIntent,
   PhaseIntent,
@@ -29,6 +30,13 @@ interface OutputParser {
 }
 
 /**
+ * Process-lifetime cache for the `--effort` capability probe. `undefined`
+ * means the probe has not yet run; `true`/`false` is the resolved answer.
+ * See `ClaudeCodeLaunchPlugin.hasEffortMechanism()`.
+ */
+let effortMechanismCache: boolean | undefined = undefined;
+
+/**
  * Launch plugin for Claude Code subprocess invocations.
  *
  * Handles three intent kinds:
@@ -47,13 +55,45 @@ export class ClaudeCodeLaunchPlugin {
 
   /**
    * Whether the installed CLI supports a delivery mechanism for reasoning effort.
-   * Under Claude CLI v2.1.150 the `--effort <level>` flag exists first-class.
-   * Flip this to `false` if a future CLI release removes the flag. Consulted by
-   * validate-time (`packages/generacy`) and spawn-time (orchestrator worker)
-   * warning surfaces per FR-010a of issue #1095.
+   *
+   * Probes `claude --help` once per process (result cached in
+   * `effortMechanismCache`) and greps for `--effort`. Consulted by validate-time
+   * (`packages/generacy`) and spawn-time (orchestrator worker) warning surfaces
+   * per FR-010a of issue #1095. Runtime detection closes the drift hazard
+   * called out in the #1096 review Finding 3: a container whose CLI predates or
+   * removes `--effort` would otherwise still get the flag appended and fail the
+   * spawn with an unknown-option error and no `agent.effort.dropped` warning.
+   *
+   * If the probe cannot run (`claude` not on PATH, spawn error, timeout), the
+   * cache falls back to `true` — preserves the pre-#1096 behavior for hosts
+   * that do not yet have the CLI installed but will at spawn time. Force a
+   * fixed result in tests via `_setHasEffortMechanismForTests`.
    */
   static hasEffortMechanism(): boolean {
-    return true;
+    if (effortMechanismCache !== undefined) return effortMechanismCache;
+    try {
+      const output = execFileSync('claude', ['--help'], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      effortMechanismCache = /(^|\s)--effort(\s|=|$)/.test(output);
+    } catch {
+      // `claude` not on PATH, spawn failed, or --help exited non-zero — preserve
+      // prior behavior. Operator surfaces (validate warnings + spawn-time
+      // warnings) rely on the plugin telling the truth about the CLI installed
+      // in the same environment; when we can't tell, don't invent a warning.
+      effortMechanismCache = true;
+    }
+    return effortMechanismCache;
+  }
+
+  /**
+   * Test-only cache override. Pass `undefined` to force a re-probe on the next
+   * `hasEffortMechanism()` call. Not part of the public API.
+   */
+  static _setHasEffortMechanismForTests(value: boolean | undefined): void {
+    effortMechanismCache = value;
   }
 
   buildLaunch(intent: ClaudeCodeIntent): LaunchSpec {

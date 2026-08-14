@@ -42,6 +42,7 @@ import { RepoCheckout } from './repo-checkout.js';
 import { PrLinker, type PrLinkInput } from './pr-linker.js';
 import { buildMergeConflictPrompt } from './merge-conflict-prompt.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+import { warnIfEffortDropped } from './effort-mechanism-check.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -741,6 +742,15 @@ export class MergeConflictHandler {
     // naturally degrades through `agents.default` tiers to the CLI ambient
     // default per FR-008 (Q1).
     const { provider, model, effort } = resolveAgentForPhase(this.config, workflowName, 'implement');
+
+    // #1095 review Finding 2: spawn-time drop warning (Q3=D) — this handler
+    // launches via `agentLauncher` directly, not `CliSpawner`, so it must emit
+    // its own warning to satisfy the "once per spawn" invariant.
+    warnIfEffortDropped(this.logger, {
+      provider,
+      effort,
+      context: { handler: 'merge-conflict', workflowId, issueNumber },
+    });
 
     let child;
     try {

@@ -7,6 +7,7 @@ import type { WorkerConfig } from './config.js';
 import { resolveAgentForPhase } from './config.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+import { warnIfEffortDropped } from './effort-mechanism-check.js';
 import { hashValidationEvidence } from './evidence-hash.js';
 
 /** Label added when the fix cycle cannot advance (#883-style termination). */
@@ -140,6 +141,15 @@ export class ValidateFixHandler {
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort } : {}),
     };
+
+    // #1095 review Finding 2: spawn-time drop warning (Q3=D) — the fixer
+    // launches via `agentLauncher` directly, not `CliSpawner`, so it must
+    // emit its own warning to satisfy the "once per spawn" invariant.
+    warnIfEffortDropped(this.logger, {
+      provider,
+      effort,
+      context: { handler: 'validate-fix', owner, repo, issueNumber, prNumber },
+    });
 
     let exitCode: number | null;
     try {

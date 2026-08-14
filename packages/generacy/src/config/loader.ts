@@ -355,8 +355,11 @@ export function loadConfigWithWarnings(options: LoadConfigOptions = {}): LoadCon
  * provider whose plugin has no CLI mechanism for effort. The default
  * `defaults.agent` provider (or the built-in `claude-code` fallback) resolves
  * from the sibling `defaults.agent` field.
+ *
+ * Exported so the `validate` command can share this warning surface between
+ * its auto-discovery and explicit-path branches (#1096 review Finding 4).
  */
-function collectEffortWarnings(config: GeneracyConfig): string[] {
+export function collectEffortWarnings(config: GeneracyConfig): string[] {
   const agents = config.orchestrator?.agents as AgentsConfig | undefined;
   if (!agents) return [];
 
