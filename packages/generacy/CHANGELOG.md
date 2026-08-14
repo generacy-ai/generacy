@@ -1,5 +1,33 @@
 # @generacy-ai/generacy
 
+## 0.10.0
+
+### Minor Changes
+
+- 75ba0f7: Add optional per-phase `effort` alongside `model` on the `orchestrator.agents` block (#1095), and bring the two fixer paths that ignored agent config into parity with `pr-feedback-handler`.
+
+  - `@generacy-ai/config`: new `EffortSchema` enum (`low | medium | high | xhigh | max`), new optional `effort` field on `AgentEntrySchema`, and `.strict()` on `AgentEntrySchema` / `WorkflowAgentEntriesSchema` (both levels) / `AgentsConfigSchema`. Typos inside `orchestrator.agents` (`defualt:`, `implment:`, `efort:`) now fail validation; typos outside the block continue to strip silently.
+  - `@generacy-ai/generacy-plugin-claude-code`: new public static `ClaudeCodeLaunchPlugin.hasEffortMechanism()` — probes `claude --help` once per process (result cached) and reports whether `--effort` is a recognized flag, so a container whose CLI predates or removes `--effort` reports `false` and the drop warning fires instead of a silent unknown-option spawn failure. `--effort` is now appended by all four builders (`buildPhaseLaunch`, `buildPrFeedbackLaunch`, `buildValidateFixLaunch`, `buildMergeConflictLaunch`). `buildValidateFixLaunch` and `buildMergeConflictLaunch` also gain the `--model` push previously missing on those two paths.
+  - `@generacy-ai/generacy`: new `loadConfigWithWarnings` helper + `warnings` field on `generacy validate --json` output. When `effort` is set but the resolved provider has no CLI mechanism for effort in this release, a warning naming both `effort` and the provider is surfaced on both the auto-discovery and explicit-path branches (exit code stays 0). New "Orchestrator Agent Selection" section in `docs/docs/getting-started/configuration.md` and an updated `packages/generacy/examples/config-full.yaml` demonstrate the block with `effort:`.
+  - `@generacy-ai/orchestrator`: internal plumbing only — `mergeAgentEntry` and `resolveAgentForPhase` learn to walk `effort` as a fourth independent field; `CliSpawnOptions` + `PhaseIntent` / `PrFeedbackIntent` / `ValidateFixIntent` / `MergeConflictIntent` gain the field; `validate-fix-handler` and `merge-conflict-handler` now call `resolveAgentForPhase(config, workflowName, 'implement')` and forward `{ provider, model, effort }` to their intents and `LaunchRequest.provider`. `cli-spawner` and all three fixer handlers (`pr-feedback`, `validate-fix`, `merge-conflict`) emit one `agent.effort.dropped` warn line per spawn when `effort` cannot be delivered (extracted into shared `effort-mechanism-check.ts`). `MergeConflictMonitorService` now enqueues unlabeled paused issues with `workflowName: 'unknown'` (mirrors `pr-feedback-monitor-service.resolveWorkflowName`) so the handler-side Q1=B fallback is reachable in production.
+
+  Behavior-preserving: any repo with no `agents` block, or with `agents` set but `effort` unset, produces byte-identical argv + env across all four spawn paths (SC-004).
+
+### Patch Changes
+
+- 5df2231: Remove the hardcoded `develop` workspace branch so `generacy setup workspace` no longer force-switches every repo. `convertTemplateConfig` now passes a new optional top-level template `branch:` key through verbatim instead of always emitting `branch: 'develop'`, and `WorkspaceConfigSchema.branch` becomes `z.string().min(1).optional()` with no default — `undefined` is a representable "no preference" (FR-001 / FR-002).
+
+  The `setup workspace` resolution chain (`--branch` > `REPO_BRANCH` > `DEFAULT_BRANCH` > config branch) loses its terminal `?? 'develop'` fallback (FR-007). When no tier supplies a branch, setup never switches an existing checkout: it fetches and pulls the current branch, and leaves detached HEADs or branches with no matching `origin/<b>` fetched-but-untouched while still reporting success. New repos clone without `--branch`. The `Configuration` log line reports the resolved `branchSource` and renders the no-preference case as `(repo default / current branch)` (FR-006).
+
+  Explicit-branch behavior is unchanged. Fixes #1088.
+
+- Updated dependencies [5df2231]
+- Updated dependencies [c06f16d]
+- Updated dependencies [75ba0f7]
+  - @generacy-ai/config@0.5.0
+  - @generacy-ai/orchestrator@0.12.1
+  - @generacy-ai/cockpit@0.7.1
+
 ## 0.9.1
 
 ### Patch Changes
