@@ -387,4 +387,77 @@ repos:
     expect(error.stderr).toContain('Schema validation failed');
     expect(error.stderr).toContain('Project ID must match format');
   });
+
+  // Issue #1096 review Finding 4: explicit-path branch must also emit
+  // effort-drop warnings (previously only the auto-discovery branch did).
+  // Fixture uses a droppable-effort config; the shipped
+  // effort-mechanism-probe returns true for `claude-code`, so the warning
+  // will only fire once we introduce a provider with no CLI mechanism.
+  // Here we use an unknown provider (`stub-provider`) to force the drop.
+  it('--json emits warnings on the explicit-path branch when effort is dropped', () => {
+    const configPath = join(testDir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      `
+project:
+  id: "proj_findng4123"
+  name: "Finding 4"
+
+repos:
+  primary: "github.com/test/repo"
+
+defaults:
+  agent: stub-provider
+
+orchestrator:
+  agents:
+    workflows:
+      speckit-feature:
+        phases:
+          implement:
+            model: opus-4-7
+            effort: high
+`,
+    );
+
+    const result = execSync(`node ${cliPath} validate ${configPath} --json`, {
+      encoding: 'utf-8',
+    });
+    const json = JSON.parse(result);
+    expect(json.valid).toBe(true);
+    expect(Array.isArray(json.warnings)).toBe(true);
+    expect(json.warnings.length).toBe(1);
+    expect(json.warnings[0]).toContain('effort');
+    expect(json.warnings[0]).toContain('stub-provider');
+    expect(json.warnings[0]).toContain('orchestrator.agents.workflows.speckit-feature.phases.implement');
+  });
+
+  // Issue #1095 SC-005a smoke — JSON output includes a warnings field.
+  it('--json output includes a warnings array (present + empty by default)', () => {
+    const generacyDir = join(testDir, '.generacy');
+    mkdirSync(generacyDir, { recursive: true });
+    const configPath = join(generacyDir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      `
+project:
+  id: "proj_warntest123"
+  name: "Warnings Test"
+repos:
+  primary: "github.com/test/repo"
+`,
+    );
+
+    const result = execSync(`node ${cliPath} validate --json`, {
+      encoding: 'utf-8',
+      cwd: testDir,
+    });
+    const json = JSON.parse(result);
+    expect(json.valid).toBe(true);
+    expect(Array.isArray(json.warnings)).toBe(true);
+    // Currently-shipped Claude CLI v2.1.150 exposes `--effort`, so
+    // hasEffortMechanism('claude-code') returns true → 0 warnings on this
+    // fixture (which has no effort field regardless).
+    expect(json.warnings).toEqual([]);
+  });
 });

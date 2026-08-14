@@ -25,6 +25,7 @@ import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code'
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+import { warnIfEffortDropped } from './effort-mechanism-check.js';
 
 /** Label added by the handler when the fix cycle cannot advance (#883). */
 const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
@@ -854,15 +855,24 @@ Please proceed with addressing the feedback.`;
     prNumber: number,
     workflowName: string,
   ): Promise<SpawnClaudeResult> {
-    // #814 / Q1→B: pr-feedback resolves `{ provider, model }` against the
+    // #814 / Q1→B: pr-feedback resolves `{ provider, model, effort }` against the
     // `implement` phase — pr-feedback revises the code `implement` produced,
     // so the same agent/model that wrote the code should address review on it.
-    const { provider, model } = resolveAgentForPhase(this.config, workflowName, 'implement');
+    const { provider, model, effort } = resolveAgentForPhase(this.config, workflowName, 'implement');
 
     this.logger.info(
-      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs, provider, model },
+      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs, provider, model, effort },
       'Spawning Claude CLI for PR feedback',
     );
+
+    // #1095 review Finding 2: spawn-time drop warning (Q3=D) — pr-feedback
+    // launches via `agentLauncher` directly, not `CliSpawner`, so it must
+    // emit its own warning to satisfy the "once per spawn" invariant.
+    warnIfEffortDropped(this.logger, {
+      provider,
+      effort,
+      context: { handler: 'pr-feedback', workflowId, prNumber },
+    });
 
     let child;
     try {
@@ -872,6 +882,7 @@ Please proceed with addressing the feedback.`;
           prNumber,
           prompt,
           ...(model !== undefined ? { model } : {}),
+          ...(effort !== undefined ? { effort } : {}),
         } as PrFeedbackIntent,
         cwd: checkoutPath,
         env: {},

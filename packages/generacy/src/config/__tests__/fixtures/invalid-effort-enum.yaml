@@ -1,0 +1,20 @@
+# Invalid: `effort: super` is outside the closed enum
+# ('low'|'medium'|'high'|'xhigh'|'max'). Used by SC-005.
+
+schemaVersion: "1"
+
+project:
+  id: "proj_abc123xyz"
+  name: "Bad Effort Project"
+
+repos:
+  primary: "github.com/acme/main-api"
+
+orchestrator:
+  agents:
+    workflows:
+      speckit-feature:
+        phases:
+          plan:
+            model: fable
+            effort: super

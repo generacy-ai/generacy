@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -9,6 +9,7 @@ import {
   ConfigNotFoundError,
   ConfigParseError,
   ConfigSchemaError,
+  loadConfigWithWarnings,
 } from '../loader.js';
 import { ConfigValidationError } from '../validator.js';
 
@@ -357,5 +358,69 @@ repos:
 
     const config = loadConfig({ startDir: nestedDir });
     expect(config.project.id).toBe('proj_parent123');
+  });
+});
+
+describe('agents block fixtures (issue #1095 D-7)', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `generacy-agents-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(testDir, '.generacy'), { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function stageFixture(fixtureName: string): void {
+    const src = join(__dirname, 'fixtures', fixtureName);
+    const dst = join(testDir, '.generacy', 'config.yaml');
+    copyFileSync(src, dst);
+  }
+
+  it('valid-with-agents-effort.yaml — SC-002: resolves fable/xhigh + opus-4-7/high with 0 warnings, 0 errors', () => {
+    stageFixture('valid-with-agents-effort.yaml');
+    const { config, warnings } = loadConfigWithWarnings({ startDir: testDir });
+    expect(warnings).toEqual([]);
+    const phases = config.orchestrator?.agents?.workflows?.['speckit-feature']?.phases;
+    expect(phases?.plan).toEqual({ model: 'fable', effort: 'xhigh' });
+    expect(phases?.implement).toEqual({ model: 'opus-4-7', effort: 'high' });
+  });
+
+  it('invalid-effort-enum.yaml — SC-005: rejects effort "super" with message naming both effort and super', () => {
+    stageFixture('invalid-effort-enum.yaml');
+    let caught: unknown;
+    try {
+      loadConfig({ startDir: testDir });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigSchemaError);
+    const msg = String((caught as Error).message);
+    expect(msg).toContain('effort');
+    expect(msg).toContain('super');
+  });
+
+  it('invalid-agents-typo.yaml — SC-006: rejects unknown key (defualt) inside agents', () => {
+    stageFixture('invalid-agents-typo.yaml');
+    let caught: unknown;
+    try {
+      loadConfig({ startDir: testDir });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigSchemaError);
+    const msg = String((caught as Error).message);
+    expect(msg).toContain('defualt');
+  });
+
+  it('valid-outside-block-typo.yaml — SC-006 sibling: typo outside orchestrator.agents is silently stripped', () => {
+    stageFixture('valid-outside-block-typo.yaml');
+    // Must not throw.
+    const config = loadConfig({ startDir: testDir });
+    expect(config.defaults?.agent).toBe('claude-code');
+    // Unknown `role_typo` field is stripped by default strip-mode zod.
+    expect((config.defaults as unknown as Record<string, unknown> | undefined)?.role_typo).toBeUndefined();
   });
 });

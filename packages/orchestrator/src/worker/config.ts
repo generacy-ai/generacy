@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { OrchestratorSettings, AgentsConfig } from '@generacy-ai/config';
+import type { OrchestratorSettings, AgentsConfig, Effort } from '@generacy-ai/config';
 import { AgentsConfigSchema } from '@generacy-ai/config';
 import type { WorkflowPhase } from './types.js';
 
@@ -175,6 +175,9 @@ function mergeAgentEntry(
     ...(base.model !== undefined || override.model !== undefined
       ? { model: override.model ?? base.model }
       : {}),
+    ...(base.effort !== undefined || override.effort !== undefined
+      ? { effort: override.effort ?? base.effort }
+      : {}),
   };
 }
 
@@ -263,9 +266,9 @@ export function applyRepoAgentOverrides(
 }
 
 /**
- * Resolve `{ provider, model }` for a phase within a workflow. Provider and
- * model resolve INDEPENDENTLY over the same tier list — a phase override may
- * set only `model` while `provider` falls through from a lower tier.
+ * Resolve `{ provider, model, effort }` for a phase within a workflow. Every
+ * field resolves INDEPENDENTLY over the same tier list — a phase override may
+ * set only `effort` while `provider`/`model` fall through from a lower tier.
  *
  * Precedence:
  *   1. `config.agents.workflows[workflowName].phases[phase]`
@@ -274,14 +277,14 @@ export function applyRepoAgentOverrides(
  *   4. `config.defaultsAgent`   (**provider only** — `defaults.agent` is a bare string)
  *   5. Built-in `DEFAULT_PROVIDER = 'claude-code'` (**provider only**)
  *
- * The `model` walk terminates at tier 3 returning `undefined` (no built-in
- * model default). The `provider` walk always returns a value.
+ * The `model` and `effort` walks terminate at tier 3 returning `undefined` (no
+ * built-in default). The `provider` walk always returns a value.
  */
 export function resolveAgentForPhase(
   config: WorkerConfig,
   workflowName: string,
   phase: WorkflowPhase,
-): { provider: string; model?: string } {
+): { provider: string; model?: string; effort?: Effort } {
   const workflowEntry = config.agents?.workflows?.[workflowName];
   const tiers: (AgentsConfig['default'] | undefined)[] = [
     workflowEntry?.phases?.[phase],
@@ -291,5 +294,9 @@ export function resolveAgentForPhase(
   const providerFromTiers = tiers.find((t) => t?.provider !== undefined)?.provider;
   const provider = providerFromTiers ?? config.defaultsAgent ?? DEFAULT_PROVIDER;
   const model = tiers.find((t) => t?.model !== undefined)?.model;
-  return model !== undefined ? { provider, model } : { provider };
+  const effort = tiers.find((t) => t?.effort !== undefined)?.effort;
+  const out: { provider: string; model?: string; effort?: Effort } = { provider };
+  if (model !== undefined) out.model = model;
+  if (effort !== undefined) out.effort = effort;
+  return out;
 }

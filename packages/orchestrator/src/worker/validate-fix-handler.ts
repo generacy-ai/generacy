@@ -4,8 +4,10 @@ import type { ValidateFixIntent } from '@generacy-ai/generacy-plugin-claude-code
 import type { QueueItem, PhaseTracker } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
+import { resolveAgentForPhase } from './config.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+import { warnIfEffortDropped } from './effort-mechanism-check.js';
 import { hashValidationEvidence } from './evidence-hash.js';
 
 /** Label added when the fix cycle cannot advance (#883-style termination). */
@@ -71,6 +73,7 @@ export class ValidateFixHandler {
     ctx: ValidateFixContext,
     evidence: ValidateFailureEvidence,
     github: GitHubClient,
+    workflowName: string,
   ): Promise<void> {
     const { owner, repo, issueNumber } = item;
     const { prNumber, baseBranch } = ctx;
@@ -123,12 +126,30 @@ export class ValidateFixHandler {
     const prompt = this.buildFixPrompt(evidence, extract, siblingFiles, hash, prNumber);
 
     // 6. Spawn.
+    // #1095: bind to `implement` phase for `{ provider, model, effort }` — same
+    // rule pr-feedback-handler.ts:860 uses (fixer paths revise the code the
+    // implement phase produced). `workflowName === 'unknown'` naturally degrades
+    // through `agents.default` tiers to the container CLI ambient default.
+    const { provider, model, effort } = resolveAgentForPhase(this.config, workflowName, 'implement');
+
     const intent: ValidateFixIntent = {
       kind: 'validate-fix',
       prNumber,
       prompt,
       evidenceHash: hash,
+      ...(provider !== undefined ? { provider } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(effort !== undefined ? { effort } : {}),
     };
+
+    // #1095 review Finding 2: spawn-time drop warning (Q3=D) — the fixer
+    // launches via `agentLauncher` directly, not `CliSpawner`, so it must
+    // emit its own warning to satisfy the "once per spawn" invariant.
+    warnIfEffortDropped(this.logger, {
+      provider,
+      effort,
+      context: { handler: 'validate-fix', owner, repo, issueNumber, prNumber },
+    });
 
     let exitCode: number | null;
     try {
@@ -137,6 +158,7 @@ export class ValidateFixHandler {
         cwd: checkoutPath,
         env: {},
         credentials: buildLaunchCredentials(this.config.credentialRole),
+        provider,
       });
       // Drain streams so the child doesn't stall on back-pressure.
       handle.process.stdout?.on('data', () => undefined);

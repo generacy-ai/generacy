@@ -193,3 +193,90 @@ describe('resolveAgentForPhase', () => {
     expect(resolveAgentForPhase(config, 'speckit-feature', 'implement').provider).toBe(DEFAULT_PROVIDER);
   });
 });
+
+describe('resolveAgentForPhase — effort walk (issue #1095, SC-002)', () => {
+  it('returns fable/xhigh for plan and opus-4-7/high for implement under the quickstart config', () => {
+    const config = makeConfig({
+      agents: {
+        workflows: {
+          'speckit-feature': {
+            phases: {
+              plan: { model: 'fable', effort: 'xhigh' },
+              implement: { model: 'opus-4-7', effort: 'high' },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveAgentForPhase(config, 'speckit-feature', 'plan')).toEqual({
+      provider: 'claude-code',
+      model: 'fable',
+      effort: 'xhigh',
+    });
+    expect(resolveAgentForPhase(config, 'speckit-feature', 'implement')).toEqual({
+      provider: 'claude-code',
+      model: 'opus-4-7',
+      effort: 'high',
+    });
+  });
+
+  it('phase effort override wins over workflow default effort', () => {
+    const config = makeConfig({
+      agents: {
+        workflows: {
+          'speckit-feature': {
+            default: { effort: 'low' },
+            phases: {
+              plan: { effort: 'xhigh' },
+            },
+          },
+        },
+      },
+    });
+    expect(resolveAgentForPhase(config, 'speckit-feature', 'plan').effort).toBe('xhigh');
+    expect(resolveAgentForPhase(config, 'speckit-feature', 'implement').effort).toBe('low');
+  });
+
+  it('field independence: setting only effort at the phase preserves the lower-tier model (FR-003)', () => {
+    const config = makeConfig({
+      agents: {
+        default: { model: 'opus-4-7' },
+        workflows: {
+          'speckit-feature': {
+            phases: {
+              plan: { effort: 'xhigh' },
+            },
+          },
+        },
+      },
+    });
+    const plan = resolveAgentForPhase(config, 'speckit-feature', 'plan');
+    expect(plan.model).toBe('opus-4-7');
+    expect(plan.effort).toBe('xhigh');
+  });
+
+  it('effort is undefined when no tier sets it (SC-004 baseline)', () => {
+    const config = makeConfig({
+      agents: {
+        workflows: {
+          'speckit-feature': {
+            phases: { plan: { model: 'fable' } },
+          },
+        },
+      },
+    });
+    expect(resolveAgentForPhase(config, 'speckit-feature', 'plan').effort).toBeUndefined();
+  });
+
+  it('no agents block at all: provider defaults, model + effort unset', () => {
+    const config = makeConfig({});
+    const resolved = resolveAgentForPhase(config, 'speckit-feature', 'implement');
+    expect(resolved).toEqual({ provider: DEFAULT_PROVIDER });
+  });
+
+  it('agents.default.effort propagates when no workflow/phase override sets it', () => {
+    const config = makeConfig({ agents: { default: { effort: 'medium' } } });
+    expect(resolveAgentForPhase(config, 'speckit-feature', 'implement').effort).toBe('medium');
+  });
+});

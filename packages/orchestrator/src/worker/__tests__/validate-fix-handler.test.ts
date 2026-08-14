@@ -103,7 +103,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
 
     expect(tracker.isDuplicate).toHaveBeenCalledWith('acme', 'widgets', 892, expect.stringMatching(/^validate-fix:[0-9a-f]{64}$/));
     expect(tracker.markProcessed).toHaveBeenCalled();
@@ -122,7 +122,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
 
     expect(tracker.markProcessed).not.toHaveBeenCalled();
     expect((launcher.launch as any).mock.calls.length).toBe(0);
@@ -145,7 +145,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
 
     expect(github.push).not.toHaveBeenCalled();
     expect(github.addLabels).toHaveBeenCalledWith('acme', 'widgets', 892, ['blocked:stuck-validate-fix']);
@@ -173,7 +173,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
 
     expect(github.push).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith('cluster.validate-fix', expect.objectContaining({
@@ -190,7 +190,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
 
     expect(github.push).toHaveBeenCalledWith('origin', 'feat/x');
     expect(emit).toHaveBeenCalledWith('cluster.validate-fix', expect.objectContaining({
@@ -206,7 +206,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
 
     expect(tracker.markProcessed).toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith('cluster.validate-fix', expect.objectContaining({
@@ -230,7 +230,7 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
     // Spawn should still have happened.
     expect((launcher.launch as any).mock.calls.length).toBe(1);
     expect(emit).toHaveBeenCalledWith('cluster.validate-fix', expect.objectContaining({ status: 'attempted' }));
@@ -242,7 +242,7 @@ describe('ValidateFixHandler (#892)', () => {
     const launcher = makeLauncher(0);
     const handler = new ValidateFixHandler(baseConfig({ credentialRole: 'custom-role' } as WorkerConfig), launcher, tracker, logger);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
     const req = (launcher.launch as any).mock.calls[0]![0];
     expect(req.credentials?.role).toBe('custom-role');
   });
@@ -254,12 +254,56 @@ describe('ValidateFixHandler (#892)', () => {
     const emit = vi.fn();
     const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger, emit);
 
-    await handler.handle(item, '/tmp/co', ctx, evidence, github);
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
     const emitted = (emit.mock.calls[0]![1]) as {
       status: string; evidenceHash: string; timestamp: string;
     };
     expect(['attempted', 'escalated', 'blocked']).toContain(emitted.status);
     expect(emitted.evidenceHash).toMatch(/^[0-9a-f]{64}$/);
     expect(emitted.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$/);
+  });
+});
+
+describe('ValidateFixHandler — SC-003 model + effort threading (issue #1095)', () => {
+  const logger = makeLogger();
+
+  it('with agents.workflows.speckit-feature.phases.implement = { model, effort }, intent carries both', async () => {
+    const tracker = makePhaseTracker();
+    const github = makeGithub();
+    const launcher = makeLauncher(0);
+    const config = baseConfig({
+      agents: {
+        workflows: {
+          'speckit-feature': {
+            phases: {
+              implement: { model: 'opus-4-7', effort: 'high' },
+            },
+          },
+        },
+      },
+    } as WorkerConfig);
+    const handler = new ValidateFixHandler(config, launcher, tracker, logger);
+
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
+
+    const req = (launcher.launch as any).mock.calls[0]![0];
+    expect(req.intent.kind).toBe('validate-fix');
+    expect(req.intent.model).toBe('opus-4-7');
+    expect(req.intent.effort).toBe('high');
+    // Provider always defined by resolveAgentForPhase's built-in fallback.
+    expect(req.provider).toBe('claude-code');
+  });
+
+  it('with NO agents block, intent has no model and no effort (SC-004 baseline)', async () => {
+    const tracker = makePhaseTracker();
+    const github = makeGithub();
+    const launcher = makeLauncher(0);
+    const handler = new ValidateFixHandler(baseConfig(), launcher, tracker, logger);
+
+    await handler.handle(item, '/tmp/co', ctx, evidence, github, item.workflowName);
+
+    const req = (launcher.launch as any).mock.calls[0]![0];
+    expect(req.intent.model).toBeUndefined();
+    expect(req.intent.effort).toBeUndefined();
   });
 });
