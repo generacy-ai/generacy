@@ -9,7 +9,7 @@
 - A: Yes — `branch` becomes optional with no default in both schemas; no-preference behavior applies uniformly to template-format and workspace-format configs.
 - B: No — scope strictly to template-format conversion; workspace-format configs keep defaulting to `develop` (leaves one instance of the bug in place).
 
-**Answer**: *Pending*
+**Answer**: A) Yes — remove the Zod `.default('develop')` from `WorkspaceConfigSchema.branch` as well; branch becomes optional with no default in both schemas so no-preference behavior applies uniformly to template-format and workspace-format configs. *(via GitHub comment, @christrudelpw, 2026-08-14)*
 
 ### Q2: Confirm no GitHub API default-branch lookup
 **Context**: The spec's first Assumption explicitly asks to confirm at clarify: instead of querying the GitHub API for a repo's default branch, the fix relies on `git clone` without `--branch` (lands on remote default) and leaving existing checkouts on their current branch. This avoids a network/auth dependency in `setup workspace` but means the tool never *knows* the default branch name — it just inherits it.
@@ -18,7 +18,7 @@
 - A: Confirmed — no API lookup; git-native behavior is sufficient (spec as written).
 - B: Not sufficient — resolve the actual default branch name via API/`git ls-remote --symref` so it can be logged and used for switching existing checkouts.
 
-**Answer**: *Pending*
+**Answer**: A) Confirmed — no API lookup; clone without `--branch` for new repos (lands on remote default) and leave existing checkouts untouched when no branch is explicitly resolved. *(via GitHub comment, @christrudelpw, 2026-08-14)*
 
 ### Q3: Template config branch key location
 **Context**: FR-002 adds an optional branch field to `TemplateConfigSchema` (`packages/config/src/template-schema.ts`) but leaves the key name/location open ("top level or `project`"). The template format currently groups repo inputs under `repos:` (primary/dev/clone) and project metadata under `project:` (org_name). The choice is user-facing surface that documentation and existing project configs will depend on.
@@ -28,7 +28,7 @@
 - B: `repos.branch:` — co-located with the repo lists it governs (branch is workspace-wide across all repos).
 - C: `project.branch:` — grouped with project metadata alongside `org_name`.
 
-**Answer**: *Pending*
+**Answer**: A) Top-level `branch:` — mirrors the workspace-format schema's top-level branch key so both formats read the same. *(via GitHub comment, @christrudelpw, 2026-08-14)*
 
 ### Q4: Removing the final `'develop'` literal — silent or noticed?
 **Context**: FR-007 removes the final `?? 'develop'` in `workspace.ts:111`. The Assumptions argue this is safe for existing generacy-ai clusters (their repos' actual default branch is `develop`), but any external `REPOS`-env-path user who implicitly relied on the literal will see changed behavior with no signal.
@@ -37,7 +37,7 @@
 - A: No notice — the FR-006 "Configuration" log line already shows `branch: repo default / current branch`, which is sufficient signal.
 - B: One-time `warn`-level line in the no-preference case for a release cycle (e.g. "no branch configured; previously defaulted to 'develop', now using repo default").
 
-**Answer**: *Pending*
+**Answer**: A) No notice — the FR-006 "Configuration" log line already shows the resolved branch (repo default / current branch), which is sufficient signal. *(via GitHub comment, @christrudelpw, 2026-08-14)*
 
 ### Q5: No-preference update on non-standard checkout states
 **Context**: FR-003 says the no-preference path updates an existing checkout via `git pull` against its current branch. `cloneOrUpdateRepo` detects the branch via `git branch --show-current`, which returns empty on a detached HEAD; a local-only branch with no upstream will make `git pull origin <branch>` fail. Today these states get forcibly switched to the configured branch; under no-preference there is no branch to switch to.
@@ -47,4 +47,4 @@
 - B: Fetch, attempt pull, and on failure log `warn` but still report success (best-effort update, same non-mutating outcome, noisier).
 - C: Treat as failure — report the repo unsuccessful so the operator notices the unusual state.
 
-**Answer**: *Pending*
+**Answer**: A) Fetch only, skip pull, log a `warn`, and report the repo as successful — setup must never mutate a checkout it has no opinion about. *(via GitHub comment, @christrudelpw, 2026-08-14)*
