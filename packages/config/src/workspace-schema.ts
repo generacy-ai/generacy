@@ -9,7 +9,7 @@ export type WorkspaceRepo = z.infer<typeof WorkspaceRepoSchema>;
 
 export const WorkspaceConfigSchema = z.object({
   org: z.string().min(1),
-  branch: z.string().min(1).default('develop'),
+  branch: z.string().min(1).optional(),
   repos: z.array(WorkspaceRepoSchema).min(1),
 });
 

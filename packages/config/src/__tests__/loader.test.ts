@@ -57,7 +57,7 @@ workspace:
     const result = tryLoadWorkspaceConfig(configPath);
     expect(result).toEqual({
       org: 'generacy-ai',
-      branch: 'develop',
+      branch: undefined,
       repos: [{ name: 'generacy', monitor: true }],
     });
   });
@@ -155,7 +155,7 @@ repos:
     const result = tryLoadWorkspaceConfig(configPath);
     expect(result).toEqual({
       org: 'christrudelpw',
-      branch: 'develop',
+      branch: undefined,
       repos: [{ name: 'markdown-preview-tool', monitor: true }],
     });
   });
@@ -181,7 +181,7 @@ repos:
     const result = tryLoadWorkspaceConfig(configPath);
     expect(result).toEqual({
       org: 'myorg',
-      branch: 'develop',
+      branch: undefined,
       repos: [
         { name: 'my-app', monitor: true },
         { name: 'shared-lib', monitor: true },
@@ -206,7 +206,7 @@ repos:
     const result = tryLoadWorkspaceConfig(configPath);
     expect(result).toEqual({
       org: 'generacy-ai',
-      branch: 'develop',
+      branch: undefined,
       repos: [{ name: 'generacy', monitor: true }],
     });
   });

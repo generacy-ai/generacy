@@ -47,8 +47,16 @@ vi.mock('@generacy-ai/config', async () => {
 
 import { existsSync } from 'node:fs';
 import { execSafe } from '../../../utils/exec.js';
+import { getLogger } from '../../../utils/logger.js';
 import { tryLoadWorkspaceConfig, scanForWorkspaceConfig } from '@generacy-ai/config';
 import { setupWorkspaceCommand } from '../workspace.js';
+
+/**
+ * Every command string passed to execSafe, in call order.
+ */
+function getCommands(): string[] {
+  return (execSafe as Mock).mock.calls.map((call) => call[0] as string);
+}
 
 /**
  * Extract repo names from `git clone` calls recorded on the execSafe mock.
@@ -355,4 +363,161 @@ describe('workspace command override priority', () => {
     expect(getCloneBranch()).toBe('env-branch');
   });
 
+  it('DEFAULT_BRANCH env var overrides config branch', async () => {
+    process.env['DEFAULT_BRANCH'] = 'default-env-branch';
+
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'config-branch',
+      repos: [{ name: 'my-repo', monitor: true }],
+    });
+
+    await runCommand(['--workdir', '/tmp/ws']);
+
+    expect(getCloneBranch()).toBe('default-env-branch');
+  });
+
+  it('REPO_BRANCH takes precedence over DEFAULT_BRANCH', async () => {
+    process.env['REPO_BRANCH'] = 'repo-env-branch';
+    process.env['DEFAULT_BRANCH'] = 'default-env-branch';
+
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'config-branch',
+      repos: [{ name: 'my-repo', monitor: true }],
+    });
+
+    await runCommand(['--workdir', '/tmp/ws']);
+
+    expect(getCloneBranch()).toBe('repo-env-branch');
+  });
+
+  // ── No-preference mode (issue #1088) ──────────────────────────────
+
+  describe('no branch preference', () => {
+    /**
+     * Config with no `branch` key — the shape `convertTemplateConfig` now
+     * produces for a template config that declares no branch.
+     */
+    function mockBranchlessConfig(repo = 'my-repo') {
+      (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
+      (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+        org: 'generacy-ai',
+        branch: undefined,
+        repos: [{ name: repo, monitor: true }],
+      });
+    }
+
+    /**
+     * Mark `<workdir>/<repo>` as an existing checkout.
+     */
+    function mockExistingRepo(repo = 'my-repo') {
+      (existsSync as Mock).mockImplementation(
+        (path: string) => path === `/tmp/ws/${repo}/.git`,
+      );
+    }
+
+    it('clones new repos without --branch', async () => {
+      mockBranchlessConfig();
+
+      await runCommand(['--workdir', '/tmp/ws']);
+
+      const clones = getCommands().filter((cmd) => cmd.startsWith('git clone'));
+      expect(clones).toEqual([
+        'git clone https://github.com/generacy-ai/my-repo.git /tmp/ws/my-repo',
+      ]);
+    });
+
+    it('pulls the current branch of an existing checkout and never switches', async () => {
+      mockBranchlessConfig();
+      mockExistingRepo();
+      (execSafe as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'git branch --show-current') {
+          return { ok: true, stdout: 'main', stderr: '' };
+        }
+        return { ok: true, stdout: '', stderr: '' };
+      });
+
+      await runCommand(['--workdir', '/tmp/ws']);
+
+      const commands = getCommands();
+      expect(commands).toContain('git pull origin main');
+      expect(commands.some((cmd) => cmd.startsWith('git checkout'))).toBe(false);
+    });
+
+    it('fetches only and warns on a detached HEAD, still reporting success', async () => {
+      mockBranchlessConfig();
+      mockExistingRepo();
+      (execSafe as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'git branch --show-current') {
+          return { ok: true, stdout: '', stderr: '' };
+        }
+        return { ok: true, stdout: '', stderr: '' };
+      });
+
+      await runCommand(['--workdir', '/tmp/ws']);
+
+      const commands = getCommands();
+      expect(commands).toContain('git fetch origin');
+      expect(commands.some((cmd) => cmd.startsWith('git pull'))).toBe(false);
+      expect(commands.some((cmd) => cmd.startsWith('git checkout'))).toBe(false);
+      expect(getLogger().warn).toHaveBeenCalledTimes(1);
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it('fetches only and warns when the current branch has no origin counterpart', async () => {
+      mockBranchlessConfig();
+      mockExistingRepo();
+      (execSafe as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'git branch --show-current') {
+          return { ok: true, stdout: 'local-only', stderr: '' };
+        }
+        if (cmd.startsWith('git rev-parse --verify --quiet')) {
+          return { ok: false, stdout: '', stderr: '' };
+        }
+        return { ok: true, stdout: '', stderr: '' };
+      });
+
+      await runCommand(['--workdir', '/tmp/ws']);
+
+      const commands = getCommands();
+      expect(commands).toContain('git rev-parse --verify --quiet refs/remotes/origin/local-only');
+      expect(commands.some((cmd) => cmd.startsWith('git pull'))).toBe(false);
+      expect(commands.some((cmd) => cmd.startsWith('git checkout'))).toBe(false);
+      expect(getLogger().warn).toHaveBeenCalledTimes(1);
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it('logs the no-preference placeholder and branchSource in the Configuration line', async () => {
+      mockBranchlessConfig();
+
+      await runCommand(['--workdir', '/tmp/ws']);
+
+      expect(getLogger().info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: '(repo default / current branch)',
+          branchSource: 'none',
+        }),
+        'Configuration',
+      );
+    });
+
+    it('reports the resolving tier in branchSource when a branch is configured', async () => {
+      (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
+      (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+        org: 'generacy-ai',
+        branch: 'main',
+        repos: [{ name: 'my-repo', monitor: true }],
+      });
+
+      await runCommand(['--workdir', '/tmp/ws']);
+
+      expect(getLogger().info).toHaveBeenCalledWith(
+        expect.objectContaining({ branch: 'main', branchSource: 'config file' }),
+        'Configuration',
+      );
+    });
+  });
 });

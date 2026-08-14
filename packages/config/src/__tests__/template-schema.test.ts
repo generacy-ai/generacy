@@ -102,6 +102,25 @@ describe('TemplateConfigSchema', () => {
       TemplateConfigSchema.parse({ repos: { primary: 'generacy', clone: [''] } }),
     ).toThrow();
   });
+
+  it('accepts a top-level branch', () => {
+    const result = TemplateConfigSchema.parse({
+      branch: 'main',
+      repos: { primary: 'generacy' },
+    });
+    expect(result.branch).toBe('main');
+  });
+
+  it('leaves branch undefined when omitted', () => {
+    const result = TemplateConfigSchema.parse({ repos: { primary: 'generacy' } });
+    expect(result.branch).toBeUndefined();
+  });
+
+  it('rejects empty branch', () => {
+    expect(() =>
+      TemplateConfigSchema.parse({ branch: '', repos: { primary: 'generacy' } }),
+    ).toThrow();
+  });
 });
 
 describe('OrchestratorSettingsSchema', () => {

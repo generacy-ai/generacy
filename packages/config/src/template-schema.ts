@@ -100,6 +100,12 @@ export const OrchestratorSettingsSchema = z.object({
 });
 
 export const TemplateConfigSchema = z.object({
+  /**
+   * Target branch for every workspace repo. Omit for "no preference" — setup
+   * then leaves existing checkouts on their current branch and clones new repos
+   * on the remote default.
+   */
+  branch: z.string().min(1).optional(),
   project: z.object({
     org_name: z.string().optional(),
   }).passthrough().optional(),
