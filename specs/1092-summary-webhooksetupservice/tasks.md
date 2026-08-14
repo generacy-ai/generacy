@@ -10,29 +10,29 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Create `.changeset/1092-widen-locked-events.md` bumping `@generacy-ai/orchestrator` **patch**. Description names FR-001 (LOCKED_EVENTS widened to 7), FR-002/003/004 (heal-on-skip-active), FR-005 (reactivate full-set merge), and states public API unchanged (Q1=A). Required by CLAUDE.md changeset gate — this PR modifies a non-test file under `packages/orchestrator/src/`.
+- [X] T001 Create `.changeset/1092-widen-locked-events.md` bumping `@generacy-ai/orchestrator` **patch**. Description names FR-001 (LOCKED_EVENTS widened to 7), FR-002/003/004 (heal-on-skip-active), FR-005 (reactivate full-set merge), and states public API unchanged (Q1=A). Required by CLAUDE.md changeset gate — this PR modifies a non-test file under `packages/orchestrator/src/`.
 
 ## Phase 2: Core Implementation — `packages/orchestrator/src/services/webhook-setup-service.ts`
 
 All four edits land in the same file and must be committed together (single behavioral fix). Order below matches plan.md § "Edit locations — webhook-setup-service.ts".
 
-- [ ] T002 [US1][US2] FR-001 — Widen `LOCKED_EVENTS` at `packages/orchestrator/src/services/webhook-setup-service.ts:114` from 4 to 7 entries by appending `'pull_request_review'`, `'pull_request_review_comment'`, `'issue_comment'`. Preserve `as const` tuple type. Do NOT add `pull_request_review_thread` (Decision 5 / Assumption 7).
+- [X] T002 [US1][US2] FR-001 — Widen `LOCKED_EVENTS` at `packages/orchestrator/src/services/webhook-setup-service.ts:114` from 4 to 7 entries by appending `'pull_request_review'`, `'pull_request_review_comment'`, `'issue_comment'`. Preserve `as const` tuple type. Do NOT add `pull_request_review_thread` (Decision 5 / Assumption 7).
 
-- [ ] T003 [US3] FR-002 + FR-003 + FR-004 + FR-008 — Rewrite the `skip-active` branch at `packages/orchestrator/src/services/webhook-setup-service.ts:391–411`:
+- [X] T003 [US3] FR-002 + FR-003 + FR-004 + FR-008 — Rewrite the `skip-active` branch at `packages/orchestrator/src/services/webhook-setup-service.ts:391–411`:
   - Split on `missingEvents.length` (already computed).
   - When `missingEvents.length === 0`: preserve existing `logger.info(..., 'Webhook already exists and is active')` and return `{ owner, repo, action: 'skipped', webhookId: hook.id }` (row 4a — idempotency invariant V4).
   - When `missingEvents.length > 0`: build `newEvents = [...new Set([...hook.events, ...LOCKED_EVENTS])]`, call `_updateRepoWebhook(owner, repo, hook.id, { events: newEvents })` inside try/catch (route errors through `_handleGhFailure(..., 'patch', ...)`), emit exactly one `logger.info({ owner, repo, webhookId: hook.id, missingEvents, newEvents }, 'Existing webhook was missing events — patched')`, return `{ owner, repo, action: 'reactivated', webhookId: hook.id }` (row 4b — counter goes to `WebhookSetupSummary.reactivated`).
   - DELETE the pre-fix `logger.warn(..., 'Existing webhook has event mismatch - events not updated')` and its `expectedEvents: ['issues']` field entirely (per FR-004 / V6 / Decision 3).
 
-- [ ] T004 [US4] FR-005 — Replace the reactivate branch merge at `packages/orchestrator/src/services/webhook-setup-service.ts:415`: change `const mergedEvents = [...new Set([...hook.events, 'issues'])];` to `const mergedEvents = [...new Set([...hook.events, ...LOCKED_EVENTS])];`. Preserves any `hook.events` extras via the Set union (Assumption 2 / V3).
+- [X] T004 [US4] FR-005 — Replace the reactivate branch merge at `packages/orchestrator/src/services/webhook-setup-service.ts:415`: change `const mergedEvents = [...new Set([...hook.events, 'issues'])];` to `const mergedEvents = [...new Set([...hook.events, ...LOCKED_EVENTS])];`. Preserves any `hook.events` extras via the Set union (Assumption 2 / V3).
 
-- [ ] T005 FR-003 discoverability rider — Extend the `reactivated` bullet in the `WebhookSetupResult.action` union doc comment at `packages/orchestrator/src/services/webhook-setup-service.ts:86` to name the event-heal case: `'reactivated': Inactive webhook was reactivated, persisted-URL match PATCHed, OR active-hook event set healed to include missing LOCKED_EVENTS (post-#1092)`. Also extend the `WebhookSetupSummary.reactivated` field's doc comment with the same rider (data-model.md § `WebhookSetupSummary`).
+- [X] T005 FR-003 discoverability rider — Extend the `reactivated` bullet in the `WebhookSetupResult.action` union doc comment at `packages/orchestrator/src/services/webhook-setup-service.ts:86` to name the event-heal case: `'reactivated': Inactive webhook was reactivated, persisted-URL match PATCHed, OR active-hook event set healed to include missing LOCKED_EVENTS (post-#1092)`. Also extend the `WebhookSetupSummary.reactivated` field's doc comment with the same rider (data-model.md § `WebhookSetupSummary`).
 
 ## Phase 3: Tests — `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
 
 Update existing branch tests to reflect the widened constant + heal semantics, and add three new tests pinning SC-001, SC-003, SC-004. All tests in a single file — parallelization within the file is not meaningful (vitest runs suites serially inside a file).
 
-- [ ] T006 [US3] Rewrite existing test at `webhook-setup-service.test.ts:438–473` (currently `"should warn when active webhook has event mismatch"`) into `"should heal active webhook when events subset of LOCKED_EVENTS"`:
+- [X] T006 [US3] Rewrite existing test at `webhook-setup-service.test.ts:438–473` (currently `"should warn when active webhook has event mismatch"`) into `"should heal active webhook when events subset of LOCKED_EVENTS"`:
   - Queue TWO `executeCommand` mock responses (list, then PATCH), not one.
   - Assert `result.reactivated === 1` (was `.skipped === 1`); `result.skipped === 0`.
   - Assert the second `executeCommand` call was the PATCH with argv containing `-F events[]=<name>` for each of the 7 `LOCKED_EVENTS`.
@@ -40,28 +40,28 @@ Update existing branch tests to reflect the widened constant + heal semantics, a
   - Assert `mockLogger.warn` was NOT called with the old `'events not updated'` message.
   - Drop the stale `expectedEvents: ['issues']` field assertion.
 
-- [ ] T007 [US4] Update the four reactivate-branch tests to assert the full-set merge (FR-005 / V3):
+- [X] T007 [US4] Update the four reactivate-branch tests to assert the full-set merge (FR-005 / V3):
   - `webhook-setup-service.test.ts:386–436` (`"should reactivate inactive webhooks and merge events"`) — update the expected `events` payload at ~line 432 from `['push', 'issues']` to the union of `['push']` + all 7 `LOCKED_EVENTS` (deduped). Prefer `expect.arrayContaining([...LOCKED_EVENTS])` for order-tolerance.
   - `webhook-setup-service.test.ts:907–955` (`"should reactivate inactive webhook without changing events when issues already included"`) — update expected `events` payload to prior events ∪ all 7 `LOCKED_EVENTS`.
   - `webhook-setup-service.test.ts:957–995` (`"should reactivate inactive webhook and add issues event when missing"`) — update expected `events` payload to prior events ∪ all 7 `LOCKED_EVENTS`. Rename test title to drop the "issues" specificity (e.g., `"should reactivate inactive webhook and add all LOCKED_EVENTS when missing"`).
   - `webhook-setup-service.test.ts:997–1032` (`"should reactivate inactive webhook with empty events array"`) — update expected `events` to all 7 `LOCKED_EVENTS`.
   - Grep for any additional `events: ['issues']` / `events: ['push', 'issues']` assertions on the reactivate branch and update to the LOCKED_EVENTS union.
 
-- [ ] T008 [US1][US2] Add NEW test in the `describe('ensureWebhooks — create branch', ...)` block: `"SC-001: newly-created webhooks carry the full 7-event LOCKED_EVENTS set"`. Assert the `POST /repos/.../hooks` `executeCommand` argv includes `-F events[]=<name>` for each of the 7 events (matches FR-006 + SC-001).
+- [X] T008 [US1][US2] Add NEW test in the `describe('ensureWebhooks — create branch', ...)` block: `"SC-001: newly-created webhooks carry the full 7-event LOCKED_EVENTS set"`. Assert the `POST /repos/.../hooks` `executeCommand` argv includes `-F events[]=<name>` for each of the 7 events (matches FR-006 + SC-001).
 
-- [ ] T009 [US3] Add NEW test in the `describe(...)` block covering the `skip-active` branch: `"SC-003: idempotent — active hook already matching LOCKED_EVENTS is not PATCHed"`. Seed a mock hook with `active: true`, `config.url` matching, and `events: [...LOCKED_EVENTS]`. Run `_ensureWebhookForRepo`. Assert `executeCommand` was called exactly once (list only, no PATCH), `result.action === 'skipped'`, `summary.skipped === 1`, `summary.reactivated === 0`, and only the existing `'Webhook already exists and is active'` info line was emitted (V4 / FR-008 / SC-003).
+- [X] T009 [US3] Add NEW test in the `describe(...)` block covering the `skip-active` branch: `"SC-003: idempotent — active hook already matching LOCKED_EVENTS is not PATCHed"`. Seed a mock hook with `active: true`, `config.url` matching, and `events: [...LOCKED_EVENTS]`. Run `_ensureWebhookForRepo`. Assert `executeCommand` was called exactly once (list only, no PATCH), `result.action === 'skipped'`, `summary.skipped === 1`, `summary.reactivated === 0`, and only the existing `'Webhook already exists and is active'` info line was emitted (V4 / FR-008 / SC-003).
 
-- [ ] T010 [US4] Add dedicated SC-004 assertion (may be a new test or extend T007's first entry): `"SC-004: reactivated inactive hook receives full LOCKED_EVENTS union"`. Seed a mock hook with `active: false, events: ['issues']`. Assert the resulting PATCH argv has `-F active=true` AND `-F events[]=<name>` for each of the 7 `LOCKED_EVENTS`.
+- [X] T010 [US4] Add dedicated SC-004 assertion (may be a new test or extend T007's first entry): `"SC-004: reactivated inactive hook receives full LOCKED_EVENTS union"`. Seed a mock hook with `active: false, events: ['issues']`. Assert the resulting PATCH argv has `-F active=true` AND `-F events[]=<name>` for each of the 7 `LOCKED_EVENTS`.
 
 ## Phase 4: Tests — `packages/orchestrator/src/services/__tests__/smee-receiver-987.test.ts`
 
-- [ ] T011 [P] [US1][US2] Optional low-cost annotation — Add a comment block above tests 6, 7, 8 (`pull_request_review.submitted`, `pull_request_review_comment.created`, `issue_comment.created`) citing `#1092 SC-005` so future readers understand these tests are the pins for the widened `LOCKED_EVENTS` producer subscription. No behavioral change; no new tests unless review discovers a missing branch (plan.md § "Edit locations — smee-receiver-987.test.ts").
+- [X] T011 [P] [US1][US2] Optional low-cost annotation — Add a comment block above tests 6, 7, 8 (`pull_request_review.submitted`, `pull_request_review_comment.created`, `issue_comment.created`) citing `#1092 SC-005` so future readers understand these tests are the pins for the widened `LOCKED_EVENTS` producer subscription. No behavioral change; no new tests unless review discovers a missing branch (plan.md § "Edit locations — smee-receiver-987.test.ts").
 
 ## Phase 5: Verification
 
-- [ ] T012 Run the modified test suite: `pnpm --filter @generacy-ai/orchestrator test webhook-setup-service.test.ts smee-receiver-987.test.ts`. All existing branch tests (`create`, `update-url`, `skip-active`, `reactivate`, `foreign`) still pass; new tests (T006/T008/T009/T010) pass; smee-receiver tests 6/7/8 pass without modification.
+- [X] T012 Run the modified test suite: `pnpm --filter @generacy-ai/orchestrator test webhook-setup-service.test.ts smee-receiver-987.test.ts`. All existing branch tests (`create`, `update-url`, `skip-active`, `reactivate`, `foreign`) still pass; new tests (T006/T008/T009/T010) pass; smee-receiver tests 6/7/8 pass without modification.
 
-- [ ] T013 Run the four grep-verification checks from quickstart.md §§ 1–4 against the diff:
+- [X] T013 Run the four grep-verification checks from quickstart.md §§ 1–4 against the diff:
   - §1: `git diff develop -- packages/orchestrator/src/services/webhook-setup-service.ts | grep -A3 LOCKED_EVENTS` shows three new entries and NO `pull_request_review_thread`.
   - §2: `grep -n "missing events — patched\|missingEvents\|newEvents" packages/orchestrator/src/services/webhook-setup-service.ts` shows one `logger.info` call with the new message and the two structured fields.
   - §3: `grep -n "events not updated\|expectedEvents.*'issues'" packages/orchestrator/src/services/webhook-setup-service.ts` returns **zero** matches (pre-fix warn line deleted).
@@ -69,7 +69,7 @@ Update existing branch tests to reflect the widened constant + heal semantics, a
 
 - [ ] T014 Pre-fix regression demonstration (SC-007): `git worktree add ../generacy-1092-baseline HEAD~1`, `pnpm install --frozen-lockfile`, `pnpm --filter @generacy-ai/orchestrator test webhook-setup-service.test.ts`. Expected: T006 (`"should heal active webhook when events subset of LOCKED_EVENTS"`) AND the updated reactivate-events tests (T007) fail against the pre-fix source. Capture the failure output for the PR description. Clean up with `git worktree remove ../generacy-1092-baseline`.
 
-- [ ] T015 Confirm no consumer-side files were modified (FR-009 / FR-010 / V7). `git diff --name-only develop...HEAD` MUST show only:
+- [X] T015 Confirm no consumer-side files were modified (FR-009 / FR-010 / V7). `git diff --name-only develop...HEAD` MUST show only:
   - `packages/orchestrator/src/services/webhook-setup-service.ts`
   - `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
   - `packages/orchestrator/src/services/__tests__/smee-receiver-987.test.ts` (only if T011 landed)
