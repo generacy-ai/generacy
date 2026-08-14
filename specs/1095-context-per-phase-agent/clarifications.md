@@ -11,7 +11,7 @@
 - C: Fail loudly — log a warning and refuse to spawn the fixer.
 - D: Try each configured workflow in `agents.workflows.*` in registration order and use the first that resolves.
 
-**Answer**: *Pending*
+**Answer**: B — Skip per-workflow resolution and use the same default-tier/ambient path, matching today's behavior and FR-010 parity for un-labeled PRs. Concretely: mirror pr-feedback's precedent (`resolveWorkflowName` → `"unknown"` when no `workflow:*`/`process:*` label exists), letting `resolveAgentForPhase("unknown", "implement")` degrade through the `agents.default` tiers and, when nothing is configured, to the container CLI ambient default. **Rationale**: pr-feedback already has this exact fallback; mirroring it is true parity and byte-identical to today when nothing is configured. A and D invent a workflow the operator never chose; C turns a today-working spawn into a hard failure. (pr-feedback-monitor-service.ts:1069-1108; worker/config.ts:280-296)
 
 ### Q2: Effort enum: schema-stable vs research-driven
 **Context**: FR-001 fixes the enum as `low | medium | high | xhigh | max`. FR-006 says `/plan` researches the installed Claude CLI's supported effort mechanism. If the CLI accepts a different vocabulary (e.g., only `low | medium | high`, or a numeric budget), the schema enum and CLI mechanism will disagree. This affects whether operators can trust `effort: xhigh` to do anything, and whether the schema should be tightened after research completes.
@@ -21,7 +21,7 @@
 - B: `/plan` cross-references CLI vocabulary and narrows the enum to exactly what the current CLI accepts (schema mirrors reality; unsupported values become schema errors).
 - C: Superset: spec enum ∪ any additional values the CLI accepts (maximum operator flexibility, but permits values one provider supports and another does not).
 
-**Answer**: *Pending*
+**Answer**: A — Exactly `low | medium | high | xhigh | max` as specified, regardless of CLI vocabulary. Values the CLI does not recognize become validated no-ops; providers translate what they can. **Rationale**: Keeps the operator-facing schema stable across CLI upgrades/downgrades — a config valid today never becomes a schema error after a CLI version bump. B couples validate results to the installed CLI per container; C defeats typo-catching. The unsupported-value case is surfaced via Q3's warnings rather than schema churn.
 
 ### Q3: Missing CLI mechanism operator feedback
 **Context**: FR-006 branch (b): if the CLI exposes no effort mechanism, the field becomes "a validated no-op ready for future CLI support." SC-004 requires byte-identical spawn argv/env when `effort` is unset — but is silent on the case where `effort` IS set but the CLI has no mechanism. Silent no-op means an operator writes `effort: high` and observes no change in agent behavior, with no signal that it was ignored.
@@ -32,7 +32,7 @@
 - C: Warn once per spawn in orchestrator logs when a set `effort` is dropped.
 - D: Both B (validate-time) and C (spawn-time).
 
-**Answer**: *Pending*
+**Answer**: D — Both B (validate-time) and C (spawn-time). `generacy validate` emits a warning naming `effort` and the unsupported provider, AND the orchestrator logs a warning once per spawn when a set `effort` is dropped. **Rationale**: The two warnings cover different failure windows: validate catches authoring-time mistakes, while the per-spawn log catches runtime drift — the container CLI version changes on cluster restart independently of when validate last ran. Silent degradation is explicitly rejected.
 
 ### Q4: Strict-mode scope on CLI schema
 **Context**: FR-011 / SC-006 require `generacy validate` to reject unknown keys under `agents`, `workflows.*`, `phases.*`, and entries. Assumption 7 notes the CLI schema in `packages/generacy/src/config/schema.ts` may or may not currently be `.strict()`. Applying strict mode narrowly to the `agents` sub-tree fixes the reported silent-strip bug but leaves typos elsewhere silent; applying it schema-wide is stricter but may reject configs that were previously accepted.
@@ -42,4 +42,4 @@
 - B: Apply `.strict()` to the entire CLI authoring schema (strictest; may reject existing configs elsewhere — acceptable one-time break to catch all typos).
 - C: Preserve whatever mode each parent already uses; only enforce strict on the newly added `agents` sub-tree (safest for backward compat).
 
-**Answer**: *Pending*
+**Answer**: A — Apply `.strict()` only to the `orchestrator.agents` sub-tree and all its descendants (workflows, phases, entries). **Rationale**: Every existing object in the CLI schema is strip-mode `z.object`, so deep-stricting only the new sub-tree cannot reject any config that validates today (zero blast radius) while still catching typos like `efort`/`modle` at every nesting level — where the silent-strip bug this feature fixes actually lives. B's one-time break contradicts backward compatibility; C's top-level-only strictness lets nested typos strip silently again. (packages/generacy/src/config/schema.ts:25-225)
