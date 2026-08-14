@@ -8,6 +8,22 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   executeCommand: vi.fn(),
 }));
 
+/**
+ * Mirror of the private `LOCKED_EVENTS` tuple in `webhook-setup-service.ts`.
+ * Post-#1092, this is the 7-event set on all Generacy-managed webhooks.
+ * Kept in test scope so assertions can reference the full canonical set
+ * without re-declaring it in every test.
+ */
+const LOCKED_EVENTS_ARRAY = [
+  'issues',
+  'pull_request',
+  'check_run',
+  'check_suite',
+  'pull_request_review',
+  'pull_request_review_comment',
+  'issue_comment',
+] as const;
+
 describe('WebhookSetupService', () => {
   let service: WebhookSetupService;
   let mockLogger: {
@@ -42,13 +58,16 @@ describe('WebhookSetupService', () => {
 
   describe('webhook listing', () => {
     it('should list webhooks for a repository successfully', async () => {
-      // Arrange
+      // Arrange — first hook already carries the full LOCKED_EVENTS set so the
+      // skip-active branch fires (no heal PATCH). Pre-#1092 only 'issues' was
+      // required; post-#1092 the full 7-event set is required to avoid the
+      // heal branch (row 4b).
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
           active: true,
           config: { url: 'https://smee.io/abc123' },
-          events: ['issues'],
+          events: [...LOCKED_EVENTS_ARRAY],
         },
         {
           id: 456,
@@ -184,13 +203,13 @@ describe('WebhookSetupService', () => {
     });
 
     it('should match webhooks case-insensitively', async () => {
-      // Arrange
+      // Arrange — full LOCKED_EVENTS to keep skip-active path (see #1092 note).
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
           active: true,
           config: { url: 'https://SMEE.io/ABC123' }, // Different case
-          events: ['issues'],
+          events: [...LOCKED_EVENTS_ARRAY],
         },
       ];
 
@@ -274,7 +293,7 @@ describe('WebhookSetupService', () => {
               id: 200,
               active: true,
               config: { url: 'https://smee.io/abc123' },
-              events: ['issues'],
+              events: [...LOCKED_EVENTS_ARRAY],
             },
           ]),
           stderr: '',
@@ -429,46 +448,86 @@ describe('WebhookSetupService', () => {
         expect.objectContaining({
           action: 'reactivated',
           webhookId: 123,
-          events: ['push', 'issues'], // Merged events
+          // Post-#1092: reactivate merges full LOCKED_EVENTS (was only 'issues').
+          events: expect.arrayContaining(['push', ...LOCKED_EVENTS_ARRAY]),
         }),
         'Reactivated inactive webhook'
       );
     });
 
-    it('should warn when active webhook has event mismatch', async () => {
-      // Arrange
+    it('should heal active webhook when events subset of LOCKED_EVENTS', async () => {
+      // Arrange — #1092 row 4b (heal-on-skip-active): active hook whose events
+      // are a strict subset of LOCKED_EVENTS is PATCHed to add the missing
+      // events, preserving any pre-existing extras. Counter goes to
+      // `reactivated`, log is info (not warn), old `'events not updated'`
+      // warn line is deleted.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
           active: true,
           config: { url: 'https://smee.io/abc123' },
-          events: ['push', 'pull_request'], // Missing 'issues'
+          events: ['push', 'pull_request'], // Missing many LOCKED_EVENTS
         },
       ];
 
-      executeCommandMock.mockResolvedValueOnce({
-        exitCode: 0,
-        stdout: JSON.stringify(mockWebhooks),
-        stderr: '',
-      });
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(mockWebhooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 123 }),
+          stderr: '',
+        });
 
       // Act
       const result = await service.ensureWebhooks('https://smee.io/abc123', [
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert
+      // Assert — heal branch fires: counter goes to reactivated, not skipped.
       expect(result.total).toBe(1);
-      expect(result.skipped).toBe(1); // Still skipped, not modified
-      expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect(result.reactivated).toBe(1);
+      expect(result.skipped).toBe(0);
+
+      // The second executeCommand call is the heal PATCH; argv must carry
+      // events[]=<name> for each of the 7 LOCKED_EVENTS (order-tolerant).
+      expect(executeCommandMock).toHaveBeenCalledTimes(2);
+      const patchCall = executeCommandMock.mock.calls[1];
+      expect(patchCall).toBeDefined();
+      const patchArgs = patchCall![1] as string[];
+      expect(patchArgs).toContain('PATCH');
+      expect(patchArgs).toContain('/repos/testorg/testrepo/hooks/123');
+      for (const evt of LOCKED_EVENTS_ARRAY) {
+        expect(patchArgs).toContain(`events[]=${evt}`);
+      }
+      // Heal PATCH is events-only; no active flip on a hook that's already active.
+      expect(patchArgs).not.toContain('active=true');
+      expect(patchArgs).not.toContain('active=false');
+
+      // Log-line contract — one info line, no warn line for the heal path.
+      expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'testorg',
           repo: 'testrepo',
           webhookId: 123,
-          currentEvents: ['push', 'pull_request'],
-          expectedEvents: ['issues'],
+          missingEvents: expect.arrayContaining([
+            'issues',
+            'check_run',
+            'check_suite',
+            'pull_request_review',
+            'pull_request_review_comment',
+            'issue_comment',
+          ]),
+          newEvents: expect.arrayContaining(['push', ...LOCKED_EVENTS_ARRAY]),
         }),
-        'Existing webhook has event mismatch - events not updated'
+        'Existing webhook was missing events — patched',
+      );
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Existing webhook has event mismatch - events not updated',
       );
     });
 
@@ -680,13 +739,13 @@ describe('WebhookSetupService', () => {
     });
 
     it('should match webhooks with mixed case domains', async () => {
-      // Arrange
+      // Arrange — full LOCKED_EVENTS to keep skip-active path (see #1092 note).
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
           active: true,
           config: { url: 'https://Smee.IO/AbC123' }, // Mixed case
-          events: ['issues'],
+          events: [...LOCKED_EVENTS_ARRAY],
         },
       ];
 
@@ -793,13 +852,14 @@ describe('WebhookSetupService', () => {
     });
 
     it('should match first webhook when multiple webhooks point to same URL', async () => {
-      // Arrange
+      // Arrange — first hook already carries full LOCKED_EVENTS so skip-active
+      // fires without a heal PATCH (see #1092 note).
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
           active: true,
           config: { url: 'https://smee.io/abc123' },
-          events: ['issues'],
+          events: [...LOCKED_EVENTS_ARRAY],
         },
         {
           id: 456,
@@ -904,8 +964,9 @@ describe('WebhookSetupService', () => {
   });
 
   describe('webhook reactivation', () => {
-    it('should reactivate inactive webhook without changing events when issues already included', async () => {
-      // Arrange
+    it('should reactivate inactive webhook merging full LOCKED_EVENTS when issues already included', async () => {
+      // Arrange — post-#1092 the reactivate branch merges the full 7-event
+      // LOCKED_EVENTS set, not just 'issues'.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
@@ -944,17 +1005,17 @@ describe('WebhookSetupService', () => {
         ]),
         expect.anything(),
       );
-      // Events should be deduplicated (issues + push)
+      // Events should be deduplicated and include full LOCKED_EVENTS union.
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'reactivated',
-          events: expect.arrayContaining(['issues', 'push']),
+          events: expect.arrayContaining(['push', ...LOCKED_EVENTS_ARRAY]),
         }),
         'Reactivated inactive webhook'
       );
     });
 
-    it('should reactivate inactive webhook and add issues event when missing', async () => {
+    it('should reactivate inactive webhook and add all LOCKED_EVENTS when missing', async () => {
       // Arrange
       const mockWebhooks: GitHubWebhook[] = [
         {
@@ -988,7 +1049,7 @@ describe('WebhookSetupService', () => {
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'reactivated',
-          events: expect.arrayContaining(['push', 'pull_request', 'issues']),
+          events: expect.arrayContaining(['push', ...LOCKED_EVENTS_ARRAY]),
         }),
         'Reactivated inactive webhook'
       );
@@ -1028,7 +1089,9 @@ describe('WebhookSetupService', () => {
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'reactivated',
-          events: ['issues'], // Should add issues event
+          // Post-#1092: empty events array is filled with the full 7-event
+          // LOCKED_EVENTS set (was previously just ['issues']).
+          events: [...LOCKED_EVENTS_ARRAY],
         }),
         'Reactivated inactive webhook'
       );
@@ -1062,7 +1125,10 @@ describe('WebhookSetupService', () => {
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert - verify the exact PATCH command structure
+      // Assert - verify the exact PATCH command structure. Post-#1092 the
+      // reactivate branch merges the full 7-event LOCKED_EVENTS set (was only
+      // 'issues'). Order: hook.events entries first, then LOCKED_EVENTS
+      // entries not already present, in tuple order.
       expect(executeCommandMock).toHaveBeenCalledWith(
         'gh',
         [
@@ -1075,6 +1141,18 @@ describe('WebhookSetupService', () => {
           'events[]=push',
           '-F',
           'events[]=issues',
+          '-F',
+          'events[]=pull_request',
+          '-F',
+          'events[]=check_run',
+          '-F',
+          'events[]=check_suite',
+          '-F',
+          'events[]=pull_request_review',
+          '-F',
+          'events[]=pull_request_review_comment',
+          '-F',
+          'events[]=issue_comment',
         ],
         expect.anything(),
       );
@@ -1108,22 +1186,24 @@ describe('WebhookSetupService', () => {
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert - events should be deduplicated
+      // Assert - events should be deduplicated. Post-#1092: merged set is
+      // dedup(hook.events ∪ LOCKED_EVENTS) — the duplicate 'issues' in
+      // hook.events is collapsed, and the full 7 LOCKED_EVENTS are unioned in
+      // (plus 'push' from hook.events → total 8 unique).
       expect(result.total).toBe(1);
       expect(result.reactivated).toBe(1);
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'reactivated',
-          // Should only have unique events
-          events: expect.arrayContaining(['issues', 'push']),
+          events: expect.arrayContaining(['push', ...LOCKED_EVENTS_ARRAY]),
         }),
         'Reactivated inactive webhook'
       );
-      // Verify exactly 2 unique events (not 3)
+      // Verify exactly 8 unique events (push + 7 LOCKED_EVENTS, deduped).
       const logCall = mockLogger.info.mock.calls.find((call) =>
         call[1]?.includes('Reactivated inactive webhook')
       );
-      expect(logCall?.[0]?.events).toHaveLength(2);
+      expect(logCall?.[0]?.events).toHaveLength(8);
     });
 
     it('should return failed status when reactivation PATCH fails', async () => {
@@ -1201,7 +1281,7 @@ describe('WebhookSetupService', () => {
           stdout: '',
           stderr: 'Permission denied',
         })
-        // Repo 3: already active (skip)
+        // Repo 3: already active with full LOCKED_EVENTS (skip)
         .mockResolvedValueOnce({
           exitCode: 0,
           stdout: JSON.stringify([
@@ -1209,7 +1289,7 @@ describe('WebhookSetupService', () => {
               id: 300,
               active: true,
               config: { url: 'https://smee.io/abc123' },
-              events: ['issues'],
+              events: [...LOCKED_EVENTS_ARRAY],
             },
           ]),
           stderr: '',
@@ -1260,7 +1340,9 @@ describe('WebhookSetupService', () => {
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert - all original events plus issues should be present
+      // Assert - all original events plus full LOCKED_EVENTS should be
+      // present. Post-#1092: length = 3 originals + 7 LOCKED_EVENTS with
+      // 'pull_request' deduped = 9 unique events.
       const logCall = mockLogger.info.mock.calls.find((call) =>
         call[1]?.includes('Reactivated inactive webhook')
       );
@@ -1268,8 +1350,10 @@ describe('WebhookSetupService', () => {
       expect(events).toContain('push');
       expect(events).toContain('pull_request');
       expect(events).toContain('release');
-      expect(events).toContain('issues');
-      expect(events).toHaveLength(4);
+      for (const evt of LOCKED_EVENTS_ARRAY) {
+        expect(events).toContain(evt);
+      }
+      expect(events).toHaveLength(9);
     });
 
     it('should handle reactivation when webhook has only issues event', async () => {
@@ -1300,13 +1384,14 @@ describe('WebhookSetupService', () => {
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert - should still reactivate, events unchanged
+      // Assert - should reactivate; post-#1092 events grow from ['issues']
+      // (deduped) ∪ LOCKED_EVENTS to the full 7-event set.
       expect(result.total).toBe(1);
       expect(result.reactivated).toBe(1);
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'reactivated',
-          events: ['issues'], // Same event, just reactivated
+          events: [...LOCKED_EVENTS_ARRAY],
         }),
         'Reactivated inactive webhook'
       );
@@ -1328,7 +1413,7 @@ describe('WebhookSetupService', () => {
           stdout: JSON.stringify({ id: 100 }),
           stderr: '',
         })
-        // Repo 2: already exists
+        // Repo 2: already exists with full LOCKED_EVENTS (skip-active path)
         .mockResolvedValueOnce({
           exitCode: 0,
           stdout: JSON.stringify([
@@ -1336,7 +1421,7 @@ describe('WebhookSetupService', () => {
               id: 200,
               active: true,
               config: { url: 'https://smee.io/abc123' },
-              events: ['issues'],
+              events: [...LOCKED_EVENTS_ARRAY],
             },
           ]),
           stderr: '',
@@ -1572,13 +1657,14 @@ describe('WebhookSetupService', () => {
     });
 
     it('#972 case 4: existing hook with current-URL match is skipped (row 4)', async () => {
-      // Arrange
+      // Arrange — hook already carries the full post-#1092 7-event
+      // LOCKED_EVENTS set so the skip-active path fires (no heal PATCH).
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 999,
           active: true,
           config: { url: 'https://smee.io/abc123' },
-          events: ['issues', 'pull_request', 'check_run', 'check_suite'],
+          events: [...LOCKED_EVENTS_ARRAY],
         },
       ];
       executeCommandMock.mockResolvedValueOnce({
@@ -1657,12 +1743,12 @@ describe('WebhookSetupService', () => {
           expect.objectContaining({
             oldUrl: persistedUrl,
             newUrl: currentUrl,
-            events: ['issues', 'pull_request', 'check_run', 'check_suite'],
+            events: [...LOCKED_EVENTS_ARRAY],
           }),
           'Updated Generacy webhook to current channel URL',
         );
 
-        // Assert — PATCH call carries new URL + all four locked events.
+        // Assert — PATCH call carries new URL + all 7 locked events (post-#1092).
         const patchCall = executeCommandMock.mock.calls.find((call) => {
           const args = call[1] as string[];
           return args.includes('PATCH');
@@ -1670,10 +1756,9 @@ describe('WebhookSetupService', () => {
         expect(patchCall).toBeDefined();
         const patchArgs = patchCall![1] as string[];
         expect(patchArgs).toContain(`config[url]=${currentUrl}`);
-        expect(patchArgs).toContain('events[]=issues');
-        expect(patchArgs).toContain('events[]=pull_request');
-        expect(patchArgs).toContain('events[]=check_run');
-        expect(patchArgs).toContain('events[]=check_suite');
+        for (const evt of LOCKED_EVENTS_ARRAY) {
+          expect(patchArgs).toContain(`events[]=${evt}`);
+        }
       } finally {
         await fs.rm(channelFilePath, { force: true });
       }
@@ -1725,7 +1810,7 @@ describe('WebhookSetupService', () => {
       expect(foreignWarn).toBeUndefined();
     });
 
-    it('#972 case 7: create-time payload includes all four locked events', async () => {
+    it('#972 case 7 / #1092 SC-001: create-time payload includes all 7 LOCKED_EVENTS', async () => {
       // Arrange — list empty triggers create.
       executeCommandMock
         .mockResolvedValueOnce({
@@ -1745,17 +1830,18 @@ describe('WebhookSetupService', () => {
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert — the POST call's argv includes all four spec-locked events.
+      // Assert — the POST call's argv includes all 7 spec-locked events
+      // (post-#1092 widened from 4 to 7: adds pull_request_review,
+      // pull_request_review_comment, issue_comment).
       const createCall = executeCommandMock.mock.calls.find((call) => {
         const args = call[1] as string[];
         return args.includes('POST');
       });
       expect(createCall).toBeDefined();
       const createArgs = createCall![1] as string[];
-      expect(createArgs).toContain('events[]=issues');
-      expect(createArgs).toContain('events[]=pull_request');
-      expect(createArgs).toContain('events[]=check_run');
-      expect(createArgs).toContain('events[]=check_suite');
+      for (const evt of LOCKED_EVENTS_ARRAY) {
+        expect(createArgs).toContain(`events[]=${evt}`);
+      }
       expect(createArgs).toContain('config[url]=https://smee.io/abc123');
       expect(createArgs).toContain('config[content_type]=json');
       expect(createArgs).toContain('active=true');
@@ -2058,9 +2144,11 @@ describe('WebhookSetupService', () => {
 
     it('T-takeover-4 (regression guard): after adopt, surviving hook URL === current → skip-active, no re-fire', async () => {
       const currentUrl = 'https://smee.io/adoptedFROMboot';
-      // Post-adopt state: the surviving hook now matches the current channel.
+      // Post-adopt state: the surviving hook now matches the current channel
+      // AND carries the full post-#1092 7-event LOCKED_EVENTS set (so
+      // skip-active fires without the heal branch).
       const hooks: GitHubWebhook[] = [
-        { id: 1000, active: true, config: { url: currentUrl }, events: ['issues', 'pull_request', 'check_run', 'check_suite'] },
+        { id: 1000, active: true, config: { url: currentUrl }, events: [...LOCKED_EVENTS_ARRAY] },
       ];
       executeCommandMock.mockResolvedValueOnce({
         exitCode: 0,
@@ -2119,6 +2207,130 @@ describe('WebhookSetupService', () => {
         return args.includes('DELETE');
       });
       expect(deleteCall).toBeUndefined();
+    });
+  });
+
+  // #1092: widen LOCKED_EVENTS to 7 events (adds pull_request_review,
+  // pull_request_review_comment, issue_comment); heal active hooks whose
+  // events are a strict subset of LOCKED_EVENTS on boot; reactivate branch
+  // merges full LOCKED_EVENTS (was only 'issues'). See:
+  // specs/1092-summary-webhooksetupservice/contracts/heal-events-branch.md
+  describe('#1092 widen LOCKED_EVENTS + heal-on-skip-active', () => {
+    it('SC-001: newly-created webhooks carry the full 7-event LOCKED_EVENTS set', async () => {
+      // Arrange — list empty triggers create.
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([]),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 42 }),
+          stderr: '',
+        });
+
+      // Act
+      await service.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Assert — the POST call carries all 7 LOCKED_EVENTS.
+      const createCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('POST');
+      });
+      expect(createCall).toBeDefined();
+      const createArgs = createCall![1] as string[];
+      for (const evt of LOCKED_EVENTS_ARRAY) {
+        expect(createArgs).toContain(`events[]=${evt}`);
+      }
+    });
+
+    it('SC-003: idempotent — active hook already matching LOCKED_EVENTS is not PATCHed', async () => {
+      // Arrange — active hook whose events already ⊇ LOCKED_EVENTS.
+      const mockWebhooks: GitHubWebhook[] = [
+        {
+          id: 123,
+          active: true,
+          config: { url: 'https://smee.io/abc123' },
+          events: [...LOCKED_EVENTS_ARRAY],
+        },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(mockWebhooks),
+        stderr: '',
+      });
+
+      // Act
+      const result = await service.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Assert — skip-active path: exactly one gh call (list), no PATCH.
+      expect(executeCommandMock).toHaveBeenCalledTimes(1);
+      expect(result.results[0]?.action).toBe('skipped');
+      expect(result.skipped).toBe(1);
+      expect(result.reactivated).toBe(0);
+
+      // Only the existing 'already exists and is active' info line is emitted.
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'testorg',
+          repo: 'testrepo',
+          webhookId: 123,
+          action: 'skipped',
+        }),
+        'Webhook already exists and is active',
+      );
+      // Post-#1092: no heal-patched log line on this path.
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Existing webhook was missing events — patched',
+      );
+    });
+
+    it('SC-004: reactivated inactive hook receives full LOCKED_EVENTS union', async () => {
+      // Arrange — inactive hook with only 'issues' in events. Reactivate
+      // must PATCH with active=true AND events[]=<each of 7 LOCKED_EVENTS>.
+      const mockWebhooks: GitHubWebhook[] = [
+        {
+          id: 456,
+          active: false,
+          config: { url: 'https://smee.io/abc123' },
+          events: ['issues'],
+        },
+      ];
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(mockWebhooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 456, active: true }),
+          stderr: '',
+        });
+
+      // Act
+      const result = await service.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Assert — reactivate PATCH carries active=true + all 7 LOCKED_EVENTS.
+      expect(result.reactivated).toBe(1);
+      const patchCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('PATCH');
+      });
+      expect(patchCall).toBeDefined();
+      const patchArgs = patchCall![1] as string[];
+      expect(patchArgs).toContain('active=true');
+      for (const evt of LOCKED_EVENTS_ARRAY) {
+        expect(patchArgs).toContain(`events[]=${evt}`);
+      }
     });
   });
 });
