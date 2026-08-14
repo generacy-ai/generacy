@@ -6,7 +6,8 @@ import { parseRepoInput } from './parse-repo-input.js';
  * Convert a template config (cluster-template format) to a WorkspaceConfig.
  *
  * Maps `repos.primary` → org + first repo, `repos.dev` → monitored repos,
- * `repos.clone` → unmonitored repos.
+ * `repos.clone` → unmonitored repos. `branch` passes through unchanged —
+ * `undefined` means "no preference" and must stay representable.
  */
 export function convertTemplateConfig(template: TemplateConfig): WorkspaceConfig {
   const primary = parseRepoInput(template.repos.primary, template.project?.org_name);
@@ -23,5 +24,5 @@ export function convertTemplateConfig(template: TemplateConfig): WorkspaceConfig
     }),
   ];
 
-  return { org: primary.owner, branch: 'develop', repos };
+  return { org: primary.owner, branch: template.branch, repos };
 }

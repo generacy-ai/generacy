@@ -146,13 +146,22 @@ describe('convertTemplateConfig', () => {
     });
   });
 
-  describe('branch default', () => {
-    it('always sets branch to develop', () => {
+  describe('branch pass-through', () => {
+    it('leaves branch unset when the template declares none', () => {
       const template: TemplateConfig = {
         repos: { primary: 'generacy-ai/generacy', dev: [], clone: [] },
       };
       const result = convertTemplateConfig(template);
-      expect(result.branch).toBe('develop');
+      expect(result.branch).toBeUndefined();
+    });
+
+    it('passes a declared branch through verbatim', () => {
+      const template: TemplateConfig = {
+        branch: 'main',
+        repos: { primary: 'generacy-ai/generacy', dev: [], clone: [] },
+      };
+      const result = convertTemplateConfig(template);
+      expect(result.branch).toBe('main');
     });
   });
 

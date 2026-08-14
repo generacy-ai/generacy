@@ -12,11 +12,24 @@ import { exec, execSafe } from '../../utils/exec.js';
 import { tryLoadWorkspaceConfig, getRepoNames, parseRepoList, scanForWorkspaceConfig } from '@generacy-ai/config';
 
 /**
+ * Which tier of the resolution chain supplied `branch`. `'none'` means no tier
+ * did: setup has no opinion and must leave checkouts on whatever branch they
+ * are already on.
+ */
+type BranchSource =
+  | 'CLI flag'
+  | 'REPO_BRANCH env'
+  | 'DEFAULT_BRANCH env'
+  | 'config file'
+  | 'none';
+
+/**
  * Workspace configuration resolved from CLI args and environment variables.
  */
 interface WorkspaceConfig {
   repos: string[];
-  branch: string;
+  branch: string | undefined;
+  branchSource: BranchSource;
   workdir: string;
   clean: boolean;
   githubOrg: string;
@@ -104,12 +117,15 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
 
   logger.info({ source: repoSource, count: repos.length }, 'Resolved repos');
 
-  const branch =
-    cliArgs.branch ??
-    process.env['REPO_BRANCH'] ??
-    process.env['DEFAULT_BRANCH'] ??
-    configBranch ??
-    'develop';
+  const branchTiers: Array<[string | undefined, BranchSource]> = [
+    [cliArgs.branch, 'CLI flag'],
+    [process.env['REPO_BRANCH'], 'REPO_BRANCH env'],
+    [process.env['DEFAULT_BRANCH'], 'DEFAULT_BRANCH env'],
+    [configBranch, 'config file'],
+  ];
+  const resolvedTier = branchTiers.find(([value]) => value !== undefined);
+  const branch = resolvedTier?.[0];
+  const branchSource: BranchSource = resolvedTier?.[1] ?? 'none';
 
   const cleanEnv = process.env['CLEAN_REPOS'];
   const clean = cliArgs.clean ?? (cleanEnv === 'true');
@@ -117,6 +133,7 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
   return {
     repos,
     branch,
+    branchSource,
     workdir,
     clean,
     githubOrg: process.env['GITHUB_ORG'] ?? configOrg ?? 'generacy-ai',
@@ -175,6 +192,42 @@ function ensureGitCredentials(): void {
 }
 
 /**
+ * Update an existing checkout when no branch preference was resolved.
+ * Never switches branches — setup must not move a checkout it has no opinion
+ * about. Non-standard states (detached HEAD, no matching remote branch) are
+ * fetched and left alone, and still count as success.
+ */
+function updateRepoWithoutBranchPreference(repo: string, target: string): boolean {
+  const logger = getLogger();
+
+  const currentBranch = execSafe('git branch --show-current', { cwd: target });
+  const branch = currentBranch.ok ? currentBranch.stdout : '';
+
+  if (!branch) {
+    logger.warn(
+      { repo },
+      'Detached HEAD and no branch configured — fetched only, leaving checkout as-is',
+    );
+    return true;
+  }
+
+  const remoteBranch = execSafe(
+    `git rev-parse --verify --quiet refs/remotes/origin/${branch}`,
+    { cwd: target },
+  );
+  if (!remoteBranch.ok) {
+    logger.warn(
+      { repo, branch },
+      'Current branch has no matching origin branch — fetched only, leaving checkout as-is',
+    );
+    return true;
+  }
+
+  execSafe(`git pull origin ${branch}`, { cwd: target });
+  return true;
+}
+
+/**
  * Clone or update a single repository.
  * Returns true on success, false on failure.
  */
@@ -197,6 +250,10 @@ function cloneOrUpdateRepo(
 
     execSafe('git fetch origin', { cwd: target });
 
+    if (config.branch === undefined) {
+      return updateRepoWithoutBranchPreference(repo, target);
+    }
+
     // Check current branch and switch if needed
     const currentBranch = execSafe('git branch --show-current', { cwd: target });
     if (currentBranch.ok && currentBranch.stdout !== config.branch) {
@@ -218,21 +275,26 @@ function cloneOrUpdateRepo(
   }
 
   // Clone new repo
-  logger.info({ repo, branch: config.branch }, 'Cloning repository');
+  logger.info(
+    { repo, branch: config.branch ?? '(repo default)' },
+    'Cloning repository',
+  );
 
   const cloneUrl = `https://github.com/${config.githubOrg}/${repo}.git`;
 
-  // Try clone with specified branch
-  const clone = execSafe(
-    `git clone --branch ${config.branch} ${cloneUrl} ${target}`,
-  );
-  if (clone.ok) {
-    logger.info({ repo }, 'Repository cloned successfully');
-    return true;
+  if (config.branch !== undefined) {
+    // Try clone with specified branch
+    const clone = execSafe(
+      `git clone --branch ${config.branch} ${cloneUrl} ${target}`,
+    );
+    if (clone.ok) {
+      logger.info({ repo }, 'Repository cloned successfully');
+      return true;
+    }
+
+    logger.info({ repo }, 'Branch not found, cloning default branch');
   }
 
-  // Fallback: clone without branch (uses default branch)
-  logger.info({ repo }, 'Branch not found, cloning default branch');
   const fallback = execSafe(`git clone ${cloneUrl} ${target}`);
   if (fallback.ok) {
     logger.info({ repo }, 'Repository cloned successfully (default branch)');
@@ -294,7 +356,13 @@ export function setupWorkspaceCommand(): Command {
 
       logger.info('Setting up workspace');
       logger.info(
-        { org: config.githubOrg, branch: config.branch, repos: config.repos.length, source: config.repoSource },
+        {
+          org: config.githubOrg,
+          branch: config.branch ?? '(repo default / current branch)',
+          branchSource: config.branchSource,
+          repos: config.repos.length,
+          source: config.repoSource,
+        },
         'Configuration',
       );
 
