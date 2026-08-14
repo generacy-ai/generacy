@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { OrchestratorSettingsSchema, TemplateConfigSchema } from '../template-schema.js';
+import {
+  AgentEntrySchema,
+  AgentsConfigSchema,
+  EffortSchema,
+  OrchestratorSettingsSchema,
+  TemplateConfigSchema,
+  WorkflowAgentEntriesSchema,
+} from '../template-schema.js';
 
 describe('TemplateConfigSchema', () => {
   const validFullConfig = {
@@ -95,6 +102,25 @@ describe('TemplateConfigSchema', () => {
       TemplateConfigSchema.parse({ repos: { primary: 'generacy', clone: [''] } }),
     ).toThrow();
   });
+
+  it('accepts a top-level branch', () => {
+    const result = TemplateConfigSchema.parse({
+      branch: 'main',
+      repos: { primary: 'generacy' },
+    });
+    expect(result.branch).toBe('main');
+  });
+
+  it('leaves branch undefined when omitted', () => {
+    const result = TemplateConfigSchema.parse({ repos: { primary: 'generacy' } });
+    expect(result.branch).toBeUndefined();
+  });
+
+  it('rejects empty branch', () => {
+    expect(() =>
+      TemplateConfigSchema.parse({ branch: '', repos: { primary: 'generacy' } }),
+    ).toThrow();
+  });
 });
 
 describe('OrchestratorSettingsSchema', () => {
@@ -142,5 +168,94 @@ describe('OrchestratorSettingsSchema', () => {
   it('TemplateConfigSchema accepts missing orchestrator key', () => {
     const result = TemplateConfigSchema.parse({ repos: { primary: 'generacy' } });
     expect(result.orchestrator).toBeUndefined();
+  });
+});
+
+describe('EffortSchema + AgentEntrySchema (issue #1095)', () => {
+  it('EffortSchema accepts all five vocabulary values', () => {
+    expect(EffortSchema.parse('low')).toBe('low');
+    expect(EffortSchema.parse('medium')).toBe('medium');
+    expect(EffortSchema.parse('high')).toBe('high');
+    expect(EffortSchema.parse('xhigh')).toBe('xhigh');
+    expect(EffortSchema.parse('max')).toBe('max');
+  });
+
+  it('AgentEntrySchema accepts a valid entry with effort xhigh', () => {
+    const result = AgentEntrySchema.parse({ provider: 'claude-code', model: 'fable', effort: 'xhigh' });
+    expect(result).toEqual({ provider: 'claude-code', model: 'fable', effort: 'xhigh' });
+  });
+
+  it('AgentEntrySchema accepts an entry with only effort set', () => {
+    const result = AgentEntrySchema.parse({ effort: 'high' });
+    expect(result.effort).toBe('high');
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+  });
+
+  it('AgentEntrySchema rejects effort "super" with a message naming effort and the invalid value (SC-005)', () => {
+    let caught: unknown;
+    try {
+      AgentEntrySchema.parse({ effort: 'super' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const msg = String((caught as Error).message);
+    expect(msg).toContain('effort');
+    expect(msg).toContain('super');
+  });
+
+  it('AgentEntrySchema rejects an unknown key inside an entry (efort:)', () => {
+    let caught: unknown;
+    try {
+      AgentEntrySchema.parse({ efort: 'high' } as unknown as Record<string, unknown>);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).toContain('efort');
+  });
+});
+
+describe('AgentsConfigSchema strict mode (issue #1095, SC-006)', () => {
+  it('accepts a well-formed agents block', () => {
+    const result = AgentsConfigSchema.parse({
+      default: { provider: 'claude-code', model: 'opus-4-7' },
+      workflows: {
+        'speckit-feature': {
+          default: { model: 'opus-4-7' },
+          phases: {
+            plan: { model: 'fable', effort: 'xhigh' },
+            implement: { model: 'opus-4-7', effort: 'high' },
+          },
+        },
+      },
+    });
+    expect(result.workflows?.['speckit-feature']?.phases?.plan?.effort).toBe('xhigh');
+    expect(result.workflows?.['speckit-feature']?.phases?.implement?.effort).toBe('high');
+  });
+
+  it('rejects an unknown top-level key (defualt:) under agents:', () => {
+    let caught: unknown;
+    try {
+      AgentsConfigSchema.parse({ defualt: { model: 'opus' } } as unknown as Record<string, unknown>);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).toContain('defualt');
+  });
+
+  it('rejects an unknown phase key (implment:) inside phases', () => {
+    let caught: unknown;
+    try {
+      WorkflowAgentEntriesSchema.parse({
+        phases: { implment: { model: 'opus' } } as unknown as Record<string, unknown>,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).toContain('implment');
   });
 });

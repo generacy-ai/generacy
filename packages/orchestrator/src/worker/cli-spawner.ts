@@ -10,6 +10,7 @@ import type { OutputCapture } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { ShellIntent } from '../launcher/types.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+import { warnIfEffortDropped } from './effort-mechanism-check.js';
 
 /**
  * Pre-cap ring buffer capacity for shell-path merged stdout+stderr capture.
@@ -66,6 +67,14 @@ export class CliSpawner {
       launchEnv['GENERACY_SIBLING_WORKDIRS'] = JSON.stringify(options.siblingWorkdirs);
     }
 
+    // #1095 FR-010a-b: warn once per spawn if effort is set but the resolved
+    // provider's plugin has no CLI mechanism for effort in this release.
+    warnIfEffortDropped(this.logger, {
+      provider: options.provider,
+      effort: options.effort,
+      context: { phase },
+    });
+
     const handle = await this.agentLauncher.launch({
       intent: {
         kind: 'phase',
@@ -73,6 +82,7 @@ export class CliSpawner {
         prompt: options.prompt,
         sessionId: options.resumeSessionId,
         ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.effort !== undefined ? { effort: options.effort } : {}),
       },
       cwd: options.cwd,
       env: launchEnv,

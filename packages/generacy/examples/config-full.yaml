@@ -45,15 +45,18 @@ orchestrator:
   # Maximum number of concurrent workers (range: 1-20)
   workerCount: 3
 
-  # Per-workflow-phase `{ provider, model }` selection.
+  # Per-workflow-phase `{ provider, model, effort }` selection.
   #
   # Precedence (highest first):
   #   workflows.<name>.phases.<phase>  >  workflows.<name>.default  >  agents.default
   #   > defaults.agent (provider only) > cluster env  > built-in `claude-code`
   #
-  # Provider and model resolve INDEPENDENTLY — a phase override can set only
-  # one of the two and let the other fall through from a lower tier. Everything
-  # is optional; when the whole `agents` block is absent, behavior is unchanged.
+  # Provider, model, and effort resolve INDEPENDENTLY — a phase override can
+  # set only one field and let the others fall through from a lower tier.
+  # Everything is optional; when the whole `agents` block is absent, behavior
+  # is unchanged.
+  #
+  # `effort` is closed to the Claude CLI vocabulary: low, medium, high, xhigh, max.
   agents:
     # Repo-wide default. Applies to any workflow/phase that doesn't override.
     default:
@@ -68,8 +71,14 @@ orchestrator:
           model: sonnet-4-5
 
         phases:
-          # Full override for the implement phase. pr-feedback binds to this
-          # same entry (pr-feedback resolves against the `implement` phase).
+          # Cheap upfront reasoning on the plan phase.
+          plan:
+            model: fable
+            effort: xhigh
+
+          # Full override for the implement phase. pr-feedback,
+          # validate-fix, and merge-conflict all bind to this same entry.
           implement:
             provider: claude-code
             model: opus-4-7
+            effort: high

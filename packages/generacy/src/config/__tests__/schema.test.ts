@@ -647,7 +647,7 @@ describe('GeneracyConfigSchema', () => {
     expect(result.workspace).toBeUndefined();
   });
 
-  it('should default workspace branch to "develop" when omitted', () => {
+  it('should leave workspace branch undefined when omitted', () => {
     const config = {
       project: {
         id: 'proj_test123',
@@ -662,7 +662,7 @@ describe('GeneracyConfigSchema', () => {
       },
     };
     const result = GeneracyConfigSchema.parse(config);
-    expect(result.workspace?.branch).toEqual('develop');
+    expect(result.workspace?.branch).toBeUndefined();
   });
 
   it('should default workspace repo monitor to true when omitted', () => {

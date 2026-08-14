@@ -394,9 +394,10 @@ export class PhaseLoop {
             : context.issueUrl;
           const cliPhase = phase as Exclude<typeof phase, 'validate'>;
 
-          // #814: resolve provider+model for this phase. Provider always defined
-          // (built-in fallback). Model optional (undefined = no `--model` arg).
-          const { provider: nextProvider, model: nextModel } = resolveAgentForPhase(
+          // #814/#1095: resolve provider+model+effort for this phase. Provider always
+          // defined (built-in fallback). Model + effort optional (undefined = no
+          // `--model` / `--effort` arg pushed at the plugin builder).
+          const { provider: nextProvider, model: nextModel, effort: nextEffort } = resolveAgentForPhase(
             config,
             context.item.workflowName,
             cliPhase,
@@ -444,6 +445,7 @@ export class PhaseLoop {
               siblingWorkdirs: context.siblingWorkdirs,
               provider: nextProvider,
               ...(nextModel !== undefined ? { model: nextModel } : {}),
+              ...(nextEffort !== undefined ? { effort: nextEffort } : {}),
               ...(previousModel !== undefined ? { previousModel } : {}),
             },
             outputCapture,
@@ -651,6 +653,7 @@ export class PhaseLoop {
                 exitCode: result.exitCode,
               },
               context.github,
+              context.item.workflowName,
             );
           } catch (err) {
             this.logger.warn(

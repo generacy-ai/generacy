@@ -7,14 +7,25 @@ export const TemplateReposSchema = z.object({
 });
 
 /**
- * A single agent selector: `{ provider?, model? }`. Both fields are optional and
- * resolve independently — a phase override may set only `model` and let
- * `provider` fall through from a lower precedence tier.
+ * Reasoning effort levels understood by the Claude CLI (v2.1.150). Matches the
+ * `--effort <level>` flag vocabulary verbatim. Consumers that lack an effort
+ * mechanism silently drop the field at spawn time (with a warning).
  */
-export const AgentEntrySchema = z.object({
-  provider: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-});
+export const EffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof EffortSchema>;
+
+/**
+ * A single agent selector: `{ provider?, model?, effort? }`. All fields are
+ * optional and resolve independently — a phase override may set only `model`
+ * and let `provider` fall through from a lower precedence tier.
+ */
+export const AgentEntrySchema = z
+  .object({
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    effort: EffortSchema.optional(),
+  })
+  .strict();
 export type AgentEntry = z.infer<typeof AgentEntrySchema>;
 
 /**
@@ -22,39 +33,45 @@ export type AgentEntry = z.infer<typeof AgentEntrySchema>;
  * closed `WorkflowPhase` set — Zod rejects unknown keys (e.g. `implment`,
  * `pr-feedback`) at parse time.
  */
-export const WorkflowAgentEntriesSchema = z.object({
-  default: AgentEntrySchema.optional(),
-  phases: z
-    .object({
-      specify: AgentEntrySchema.optional(),
-      clarify: AgentEntrySchema.optional(),
-      plan: AgentEntrySchema.optional(),
-      tasks: AgentEntrySchema.optional(),
-      implement: AgentEntrySchema.optional(),
-      validate: AgentEntrySchema.optional(),
-    })
-    .optional(),
-});
+export const WorkflowAgentEntriesSchema = z
+  .object({
+    default: AgentEntrySchema.optional(),
+    phases: z
+      .object({
+        specify: AgentEntrySchema.optional(),
+        clarify: AgentEntrySchema.optional(),
+        plan: AgentEntrySchema.optional(),
+        tasks: AgentEntrySchema.optional(),
+        implement: AgentEntrySchema.optional(),
+        validate: AgentEntrySchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 export type WorkflowAgentEntries = z.infer<typeof WorkflowAgentEntriesSchema>;
 
 /**
  * Agents configuration block under `orchestrator.agents`. Structure:
  * ```
  * agents:
- *   default: { provider?, model? }
+ *   default: { provider?, model?, effort? }
  *   workflows:
  *     <name>:
- *       default: { provider?, model? }
+ *       default: { provider?, model?, effort? }
  *       phases:
- *         implement: { provider?, model? }
+ *         implement: { provider?, model?, effort? }
  * ```
  * Workflow names are extensible (`speckit-feature`, `speckit-bugfix`, …); phase
- * keys are closed to the `WorkflowPhase` enum.
+ * keys are closed to the `WorkflowPhase` enum. `workflows` stays a `z.record`
+ * because arbitrary workflow names are legal by design.
  */
-export const AgentsConfigSchema = z.object({
-  default: AgentEntrySchema.optional(),
-  workflows: z.record(z.string(), WorkflowAgentEntriesSchema).optional(),
-});
+export const AgentsConfigSchema = z
+  .object({
+    default: AgentEntrySchema.optional(),
+    workflows: z.record(z.string(), WorkflowAgentEntriesSchema).optional(),
+  })
+  .strict();
 export type AgentsConfig = z.infer<typeof AgentsConfigSchema>;
 
 export const OrchestratorSettingsSchema = z.object({
@@ -83,6 +100,12 @@ export const OrchestratorSettingsSchema = z.object({
 });
 
 export const TemplateConfigSchema = z.object({
+  /**
+   * Target branch for every workspace repo. Omit for "no preference" — setup
+   * then leaves existing checkouts on their current branch and clones new repos
+   * on the remote default.
+   */
+  branch: z.string().min(1).optional(),
   project: z.object({
     org_name: z.string().optional(),
   }).passthrough().optional(),

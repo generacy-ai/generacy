@@ -179,16 +179,18 @@ describe('setup workspace command', () => {
       expect(cloneCalls.some((c) => c.includes('env-repo'))).toBe(false);
     });
 
-    it('uses default branch "develop" when no env vars or CLI args', async () => {
+    it('clones without --branch when no env vars or CLI args supply one', async () => {
       mockExecBehavior();
       mockFileSystem();
 
       await runWorkspaceCommand(['--repos', 'test-repo']);
 
-      expect(mockExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('git clone --branch develop'),
-        expect.any(Object),
-      );
+      const cloneCalls = mockExecSync.mock.calls
+        .map((c) => c[0] as string)
+        .filter((cmd) => cmd.includes('git clone'));
+      expect(cloneCalls).toEqual([
+        'git clone https://github.com/generacy-ai/test-repo.git /workspaces/test-repo',
+      ]);
     });
 
     it('REPO_BRANCH env var overrides default branch', async () => {
@@ -345,12 +347,12 @@ describe('setup workspace command', () => {
       await runWorkspaceCommand(['--repos', 'new-repo']);
 
       expect(mockLogger.info).toHaveBeenCalledWith(
-        { repo: 'new-repo', branch: 'develop' },
+        { repo: 'new-repo', branch: '(repo default)' },
         'Cloning repository',
       );
       expect(mockLogger.info).toHaveBeenCalledWith(
         { repo: 'new-repo' },
-        'Repository cloned successfully',
+        'Repository cloned successfully (default branch)',
       );
     });
 
@@ -367,7 +369,7 @@ describe('setup workspace command', () => {
       });
       mockFileSystem();
 
-      await runWorkspaceCommand(['--repos', 'new-repo']);
+      await runWorkspaceCommand(['--repos', 'new-repo', '--branch', 'main']);
 
       // Should try clone without branch
       expect(mockExecSync).toHaveBeenCalledWith(
@@ -407,7 +409,7 @@ describe('setup workspace command', () => {
       mockExecBehavior();
       mockFileSystem(['existing-repo']);
 
-      await runWorkspaceCommand(['--repos', 'existing-repo']);
+      await runWorkspaceCommand(['--repos', 'existing-repo', '--branch', 'develop']);
 
       expect(mockLogger.info).toHaveBeenCalledWith(
         { repo: 'existing-repo' },
@@ -421,6 +423,20 @@ describe('setup workspace command', () => {
         'git pull origin develop',
         expect.objectContaining({ cwd: '/workspaces/existing-repo' }),
       );
+    });
+
+    it('pulls the current branch and never switches when no branch is configured', async () => {
+      mockExecBehavior({ 'git branch --show-current': { stdout: 'main' } });
+      mockFileSystem(['existing-repo']);
+
+      await runWorkspaceCommand(['--repos', 'existing-repo']);
+
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'git pull origin main',
+        expect.objectContaining({ cwd: '/workspaces/existing-repo' }),
+      );
+      const commands = mockExecSync.mock.calls.map((c) => c[0] as string);
+      expect(commands.some((cmd) => cmd.startsWith('git checkout'))).toBe(false);
     });
 
     it('switches branch when current branch differs from target', async () => {
@@ -792,7 +808,13 @@ describe('setup workspace command', () => {
       await runWorkspaceCommand(['--repos', 'repo-a,repo-b', '--branch', 'main']);
 
       expect(mockLogger.info).toHaveBeenCalledWith(
-        { org: 'generacy-ai', branch: 'main', repos: 2, source: 'CLI flag' },
+        {
+          org: 'generacy-ai',
+          branch: 'main',
+          branchSource: 'CLI flag',
+          repos: 2,
+          source: 'CLI flag',
+        },
         'Configuration',
       );
     });

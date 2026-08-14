@@ -14,6 +14,13 @@
  */
 
 /**
+ * Reasoning effort level mirror. The canonical schema lives in
+ * `@generacy-ai/config` (`EffortSchema`). Kept local here to avoid a build-time
+ * dep on the config package (same rationale as the intent-type mirrors above).
+ */
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
  * Intent for executing a speckit workflow phase via Claude CLI.
  * Excludes 'validate' at compile time — validate runs via GenericSubprocessPlugin.
  */
@@ -27,6 +34,8 @@ export interface PhaseIntent {
   sessionId?: string;
   /** Optional model override, provider-interpreted. */
   model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
@@ -40,6 +49,8 @@ export interface PrFeedbackIntent {
   prompt: string;
   /** Optional model override, provider-interpreted. */
   model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
@@ -54,6 +65,12 @@ export interface MergeConflictIntent {
   issueNumber: number;
   /** Full prompt (built by MergeConflictHandler via buildMergeConflictPrompt) */
   prompt: string;
+  /** Provider breadcrumb (dispatch reads LaunchRequest.provider). */
+  provider?: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
@@ -69,6 +86,12 @@ export interface ValidateFixIntent {
   prompt: string;
   /** 64-hex SHA-256 identity of the failing evidence — surfaces in logs. */
   evidenceHash: string;
+  /** Provider breadcrumb (dispatch reads LaunchRequest.provider). */
+  provider?: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**

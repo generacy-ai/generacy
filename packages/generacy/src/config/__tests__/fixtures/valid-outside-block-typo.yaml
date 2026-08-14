@@ -1,0 +1,17 @@
+# Valid: typo (`role_typo:`) under `defaults:` is silently stripped because
+# `defaults` stays in default strip-mode (Q4's "zero blast radius" invariant).
+# `.strict()` is confined to the `orchestrator.agents` sub-tree. SC-006 sibling.
+
+schemaVersion: "1"
+
+project:
+  id: "proj_abc123xyz"
+  name: "Outside-Block Typo Project"
+
+repos:
+  primary: "github.com/acme/main-api"
+
+defaults:
+  agent: claude-code
+  # Deliberate typo outside orchestrator.agents — must be accepted.
+  role_typo: developer

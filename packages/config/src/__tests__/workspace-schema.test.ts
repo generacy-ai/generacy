@@ -46,12 +46,12 @@ describe('WorkspaceConfigSchema', () => {
     expect(result).toEqual(validConfig);
   });
 
-  it('defaults branch to develop when omitted', () => {
+  it('leaves branch undefined when omitted (no preference)', () => {
     const result = WorkspaceConfigSchema.parse({
       org: 'generacy-ai',
       repos: [{ name: 'generacy' }],
     });
-    expect(result.branch).toBe('develop');
+    expect(result.branch).toBeUndefined();
   });
 
   it('defaults monitor to true for repos when omitted', () => {

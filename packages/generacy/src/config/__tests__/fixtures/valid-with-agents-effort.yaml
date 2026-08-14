@@ -1,0 +1,26 @@
+# Valid config exercising the SC-002 shape: fable/xhigh for plan and
+# opus-4-7/high for implement. Used by issue #1095 loader tests.
+
+schemaVersion: "1"
+
+project:
+  id: "proj_abc123xyz"
+  name: "Effort-Enabled Project"
+
+repos:
+  primary: "github.com/acme/main-api"
+
+defaults:
+  agent: claude-code
+
+orchestrator:
+  agents:
+    workflows:
+      speckit-feature:
+        phases:
+          plan:
+            model: fable
+            effort: xhigh
+          implement:
+            model: opus-4-7
+            effort: high

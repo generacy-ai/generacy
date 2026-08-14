@@ -4,18 +4,21 @@ import {
   AgentEntrySchema,
   WorkflowAgentEntriesSchema,
   AgentsConfigSchema,
+  EffortSchema,
 } from '@generacy-ai/config';
 
 /**
  * Re-export the agent selector schemas + types from `@generacy-ai/config`.
  * The CLI-facing shape stays structurally identical to the target-repo shape;
- * we do NOT redefine.
+ * we do NOT redefine. `.strict()` applied inside `@generacy-ai/config` flows
+ * through transparently (issue #1095 D-2).
  */
-export { AgentEntrySchema, WorkflowAgentEntriesSchema, AgentsConfigSchema };
+export { AgentEntrySchema, WorkflowAgentEntriesSchema, AgentsConfigSchema, EffortSchema };
 export type {
   AgentEntry,
   WorkflowAgentEntries,
   AgentsConfig,
+  Effort,
 } from '@generacy-ai/config';
 
 /**

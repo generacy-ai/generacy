@@ -215,6 +215,53 @@ describe('MergeConflictMonitorService (#898 T015)', () => {
   });
 
   // -------------------------------------------------------------------------
+  // #1095 review Finding 1: unlabeled PR resolves to workflowName 'unknown'
+  // (was 'speckit-feature' before the fix — which made the handler-side
+  // Q1=B fallback unreachable from production).
+  // -------------------------------------------------------------------------
+  it("#1095 Finding 1: paused issue with no workflow:*/process:*/completed:* label enqueues with workflowName 'unknown'", async () => {
+    const svc = new MergeConflictMonitorService(
+      logger,
+      () => createMockGitHubClient(),
+      queue,
+      defaultConfig,
+      defaultRepos,
+    );
+
+    const enqueued = await svc.processMergeConflictEvent(
+      makeEvent({
+        // Only the pause labels — no workflow: / process: / completed: label.
+        issueLabels: ['waiting-for:merge-conflicts', 'agent:paused'],
+      }),
+    );
+
+    expect(enqueued).toBe(true);
+    expect(queue.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+    const args = queue.spies.enqueueIfAbsent.mock.calls[0]![0];
+    expect(args.workflowName).toBe('unknown');
+  });
+
+  it("#1095 Finding 1: process:* label resolves workflowName (fallback path)", async () => {
+    const svc = new MergeConflictMonitorService(
+      logger,
+      () => createMockGitHubClient(),
+      queue,
+      defaultConfig,
+      defaultRepos,
+    );
+
+    const enqueued = await svc.processMergeConflictEvent(
+      makeEvent({
+        issueLabels: ['waiting-for:merge-conflicts', 'agent:paused', 'process:speckit-bugfix'],
+      }),
+    );
+
+    expect(enqueued).toBe(true);
+    const args = queue.spies.enqueueIfAbsent.mock.calls[0]![0];
+    expect(args.workflowName).toBe('speckit-bugfix');
+  });
+
+  // -------------------------------------------------------------------------
   // T6: GhAuthError on listIssuesWithLabel → authHealth recorded, no throw
   // -------------------------------------------------------------------------
   it('T6: GhAuthError on listIssuesWithLabel → authHealth recordResult, cycle skipped', async () => {
