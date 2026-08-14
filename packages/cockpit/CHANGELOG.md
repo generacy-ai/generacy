@@ -1,5 +1,13 @@
 # @generacy-ai/cockpit
 
+## 0.7.1
+
+### Patch Changes
+
+- Updated dependencies [5df2231]
+- Updated dependencies [75ba0f7]
+  - @generacy-ai/config@0.5.0
+
 ## 0.7.0
 
 ### Minor Changes

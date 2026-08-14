@@ -1,5 +1,13 @@
 # @generacy-ai/control-plane
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [5df2231]
+- Updated dependencies [75ba0f7]
+  - @generacy-ai/config@0.5.0
+
 ## 0.8.0
 
 ### Minor Changes
