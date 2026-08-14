@@ -15,6 +15,7 @@ import {
   ConfigValidationError,
   type GeneracyConfig,
 } from '../../config/index.js';
+import { loadConfigWithWarnings } from '../../config/loader.js';
 import { getLogger } from '../utils/logger.js';
 import { readFileSync } from 'node:fs';
 
@@ -125,6 +126,7 @@ export function validateCommand(): Command {
       try {
         let config: GeneracyConfig;
         let configPath: string;
+        let warnings: string[] = [];
 
         if (configArg) {
           // Explicit path provided
@@ -158,8 +160,10 @@ export function validateCommand(): Command {
             logger.info({ path: configPath }, 'Found config file');
           }
 
-          // Load and validate
-          config = loadConfig();
+          // Load and validate (with warnings channel per issue #1095 D-6).
+          const result = loadConfigWithWarnings();
+          config = result.config;
+          warnings = result.warnings;
         }
 
         // Output results
@@ -168,10 +172,17 @@ export function validateCommand(): Command {
             valid: true,
             configPath,
             config,
+            warnings,
           };
           console.log(JSON.stringify(result, null, 2));
         } else if (!quiet) {
           displayConfigSummary(config, configPath);
+          if (warnings.length > 0) {
+            logger.warn('\nWarnings:');
+            for (const w of warnings) {
+              logger.warn(`  - ${w}`);
+            }
+          }
         } else {
           // Quiet mode - just indicate success
           console.log('✓ Valid');

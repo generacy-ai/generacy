@@ -387,4 +387,33 @@ repos:
     expect(error.stderr).toContain('Schema validation failed');
     expect(error.stderr).toContain('Project ID must match format');
   });
+
+  // Issue #1095 SC-005a smoke — JSON output includes a warnings field.
+  it('--json output includes a warnings array (present + empty by default)', () => {
+    const generacyDir = join(testDir, '.generacy');
+    mkdirSync(generacyDir, { recursive: true });
+    const configPath = join(generacyDir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      `
+project:
+  id: "proj_warntest123"
+  name: "Warnings Test"
+repos:
+  primary: "github.com/test/repo"
+`,
+    );
+
+    const result = execSync(`node ${cliPath} validate --json`, {
+      encoding: 'utf-8',
+      cwd: testDir,
+    });
+    const json = JSON.parse(result);
+    expect(json.valid).toBe(true);
+    expect(Array.isArray(json.warnings)).toBe(true);
+    // Currently-shipped Claude CLI v2.1.150 exposes `--effort`, so
+    // hasEffortMechanism('claude-code') returns true → 0 warnings on this
+    // fixture (which has no effort field regardless).
+    expect(json.warnings).toEqual([]);
+  });
 });

@@ -2,8 +2,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, join, parse } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { ZodError } from 'zod';
-import { type GeneracyConfig, validateConfig } from './schema.js';
+import { type GeneracyConfig, validateConfig, type AgentEntry, type AgentsConfig } from './schema.js';
 import { validateSemantics, ConfigValidationError } from './validator.js';
+import { hasEffortMechanism } from './effort-mechanism-probe.js';
 
 /**
  * Environment variable for explicit config path override
@@ -319,4 +320,89 @@ export function loadConfig(options: LoadConfigOptions = {}): GeneracyConfig {
   validateSemantics(config);
 
   return config;
+}
+
+/**
+ * Result of `loadConfigWithWarnings` — carries the parsed config alongside a
+ * non-fatal warnings channel populated per issue #1095 D-6.
+ */
+export interface LoadConfigResult {
+  config: GeneracyConfig;
+  warnings: string[];
+}
+
+/**
+ * Load configuration and collect non-fatal warnings.
+ *
+ * Delegates structural + semantic validation to `loadConfig`, then walks the
+ * resolved `orchestrator.agents` block to emit an operator-facing warning for
+ * any `effort` set on a provider whose bundled plugin has no CLI mechanism
+ * for effort at this release (FR-010a-a). Exit code stays 0 on warnings-only
+ * — only errors exit 1 (per D-6).
+ *
+ * Errors surface through `loadConfig` as thrown `ConfigSchemaError` /
+ * `ConfigValidationError` / `ConfigNotFoundError` / `ConfigParseError`.
+ */
+export function loadConfigWithWarnings(options: LoadConfigOptions = {}): LoadConfigResult {
+  const config = loadConfig(options);
+  const warnings = collectEffortWarnings(config);
+  return { config, warnings };
+}
+
+/**
+ * Walk every `AgentEntry` under `orchestrator.agents` (default, per-workflow
+ * default, per-phase overrides) and emit a warning for any `effort` set on a
+ * provider whose plugin has no CLI mechanism for effort. The default
+ * `defaults.agent` provider (or the built-in `claude-code` fallback) resolves
+ * from the sibling `defaults.agent` field.
+ */
+function collectEffortWarnings(config: GeneracyConfig): string[] {
+  const agents = config.orchestrator?.agents as AgentsConfig | undefined;
+  if (!agents) return [];
+
+  const warnings: string[] = [];
+  const defaultProvider = config.defaults?.agent ?? 'claude-code';
+
+  const resolveProvider = (entry: AgentEntry | undefined, ...fallbacks: (AgentEntry | undefined)[]): string => {
+    for (const tier of [entry, ...fallbacks]) {
+      if (tier?.provider !== undefined) return tier.provider;
+    }
+    return defaultProvider;
+  };
+
+  const emitIfDroppable = (
+    entry: AgentEntry | undefined,
+    path: string,
+    ...providerFallbacks: (AgentEntry | undefined)[]
+  ): void => {
+    if (!entry?.effort) return;
+    const provider = resolveProvider(entry, ...providerFallbacks);
+    if (hasEffortMechanism(provider)) return;
+    warnings.push(
+      `${path}.effort — set to '${entry.effort}' but provider '${provider}' has no CLI mechanism for effort in this release. The field will be dropped at spawn time.`,
+    );
+  };
+
+  // agents.default
+  emitIfDroppable(agents.default, 'orchestrator.agents.default');
+
+  // agents.workflows.<name>.default and .phases.<phase>
+  const workflows = agents.workflows ?? {};
+  for (const [wfName, wfEntry] of Object.entries(workflows)) {
+    if (!wfEntry) continue;
+    emitIfDroppable(wfEntry.default, `orchestrator.agents.workflows.${wfName}.default`, agents.default);
+
+    const phases = wfEntry.phases ?? {};
+    for (const [phaseName, phaseEntry] of Object.entries(phases)) {
+      if (!phaseEntry) continue;
+      emitIfDroppable(
+        phaseEntry,
+        `orchestrator.agents.workflows.${wfName}.phases.${phaseName}`,
+        wfEntry.default,
+        agents.default,
+      );
+    }
+  }
+
+  return warnings;
 }

@@ -1,0 +1,16 @@
+# Invalid: `defualt:` under `orchestrator.agents:` — typo for `default:`.
+# `.strict()` on `AgentsConfigSchema` rejects this per SC-006.
+
+schemaVersion: "1"
+
+project:
+  id: "proj_abc123xyz"
+  name: "Agents Typo Project"
+
+repos:
+  primary: "github.com/acme/main-api"
+
+orchestrator:
+  agents:
+    defualt:
+      model: opus-4-7

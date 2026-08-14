@@ -10,6 +10,24 @@ import type { OutputCapture } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { ShellIntent } from '../launcher/types.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
+
+/**
+ * Per-provider registry for the reasoning-effort delivery mechanism (issue
+ * #1095 D-5, FR-010a-b spawn-time warning source). Mirrors the CLI-side probe
+ * in `packages/generacy/src/config/effort-mechanism-probe.ts`. Consulted at
+ * spawn time to emit exactly one warning per spawn when `effort` is set but
+ * the provider's plugin has no CLI mechanism.
+ */
+const PROVIDER_HAS_EFFORT_MECHANISM: Record<string, () => boolean> = {
+  'claude-code': () => ClaudeCodeLaunchPlugin.hasEffortMechanism(),
+};
+
+function providerHasEffortMechanism(provider: string | undefined): boolean {
+  if (!provider) return false;
+  const probe = PROVIDER_HAS_EFFORT_MECHANISM[provider];
+  return probe ? probe() : false;
+}
 
 /**
  * Pre-cap ring buffer capacity for shell-path merged stdout+stderr capture.
@@ -66,6 +84,20 @@ export class CliSpawner {
       launchEnv['GENERACY_SIBLING_WORKDIRS'] = JSON.stringify(options.siblingWorkdirs);
     }
 
+    // #1095 FR-010a-b: warn once per spawn if effort is set but the resolved
+    // provider's plugin has no CLI mechanism for effort in this release.
+    if (options.effort !== undefined && !providerHasEffortMechanism(options.provider)) {
+      this.logger.warn(
+        {
+          phase,
+          provider: options.provider ?? '(default)',
+          effort: options.effort,
+          reason: 'no-cli-mechanism',
+        },
+        'agent.effort.dropped',
+      );
+    }
+
     const handle = await this.agentLauncher.launch({
       intent: {
         kind: 'phase',
@@ -73,6 +105,7 @@ export class CliSpawner {
         prompt: options.prompt,
         sessionId: options.resumeSessionId,
         ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.effort !== undefined ? { effort: options.effort } : {}),
       },
       cwd: options.cwd,
       env: launchEnv,

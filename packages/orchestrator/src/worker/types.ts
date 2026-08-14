@@ -1,5 +1,6 @@
 import type { QueueItem } from '../types/index.js';
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
+import type { Effort } from '@generacy-ai/config';
 import type { PushGuardDecision } from './push-guard.js';
 
 /**
@@ -245,6 +246,13 @@ export interface CliSpawnOptions {
    * of the precedence chain sets a model — no built-in default.
    */
   model?: string;
+  /**
+   * Resolved reasoning effort from `resolveAgentForPhase`. Threaded into
+   * `PhaseIntent.effort` / `PrFeedbackIntent.effort` / `ValidateFixIntent.effort` /
+   * `MergeConflictIntent.effort`. Undefined when no tier of the precedence
+   * chain sets effort — the CLI plugin will not push `--effort` in that case.
+   */
+  effort?: Effort;
   /**
    * Model from the previous phase, if any. Only meaningful when
    * `resumeSessionId` is also set (session preserved across the transition

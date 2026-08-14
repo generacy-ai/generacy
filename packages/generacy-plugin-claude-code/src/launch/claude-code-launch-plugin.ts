@@ -45,6 +45,17 @@ export class ClaudeCodeLaunchPlugin {
   readonly provider = 'claude-code';
   readonly supportedKinds = ['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'conversation-turn', 'invoke'] as const;
 
+  /**
+   * Whether the installed CLI supports a delivery mechanism for reasoning effort.
+   * Under Claude CLI v2.1.150 the `--effort <level>` flag exists first-class.
+   * Flip this to `false` if a future CLI release removes the flag. Consulted by
+   * validate-time (`packages/generacy`) and spawn-time (orchestrator worker)
+   * warning surfaces per FR-010a of issue #1095.
+   */
+  static hasEffortMechanism(): boolean {
+    return true;
+  }
+
   buildLaunch(intent: ClaudeCodeIntent): LaunchSpec {
     switch (intent.kind) {
       case 'phase':
@@ -89,6 +100,10 @@ export class ClaudeCodeLaunchPlugin {
       args.push('--model', intent.model);
     }
 
+    if (intent.effort) {
+      args.push('--effort', intent.effort);
+    }
+
     if (intent.sessionId) {
       args.push('--resume', intent.sessionId);
     }
@@ -115,6 +130,10 @@ export class ClaudeCodeLaunchPlugin {
       args.push('--model', intent.model);
     }
 
+    if (intent.effort) {
+      args.push('--effort', intent.effort);
+    }
+
     args.push(intent.prompt);
 
     return {
@@ -133,8 +152,17 @@ export class ClaudeCodeLaunchPlugin {
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
       '--verbose',
-      intent.prompt,
     ];
+
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
+    if (intent.effort) {
+      args.push('--effort', intent.effort);
+    }
+
+    args.push(intent.prompt);
 
     return {
       command: 'claude',
@@ -152,8 +180,17 @@ export class ClaudeCodeLaunchPlugin {
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
       '--verbose',
-      intent.prompt,
     ];
+
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
+    if (intent.effort) {
+      args.push('--effort', intent.effort);
+    }
+
+    args.push(intent.prompt);
 
     return {
       command: 'claude',

@@ -106,6 +106,53 @@ The override replaces the default wholesale. An explicit empty `preValidateComma
 
 For the full schema reference including all fields, validation rules, and multi-repo configuration, see the [Configuration Reference](/docs/reference/config/generacy).
 
+### Orchestrator Agent Selection
+
+The `orchestrator.agents` block picks the `{ provider, model, effort }` used for each speckit workflow phase. All three fields are optional and resolve **independently** — a phase override may set only `effort` and let `model` and `provider` fall through from a lower tier.
+
+Precedence (highest first):
+
+1. `agents.workflows.<name>.phases.<phase>`
+2. `agents.workflows.<name>.default`
+3. `agents.default`
+4. `defaults.agent` (provider only)
+5. Built-in `claude-code` fallback (provider only; model/effort stay unset)
+
+The two fixer paths (`validate-fix`, `merge-conflict`) resolve against the `implement` phase entry, matching the existing `pr-feedback` behaviour.
+
+`effort` is a closed enum matching the Claude CLI's `--effort <level>` vocabulary:
+
+- `low`, `medium`, `high`, `xhigh`, `max`
+
+If the field is set but the resolved provider has no CLI mechanism for effort in this release, `generacy validate` emits a warning and the orchestrator drops the field at spawn time (a single `agent.effort.dropped` log line per spawn).
+
+Worked example — per-phase model + effort under `speckit-feature`:
+
+```yaml title=".generacy/config.yaml"
+defaults:
+  agent: claude-code
+
+orchestrator:
+  agents:
+    default:
+      model: opus-4-7
+    workflows:
+      speckit-feature:
+        default:
+          model: opus-4-7
+        phases:
+          plan:
+            model: fable
+            effort: xhigh
+          implement:
+            model: opus-4-7
+            effort: high
+```
+
+With this config, `plan` runs on Fable at `xhigh` effort while `implement` (and the `pr-feedback`/`validate-fix`/`merge-conflict` fixers) run on Opus at `high` effort. Setting `effort` in the repo does not force `model` to be re-specified — each field merges independently over cluster defaults.
+
+Strict validation is confined to `orchestrator.agents` and its descendants — typos like `defualt:` or `efort:` inside the block are rejected at `generacy validate`, while typos outside the block (e.g. under `defaults:`) continue to be silently stripped as today.
+
 ## `.generacy/generacy.env`
 
 The `generacy.env` file stores secrets and environment-specific settings. It is **gitignored by default** — never commit this file.

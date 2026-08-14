@@ -33,6 +33,7 @@ type PullRequest = Awaited<ReturnType<GitHubClient['listOpenPullRequests']>>[num
 import type { QueueItem, ResolveMergeConflictsMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
+import { resolveAgentForPhase } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { HandlerOutcome } from './handler-outcome.js';
@@ -345,6 +346,7 @@ export class MergeConflictHandler {
       prompt,
       workflowId,
       issueNumber,
+      item.workflowName,
     );
 
     // Step 13: post-agent verification — success predicate.
@@ -731,7 +733,15 @@ export class MergeConflictHandler {
     prompt: string,
     workflowId: string,
     issueNumber: number,
+    workflowName: string,
   ): Promise<boolean> {
+    // #1095: bind to `implement` phase for `{ provider, model, effort }` — same
+    // rule pr-feedback-handler and validate-fix-handler use. When
+    // `workflowName === 'unknown'` (no workflow:*/process:* label) the resolver
+    // naturally degrades through `agents.default` tiers to the CLI ambient
+    // default per FR-008 (Q1).
+    const { provider, model, effort } = resolveAgentForPhase(this.config, workflowName, 'implement');
+
     let child;
     try {
       const handle = await this.agentLauncher.launch({
@@ -739,10 +749,14 @@ export class MergeConflictHandler {
           kind: 'merge-conflict',
           issueNumber,
           prompt,
+          ...(provider !== undefined ? { provider } : {}),
+          ...(model !== undefined ? { model } : {}),
+          ...(effort !== undefined ? { effort } : {}),
         } as MergeConflictIntent,
         cwd: checkoutPath,
         env: {},
         credentials: buildLaunchCredentials(this.config.credentialRole),
+        provider,
       });
       child = handle.process;
     } catch (err) {

@@ -1,5 +1,6 @@
 import type { ChildProcessHandle } from '../worker/types.js';
 import type { LaunchRequestCredentials } from '@generacy-ai/credhelper';
+import type { Effort } from '@generacy-ai/config';
 
 /**
  * Intent for launching a generic subprocess with explicit command/args.
@@ -38,6 +39,8 @@ export interface PhaseIntent {
   sessionId?: string;
   /** Optional model override, provider-interpreted. */
   model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
@@ -51,6 +54,8 @@ export interface PrFeedbackIntent {
   prompt: string;
   /** Optional model override, provider-interpreted. */
   model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
@@ -66,6 +71,16 @@ export interface ValidateFixIntent {
   prompt: string;
   /** 64-hex SHA-256 identity of the failing evidence — surfaces in logs. */
   evidenceHash: string;
+  /**
+   * Resolved provider from `resolveAgentForPhase(..., 'implement')`. Threaded via
+   * `LaunchRequest.provider` (this field is a defensive breadcrumb; the plugin
+   * dispatch reads `LaunchRequest.provider` — see `pr-feedback-handler.ts:879`).
+   */
+  provider?: string;
+  /** Resolved model override, provider-interpreted. */
+  model?: string;
+  /** Resolved reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
@@ -78,6 +93,15 @@ export interface MergeConflictIntent {
   issueNumber: number;
   /** Full prompt (built by MergeConflictHandler via buildMergeConflictPrompt) */
   prompt: string;
+  /**
+   * Resolved provider from `resolveAgentForPhase(..., 'implement')`. Threaded via
+   * `LaunchRequest.provider` (defensive breadcrumb — see ValidateFixIntent note).
+   */
+  provider?: string;
+  /** Resolved model override, provider-interpreted. */
+  model?: string;
+  /** Resolved reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
 }
 
 /**
