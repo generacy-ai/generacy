@@ -55,7 +55,8 @@
         "packages/generacy/src/agency/subprocess.ts",
         "packages/generacy-extension/src/views/local/runner/actions/cli-utils.ts",
         "packages/generacy-extension/src/commands/env.ts",
-        "packages/generacy-extension/src/commands/runner.ts"
+        "packages/generacy-extension/src/commands/runner.ts",
+        "packages/generacy-plugin-claude-code/src/launch/claude-code-launch-plugin.ts"
       ],
       "rules": {
         "no-restricted-imports": "off"
