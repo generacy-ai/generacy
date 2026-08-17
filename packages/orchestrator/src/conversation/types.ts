@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EffortSchema, type Effort } from '@generacy-ai/config';
 import type { ChildProcessHandle } from '../worker/types.js';
 
 // =============================================================================
@@ -23,6 +24,7 @@ export interface ConversationHandle {
   process: ChildProcessHandle;
   startedAt: string;
   model?: string;
+  effort?: Effort;
   initialCommand?: string;
   state: ConversationState;
   /** Writable stream for sending messages to the CLI process stdin */
@@ -50,6 +52,7 @@ export interface ConversationStartOptions {
   workingDirectory: string;
   initialCommand?: string;
   model?: string;
+  effort?: Effort;
   skipPermissions?: boolean;
 }
 
@@ -62,6 +65,7 @@ export const ConversationStartSchema = z.object({
   workingDirectory: z.string().min(1).max(64),
   initialCommand: z.string().max(4096).optional(),
   model: z.string().max(64).optional(),
+  effort: EffortSchema.optional(),
   skipPermissions: z.boolean().default(true),
 });
 
