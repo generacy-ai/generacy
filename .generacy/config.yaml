@@ -13,6 +13,9 @@ orchestrator:
           plan:
             model: claude-fable-5
             effort: xhigh
+          tasks:
+            model: claude-opus-5
+            effort: high
           implement:
             model: claude-opus-5
             effort: high
@@ -21,6 +24,18 @@ orchestrator:
           plan:
             model: claude-fable-5
             effort: xhigh
+          tasks:
+            model: claude-opus-5
+            effort: high
           implement:
             model: claude-opus-5
             effort: high
+cockpit:
+  auto:
+    agents:
+      default:   { model: claude-sonnet-5 }               # fallback for any role not listed
+      clarifier: { model: claude-fable-5,  effort: high }  # D.1 clarification drafting
+      reviewer:  { model: claude-fable-5,  effort: high }  # D.2 artifact + D.3 PR review
+      validator: { model: claude-sonnet-5 }                # D.4 manual-validation summary
+      fixer:     { model: claude-sonnet-5, effort: high } # D.6 bounded red-checks fixer
+      diagnoser: { model: claude-opus-5 }               # D.7/D.11 diagnosis
