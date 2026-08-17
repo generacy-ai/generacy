@@ -267,6 +267,10 @@ export class ClaudeCodeLaunchPlugin {
       claudeArgs.push('--model', intent.model);
     }
 
+    if (intent.effort) {
+      claudeArgs.push('--effort', intent.effort);
+    }
+
     return {
       command: 'python3',
       args: ['-u', '-c', PTY_WRAPPER, ...claudeArgs],

@@ -115,6 +115,8 @@ export interface ConversationTurnIntent {
   sessionId?: string;
   /** Model override (omit for default) */
   model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
   /** Whether to skip permission prompts */
   skipPermissions: boolean;
 }
