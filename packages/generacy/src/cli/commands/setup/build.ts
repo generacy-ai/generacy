@@ -469,10 +469,14 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     }
 
     const mcpServers = (claudeJson['mcpServers'] ?? {}) as Record<string, unknown>;
+    // --mode speckit scopes the advertised tool surface to the 11 tools the
+    // speckit playbooks use (~6 KB of definitions vs ~26 KB in coding mode).
+    // Agency CLIs that predate the flag ignore unknown argv, so this is safe
+    // against older shared-package builds.
     const mcpEntry: Record<string, unknown> = {
       type: 'stdio',
       command: 'node',
-      args: [agencyCli],
+      args: [agencyCli, '--mode', 'speckit'],
     };
     if (agencyCwd) {
       mcpEntry['cwd'] = agencyCwd;

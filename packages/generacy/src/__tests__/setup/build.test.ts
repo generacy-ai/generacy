@@ -758,7 +758,7 @@ describe('setup build command', () => {
       expect(written.mcpServers.agency).toEqual({
         type: 'stdio',
         command: 'node',
-        args: ['/workspaces/agency/packages/agency/dist/cli.js'],
+        args: ['/workspaces/agency/packages/agency/dist/cli.js', '--mode', 'speckit'],
         cwd: '/workspaces/agency',
       });
     });
@@ -784,7 +784,7 @@ describe('setup build command', () => {
       expect(written.mcpServers.agency).toEqual({
         type: 'stdio',
         command: 'node',
-        args: ['/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js'],
+        args: ['/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js', '--mode', 'speckit'],
       });
     });
 
