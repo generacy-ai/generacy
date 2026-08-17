@@ -13,8 +13,15 @@ export { TIER_RANK, WAITING_PIPELINE_ORDER } from './state/precedence.js';
 // Config
 export {
   CockpitConfigSchema,
+  CockpitBaseConfigSchema,
+  CockpitAutoConfigSchema,
+  CockpitAutoAgentsSchema,
+  COCKPIT_AGENT_ROLES,
   type CockpitConfig,
   type CockpitConfigSource,
+  type CockpitAutoConfig,
+  type CockpitAutoAgents,
+  type CockpitAgentRole,
   type LoadedCockpitConfig,
 } from './config/schema.js';
 export {

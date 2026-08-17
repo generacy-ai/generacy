@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs';
 import { findWorkspaceConfigPath } from '@generacy-ai/config';
 import { parse as parseYaml } from 'yaml';
 import {
-  CockpitConfigSchema,
+  CockpitAutoConfigSchema,
+  CockpitBaseConfigSchema,
+  type CockpitAutoConfig,
   type CockpitConfig,
   type CockpitConfigSource,
   type LoadedCockpitConfig,
@@ -67,9 +69,30 @@ export async function loadCockpitConfig(
     }
   }
 
-  const parsedCockpit = CockpitConfigSchema.parse(cockpitBlock ?? {});
+  const parsedCockpit = CockpitBaseConfigSchema.parse(cockpitBlock ?? {});
+
+  // `auto` degrades to a warning on parse failure so a bad (or newer) auto
+  // block never breaks owner/assignee consumers (advance, queue, resume, …).
+  let auto: CockpitAutoConfig | undefined;
+  if (cockpitBlock != null && typeof cockpitBlock === 'object') {
+    const autoRaw = (cockpitBlock as Record<string, unknown>)['auto'];
+    if (autoRaw !== undefined) {
+      const autoResult = CockpitAutoConfigSchema.safeParse(autoRaw);
+      if (autoResult.success) {
+        auto = autoResult.data;
+      } else {
+        const detail = autoResult.error.issues
+          .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+          .join('; ');
+        warnings.push(`cockpit.auto ignored (invalid): ${detail}`);
+      }
+    }
+  }
+
   const source: CockpitConfigSource =
-    parsedCockpit.owner != null || parsedCockpit.assignee != null ? 'cockpit-block' : 'defaults';
+    parsedCockpit.owner != null || parsedCockpit.assignee != null || auto != null
+      ? 'cockpit-block'
+      : 'defaults';
 
   let owner: string | undefined = parsedCockpit.owner;
   if (owner == null) {
@@ -83,7 +106,7 @@ export async function loadCockpitConfig(
     }
   }
 
-  const config: CockpitConfig = { owner, assignee: parsedCockpit.assignee };
+  const config: CockpitConfig = { owner, assignee: parsedCockpit.assignee, auto };
 
   return { config, source, warnings };
 }

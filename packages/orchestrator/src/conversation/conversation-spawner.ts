@@ -1,3 +1,4 @@
+import type { Effort } from '@generacy-ai/config';
 import type { ChildProcessHandle } from '../worker/types.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { buildLaunchCredentials } from '../worker/credentials-helper.js';
@@ -14,6 +15,8 @@ export interface ConversationTurnOptions {
   sessionId?: string;
   /** Model to use */
   model?: string;
+  /** Reasoning-effort override, provider-interpreted */
+  effort?: Effort;
   /** Skip permission prompts */
   skipPermissions: boolean;
 }
@@ -58,6 +61,7 @@ export class ConversationSpawner {
         message: options.message,
         sessionId: options.sessionId,
         model: options.model,
+        effort: options.effort,
         skipPermissions: options.skipPermissions,
       },
       cwd: options.cwd,

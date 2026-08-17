@@ -6,6 +6,7 @@ exports[`ConversationSpawner > spawnTurn — LaunchRequest snapshot > captures f
   "cwd": "/workspace",
   "env": {},
   "intent": {
+    "effort": undefined,
     "kind": "conversation-turn",
     "message": "Tell me about TypeScript",
     "model": "claude-sonnet-4-6",

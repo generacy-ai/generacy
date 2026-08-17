@@ -76,6 +76,7 @@ export class ConversationManager {
       process: null as any, // No long-lived process; per-turn spawning
       startedAt: new Date().toISOString(),
       model,
+      effort: options.effort,
       initialCommand: options.initialCommand,
       state: 'active',
       stdin: null,
@@ -134,6 +135,7 @@ export class ConversationManager {
       message,
       sessionId: handle.sessionId,
       model: handle.model,
+      effort: handle.effort,
       skipPermissions: handle.skipPermissions,
     });
 
