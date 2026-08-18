@@ -59,6 +59,7 @@ beforeEach(() => {
   delete process.env['GITHUB_ORG'];
   delete process.env['GH_TOKEN'];
   delete process.env['GH_USERNAME'];
+  delete process.env['GENERACY_BOOTSTRAP_MODE'];
 });
 
 afterEach(() => {
@@ -703,6 +704,50 @@ describe('setup workspace command', () => {
         '/home/testuser/.git-credentials',
         'https://testuser:ghp_testtoken@github.com\n',
         { mode: 0o600 },
+      );
+    });
+
+    it('leaves credential config untouched when the JIT helper is active (wizard mode)', async () => {
+      process.env['GENERACY_BOOTSTRAP_MODE'] = 'wizard';
+      mockExecBehavior({
+        'credential.https://github.com.helper': {
+          stdout: "!CONTROL_PLANE_SOCKET_PATH='/run/generacy-git-token/control.sock' node 'git-credential-generacy.js'",
+        },
+      });
+      mockFileSystem();
+
+      await runWorkspaceCommand(['--repos', 'test-repo']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'JIT git credential helper active (wizard mode) — leaving git credential configuration untouched',
+      );
+      const cmds = mockExecSync.mock.calls.map((call) => call[0] as string);
+      expect(cmds).not.toContain('gh auth setup-git');
+      expect(cmds).not.toContain('git config --global credential.helper store');
+    });
+
+    it('keeps gh auth setup-git in wizard mode when the JIT helper is not configured', async () => {
+      process.env['GENERACY_BOOTSTRAP_MODE'] = 'wizard';
+      mockExecBehavior(); // helper lookup returns '' → no JIT marker; gh auth status ok
+      mockFileSystem();
+
+      await runWorkspaceCommand(['--repos', 'test-repo']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'gh CLI is authenticated, configuring git to use gh credentials',
+      );
+    });
+
+    it('keeps gh auth setup-git outside wizard mode even when the JIT helper is configured', async () => {
+      mockExecBehavior({
+        'credential.https://github.com.helper': { stdout: 'git-credential-generacy' },
+      });
+      mockFileSystem();
+
+      await runWorkspaceCommand(['--repos', 'test-repo']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'gh CLI is authenticated, configuring git to use gh credentials',
       );
     });
 
