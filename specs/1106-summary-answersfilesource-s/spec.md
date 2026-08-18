@@ -37,7 +37,7 @@ This is **not** the documented cross-repo limitation on `AnswersFileSourceOption
 **So that** the case-insensitivity fix does not introduce cross-epic wake-up noise or misdelivery.
 
 **Acceptance Criteria**:
-- [ ] An answer keyed to a different owner/repo (beyond casing) is still dropped, or — if the filter-removal option is chosen — provably harmless because no open gate matches its `gateId`.
+- [ ] An answer keyed to a different owner/repo (beyond casing) is still dropped with today's dropped-and-logged disposition (clarification Q1=C: the repo-scope filter is retained; filter removal is a tracked follow-up, not part of this fix).
 
 ### US3: Regression protection
 
@@ -55,10 +55,12 @@ This is **not** the documented cross-repo limitation on `AnswersFileSourceOption
 |----|-------------|----------|-------|
 | FR-001 | The repo-scope filter in `AnswersFileSource` MUST treat owner and repo comparisons as case-insensitive (GitHub semantics). | P1 | Suggested: compare `.toLowerCase()` on both sides at `answers-file-source.ts:645-653`. |
 | FR-002 | A gate answer whose `gateKey` differs from the bound `epicRef` only by owner/repo letter case MUST be delivered (not dropped as cross-epic). | P1 | Direct restatement of the acceptance bullet in #1106. |
-| FR-003 | Answers for genuinely different repos MUST retain a safe disposition: either still filtered, or intentionally over-delivered and neutralized by downstream `gateId` matching. | P1 | The `epicRef` doc comment already proposes dropping the filter entirely; choice of option is a design decision for `/plan` (see Assumptions). |
+| FR-003 | Answers for genuinely different repos MUST remain filtered (dropped-and-logged, today's disposition). The repo-scope filter is retained. | P1 | Resolved by clarification Q1=C: minimal fix ships now; filter removal / cross-repo `epicRef` support is filed as a separate follow-up issue, not bundled into this bugfix. |
 | FR-004 | Regression tests MUST cover both case-divergence directions and the foreign-repo case. | P1 | See US3. |
 | FR-005 | The issue-number portion of the scope comparison MUST be unaffected — only owner/repo comparison semantics change. | P2 | |
 | FR-006 | Producer-side casing normalization (making `gateKey` casing stable at write time) is NOT required for this fix; the consumer-side filter MUST NOT depend on producer casing agreement. | P2 | Issue notes producer normalization as "separately worth" doing — out of scope here. |
+| FR-007 | `/plan` MUST audit the doorbell/cockpit consumer path for other case-sensitive owner/repo string comparisons; any additional sites found MUST be fixed in this same PR with matching regression tests. | P1 | Resolved by clarification Q2=B. Audit is bounded to owner/repo string comparisons in the doorbell + cockpit consumer path so the PR stays reviewable. Baseline evidence: grep for `toLowerCase` across `dist/cli/commands/cockpit/` shows only three unrelated hits. |
+| FR-008 | A follow-up issue MUST be filed for the repo-scope filter removal / cross-repo `epicRef` support option. | P2 | Second half of clarification Q1=C. Filing the issue is part of this work; implementing it is not. |
 
 ## Success Criteria
 
@@ -72,14 +74,14 @@ This is **not** the documented cross-repo limitation on `AnswersFileSourceOption
 ## Assumptions
 
 1. GitHub owner and repo names are case-insensitive; two refs differing only in case always denote the same repo. Case-insensitive comparison is therefore correct regardless of which producer's casing is "right".
-2. The minimal fix (case-insensitive compare) and the broader fix (drop the repo filter, rely on downstream `gateId` matching — which also resolves the documented cross-repo `epicRef` limitation) both satisfy FR-002/FR-003. Which to ship is a `/plan`-time decision; the spec's requirements are written to admit either.
+2. ~~The minimal fix and the broader fix are both admissible; which to ship is a `/plan`-time decision.~~ **Resolved by clarification Q1=C**: ship the minimal case-insensitive compare; the repo-scope filter stays. Filter removal (which would incidentally resolve the documented cross-repo `epicRef` limitation) is tracked in a separate follow-up issue (FR-008). Measured cost that motivated the split: the finetooth cluster's single `answers.ndjson` carries gates from at least four distinct epics, so foreign-epic no-op wake-ups under filter removal are real, not hypothetical.
 3. The bug is consumer-side only. `cockpit-answers-writer` and doorbell code are byte-identical across `stable` and `preview` channels, so no channel/version interplay is in scope.
-4. Fix location is `packages/generacy/src/cli/commands/cockpit/doorbell/answers-file-source.ts` (non-test file under `packages/generacy/src/`) — a changeset for `@generacy-ai/generacy` is required (patch: defect fix per `workflow:speckit-bugfix`).
+4. Primary fix location is `packages/generacy/src/cli/commands/cockpit/doorbell/answers-file-source.ts` (non-test file under `packages/generacy/src/`) — a changeset for `@generacy-ai/generacy` is required (patch: defect fix per `workflow:speckit-bugfix`). Per clarification Q2=B (FR-007), the `/plan` audit may add further comparison sites in the doorbell/cockpit consumer path to this same PR.
 
 ## Out of Scope
 
 - Normalizing producer-side `gateKey` casing (epic-level gate emitters, primary/secondary repo gate producers).
-- The pre-existing, documented cross-repo `epicRef` limitation — unless the filter-removal option is chosen at `/plan`, in which case it is fixed incidentally, not as a requirement.
+- The pre-existing, documented cross-repo `epicRef` limitation — per clarification Q1=C it stays out of scope; a follow-up issue for filter removal / cross-repo support is filed instead (FR-008).
 - Repairing already-dropped answers on live clusters (operators re-answer or relay manually; no replay/migration tooling).
 - Any change to the answers-file wire format, `gateId` derivation, or the `cluster.cockpit` channel.
 
