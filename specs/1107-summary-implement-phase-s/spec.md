@@ -45,18 +45,18 @@ Root-cause context worth preserving: in both field cases the implement agent hit
 
 **Acceptance Criteria**:
 - [ ] An implement phase touching at least one file that is neither under an excluded prefix nor an excluded exact filename passes the guard.
-- [ ] A phase whose product legitimately *is* an agent-context file edit (e.g. a bugfix to `CLAUDE.md` itself) has explicitly defined behavior: either it passes, or the false failure is documented as accepted. *(Resolution deferred to /clarify.)*
+- [ ] A phase whose product legitimately *is* an agent-context file edit (e.g. a bugfix to `CLAUDE.md` itself) is **accepted as a documented false failure** (Clarification Q1 → A): the guard fails such a phase and the operator resolves it via review or manual advance (`/cockpit:resume` or label surgery). No escape hatch is provided — a marker that makes an otherwise-empty phase "count" is exactly the bypass shape this bug exploited, and a halted agent could plausibly set it. Fail-closed is the correct bias for a safety net.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The product-diff exclusion mechanism gains an exact-filename exclusion set containing the spec-kit `update_agent` targets: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`. | P1 | Exact match, not prefix — a bare `startsWith('CLAUDE.md')` entry would also swallow `CLAUDE.md.bak`. Prefix list (`specs/`) retained alongside. |
-| FR-002 | The guard measures the diff the phase itself produced (phase start commit → `HEAD` after the phase's commit) instead of the cumulative `baseRef...HEAD` branch diff. | P1 | Phase start point must be captured before the CLI spawns (e.g. `git rev-parse HEAD`). Interaction with the existing `resolveBaseRef` path and detection-failure fallback to be settled at /plan. |
+| FR-001 | The product-diff exclusion mechanism gains an exact-filename exclusion set containing the spec-kit `update_agent` targets: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`. | P1 | Exact match, not prefix — a bare `startsWith('CLAUDE.md')` entry would also swallow `CLAUDE.md.bak`. **Root-level exact path only** (Clarification Q3 → A): the match is the exact repo-root path; nested `packages/*/CLAUDE.md` edits count as product code, matching what `update_agent` actually touches. No basename-at-any-depth matching. Prefix list (`specs/`) retained alongside. |
+| FR-002 | The guard measures the diff the phase itself produced (phase start commit → `HEAD` after the phase's commit) instead of the cumulative `baseRef...HEAD` branch diff. The phase-scoped diff MUST be immune to changes introduced by base-branch merges (Clarification Q4 → A) and MUST span the whole implement phase including pre-restart increments (Clarification Q5 → B). | P1 | Phase start point must be captured before the CLI spawns (e.g. `git rev-parse HEAD`), **after** any pre-phase base merge, so merged-in product files never satisfy the guard on behalf of a phase that wrote nothing. Because implement pauses/resumes (gates, lease expiry, worker restart, ~20-min fixer CLI timeout), the phase-start ref MUST be persisted across restarts (Redis is already available on every cluster, or a PR/issue marker) so the window spans all increments, not just the post-resume window. Interaction with the existing `resolveBaseRef` path and detection-failure fallback to be settled at /plan. |
 | FR-003 | When the phase-scoped product diff is empty, the phase fails via the existing `no-product-code-changes` synthetic-failure path (error evidence classifier reason, stage comment, `escalateAndAlert`, loop abort). | P1 | No new failure surface; reuse `phase-loop.ts:754-783` machinery. |
 | FR-004 | Failure diagnostics include: the phase-scoped changed-file list, the base/start ref used, the excluded prefixes, and the excluded exact filenames. | P2 | Extends the existing structured log at `phase-loop.ts:755-758` and the error message at `:760-766`. |
 | FR-005 | `isProductFile` / `computeProductDiff` public shapes remain consumable by existing callers and tests; diff-window change must not alter `resolveBaseRef` consumers (`base-merge.ts`). | P2 | `resolveBaseRef` is shared; the new window is additive. |
-| FR-006 | Failing loudly when the implement phase checks off zero tasks in `tasks.md` — the operator-visible symptom, independent of file-path classification. | P3 | Issue suggests this as a third, independent net. Whether it ships in this fix or a follow-up is a /clarify question. |
+| ~~FR-006~~ | ~~Failing loudly when the implement phase checks off zero tasks in `tasks.md`.~~ **Deferred to a follow-up issue** (Clarification Q2 → A). | — | Out of scope for this fix — see Out of Scope. FR-006 interacts directly with FR-002's resume semantics (a resumed increment can legitimately check off zero *new* tasks while finishing prior work), so a naive implementation would false-fail exactly the phases FR-002 protects. It deserves its own design pass. The two structural defects (FR-001 + FR-002) each independently catch the observed failure. |
 
 ## Success Criteria
 
@@ -81,6 +81,8 @@ Root-cause context worth preserving: in both field cases the implement agent hit
 - Repairing already-merged phantom PRs or re-opening affected downstream issues (`Painworth/doc-intel` cleanup is operational, not code).
 - Changing how the orchestrator interprets CLI exit codes or detects "agent halted with a question" (upstream defect; candidate follow-up issue).
 - Making the exclusion lists configurable per-workspace or per-workflow.
+- The zero-tasks-checked net (former FR-006): failing loudly when the implement phase checks off zero tasks in `tasks.md`. Deferred to a follow-up issue (Clarification Q2 → A) because it interacts with the resume semantics of FR-002 and needs its own design pass.
+- Basename-at-any-depth exclusion of agent-context files (Clarification Q3 → A): nested `packages/*/CLAUDE.md` edits count as product code and are not excluded.
 - Non-speckit workflows' phase semantics — though the fix applies wherever `PHASES_REQUIRING_CHANGES` fires, per existing behavior.
 
 ---
