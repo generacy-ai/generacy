@@ -641,12 +641,16 @@ export class AnswersFileSource {
     // number — so legitimate child-issue answers are not dropped. A gateKey
     // whose issue-ref cannot be parsed (a non-issue filing / scope-drained
     // target) is emitted; downstream matches on gateId. Foreign-repo answers
-    // are dropped + logged.
+    // are dropped + logged. The owner/repo comparison is case-insensitive
+    // because GitHub owner/repo names are case-insensitive and gate producers
+    // disagree on casing (operator-typed vs. lowercase vs. GitHub-canonical);
+    // a raw `!==` here silently drops every same-repo answer that differs only
+    // by letter case.
     const gateScope = parseIssueRefFromGateKey(gateLine.gateKey);
     if (
       gateScope != null &&
-      (gateScope.owner !== this.epicScope.owner ||
-        gateScope.repo !== this.epicScope.repo)
+      (gateScope.owner.toLowerCase() !== this.epicScope.owner.toLowerCase() ||
+        gateScope.repo.toLowerCase() !== this.epicScope.repo.toLowerCase())
     ) {
       this.logger.info?.(
         `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
