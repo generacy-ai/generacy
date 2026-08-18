@@ -82,6 +82,11 @@ function createMockContext(startPhase: WorkflowPhase = 'implement'): WorkerConte
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
       // Product-diff post-implement checks a non-spec file exists.
       getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
+      // #1107: phase-scoped guard captures a start ref then measures the
+      // branch's own commits. Default to a captured ref + one product file so
+      // the implement guard passes.
+      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
       // #1051 phase-loop-entry pre-push guard needs findPRForBranchAnyState.
       // Default to `null` (no PR in any state) so the guard falls through to
       // the branch-existence check, which fails-open on the ls-remote spawn.

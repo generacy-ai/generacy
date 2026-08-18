@@ -49,6 +49,22 @@ function createMockDeps(): PhaseLoopDeps {
   };
 }
 
+/**
+ * Build a github stub for the phase-scoped guard (#1107). `ownFiles` are the
+ * files the guard measures (own-commit diff since the captured start ref);
+ * `cumulativeFiles` (optional) exercise the diagnostics `baseRef...HEAD` window,
+ * which must NOT influence the pass/fail decision (SC-004).
+ */
+function makeGithub(ownFiles: string[], cumulativeFiles: string[] = ownFiles): any {
+  return {
+    getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+    getPullRequest: vi.fn(),
+    getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+    getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(ownFiles),
+    getFilesChangedBetween: vi.fn().mockResolvedValue(cumulativeFiles),
+  };
+}
+
 function createMockContext(startPhase: WorkflowPhase = 'implement'): WorkerContext {
   return {
     workerId: 'test-worker',
@@ -56,7 +72,7 @@ function createMockContext(startPhase: WorkflowPhase = 'implement'): WorkerConte
     item: {
       owner: 'generacy-ai',
       repo: 'generacy',
-      issueNumber: 820,
+      issueNumber: 1107,
       workflowName: 'speckit-feature',
     } as any,
     startPhase,
@@ -64,7 +80,7 @@ function createMockContext(startPhase: WorkflowPhase = 'implement'): WorkerConte
     logger: mockLogger,
     signal: new AbortController().signal,
     checkoutPath: '/tmp/repo',
-    issueUrl: 'https://github.com/generacy-ai/generacy/issues/820',
+    issueUrl: 'https://github.com/generacy-ai/generacy/issues/1107',
     description: 'test',
   };
 }
@@ -82,7 +98,7 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
   };
 }
 
-describe('PhaseLoop - product-diff empty-implement detection (SC-001)', () => {
+describe('PhaseLoop - phase-scoped product-diff empty-implement detection', () => {
   let phaseLoop: PhaseLoop;
   let deps: PhaseLoopDeps;
 
@@ -91,15 +107,9 @@ describe('PhaseLoop - product-diff empty-implement detection (SC-001)', () => {
     deps = createMockDeps();
   });
 
-  it('SC-001: fails implement when cumulative diff has only spec files', async () => {
+  it('SC-001: fails implement when own-diff is an earlier-phase CLAUDE.md + a spec log', async () => {
     const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getFilesChangedBetween: vi.fn().mockResolvedValue([
-        'specs/820/tasks.md',
-        'specs/820/plan.md',
-      ]),
-    } as any;
+    context.github = makeGithub(['CLAUDE.md', 'specs/1107/conversation-log.jsonl']);
     const config = createConfig();
 
     const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
@@ -113,52 +123,50 @@ describe('PhaseLoop - product-diff empty-implement detection (SC-001)', () => {
     expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
   });
 
-  it('resolves base ref against PR base when getPrNumber() is set', async () => {
+  it('SC-002: fails implement when own-diff is CLAUDE.md only', async () => {
     const context = createMockContext('implement');
-    const getPullRequest = vi.fn().mockResolvedValue({
-      number: 42,
-      base: { ref: 'main', sha: 'abc' },
-    });
-    const getFilesChangedBetween = vi.fn().mockResolvedValue(['specs/only.md']);
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getPullRequest,
-      getFilesChangedBetween,
-    } as any;
-    (deps.prManager.getPrNumber as any) = vi.fn().mockReturnValue(42);
+    context.github = makeGithub(['CLAUDE.md']);
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(result.completed).toBe(false);
+    expect(result.lastPhase).toBe('implement');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+  });
+
+  it('SC-004: fails when own-diff is empty even though baseRef...HEAD carries product files', async () => {
+    const context = createMockContext('implement');
+    // Empty own-diff, but the cumulative window has an earlier-phase product
+    // file — the guard must ignore the cumulative window (first-parent/no-merges).
+    context.github = makeGithub([], ['packages/orchestrator/src/earlier-phase.ts']);
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(result.completed).toBe(false);
+    expect(result.lastPhase).toBe('implement');
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('startsha');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+  });
+
+  it('captures the phase-start ref via getCurrentCommitSha before measuring the diff', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['specs/1107/tasks.md']);
     const config = createConfig();
 
     await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
 
-    expect(getPullRequest).toHaveBeenCalledWith('generacy-ai', 'generacy', 42);
-    expect(getFilesChangedBetween).toHaveBeenCalledWith('origin/main', 'HEAD');
+    expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('startsha');
   });
 
-  it('falls back to origin/<default-branch> when no PR yet', async () => {
+  it('SC-005: detection failure (own-commit diff throws) routes to onError, does not silently pass', async () => {
     const context = createMockContext('implement');
-    const getFilesChangedBetween = vi.fn().mockResolvedValue(['specs/only.md']);
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getPullRequest: vi.fn(),
-      getFilesChangedBetween,
-    } as any;
-    (deps.prManager.getPrNumber as any) = vi.fn().mockReturnValue(undefined);
-    const config = createConfig();
-
-    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
-
-    expect(getFilesChangedBetween).toHaveBeenCalledWith('origin/develop', 'HEAD');
-    expect(context.github.getPullRequest).not.toHaveBeenCalled();
-  });
-
-  it('detection failure (git diff throws) routes to onError, does not silently pass', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getFilesChangedBetween: vi.fn().mockRejectedValue(
-        new Error('fatal: bad revision origin/develop'),
-      ),
-    } as any;
+    context.github = makeGithub([]);
+    context.github.getFilesChangedByOwnCommits = vi
+      .fn()
+      .mockRejectedValue(new Error('fatal: bad revision startsha..HEAD'));
     const config = createConfig();
 
     const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
@@ -170,9 +178,26 @@ describe('PhaseLoop - product-diff empty-implement detection (SC-001)', () => {
     const last = result.results[result.results.length - 1]!;
     expect(last.error?.message).toMatch(/product-diff detection failed/);
   });
+
+  it('SC-005: detection failure when the start ref could not be captured', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/x/y.ts']);
+    context.github.getCurrentCommitSha = vi
+      .fn()
+      .mockRejectedValue(new Error('fatal: not a git repository'));
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(result.completed).toBe(false);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+    const last = result.results[result.results.length - 1]!;
+    expect(last.error?.message).toMatch(/product-diff detection failed/);
+  });
 });
 
-describe('PhaseLoop - product-diff regression (SC-002)', () => {
+describe('PhaseLoop - phase-scoped product-diff healthy path (SC-003)', () => {
   let phaseLoop: PhaseLoop;
   let deps: PhaseLoopDeps;
 
@@ -181,14 +206,9 @@ describe('PhaseLoop - product-diff regression (SC-002)', () => {
     deps = createMockDeps();
   });
 
-  it('SC-002: passes through to validate when a single product file changed', async () => {
+  it('SC-003: passes through to validate when a single product file changed', async () => {
     const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getFilesChangedBetween: vi.fn().mockResolvedValue([
-        'packages/orchestrator/src/foo.ts',
-      ]),
-    } as any;
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
     const config = createConfig();
 
     const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
@@ -198,15 +218,9 @@ describe('PhaseLoop - product-diff regression (SC-002)', () => {
     expect(deps.cliSpawner.runValidatePhase).toHaveBeenCalled();
   });
 
-  it('SC-002: passes through when mixed spec + product diff', async () => {
+  it('SC-003: passes through when own-diff mixes spec + product files', async () => {
     const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getFilesChangedBetween: vi.fn().mockResolvedValue([
-        'specs/820/plan.md',
-        'packages/orchestrator/src/foo.ts',
-      ]),
-    } as any;
+    context.github = makeGithub(['specs/1107/plan.md', 'packages/orchestrator/src/foo.ts']);
     const config = createConfig();
 
     const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
@@ -214,5 +228,42 @@ describe('PhaseLoop - product-diff regression (SC-002)', () => {
     expect(result.completed).toBe(true);
     expect(deps.labelManager.onError).not.toHaveBeenCalledWith('implement');
     expect(deps.cliSpawner.runValidatePhase).toHaveBeenCalled();
+  });
+
+  it('clears the persisted start ref on pass', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    const clearRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = {
+      getValueRaw: vi.fn().mockResolvedValue(null),
+      setValueRaw: vi.fn().mockResolvedValue(undefined),
+      clearRaw,
+    } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(clearRaw).toHaveBeenCalledWith(
+      'phase-start-ref:generacy-ai:generacy:1107:implement',
+    );
+  });
+
+  it('reuses a persisted start ref across increments (persist-once)', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = {
+      getValueRaw: vi.fn().mockResolvedValue('persisted-sha'),
+      setValueRaw,
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    // Existing ref reused: getCurrentCommitSha never consulted, no re-persist.
+    expect(context.github.getCurrentCommitSha).not.toHaveBeenCalled();
+    expect(setValueRaw).not.toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('persisted-sha');
   });
 });

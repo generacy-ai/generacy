@@ -22,13 +22,19 @@ const SNAPPOLL_PHASE: WorkflowPhase = 'implement';
 
 // Build the evidence shape that arrives at postFailureAlert on the snappoll
 // no-product-code-changes site. This mirrors what buildErrorEvidence produces
-// downstream of the no-product-code-changes classifier at phase-loop.ts:~710.
+// downstream of the no-product-code-changes classifier. #1107 rewrote the
+// reason to the phase-scoped shape (own-commit files since the start ref, both
+// exclusion sets); this fixture tracks that message verbatim so the fingerprint
+// invariant stays load-bearing.
 const SNAPPOLL_EVIDENCE = {
   command: 'implement',
   exitDescriptor: `failed post-exit: ${SNAPPOLL_CLASSIFIER} (process exit 0)`,
   outputTail: '(no output on either stream)',
   reason:
-    'Phase "implement" produced no product-code changes — all changed files are under excluded prefixes [specs/]. Implement must modify at least one non-excluded file.',
+    'Phase "implement" produced no product-code changes — every file touched by the phase\'s own ' +
+    'commits (since startsha) is under an excluded prefix [specs/] ' +
+    'or is an excluded agent-context file [CLAUDE.md, AGENTS.md, GEMINI.md, .github/copilot-instructions.md]. ' +
+    'Own-commit files: [specs/942/tasks.md]. Implement must modify at least one product file.',
 };
 
 const SNAPPOLL_FINGERPRINT = computeFailureFingerprint({
@@ -115,6 +121,11 @@ function createContext(): WorkerContext {
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
       // Return only spec-prefixed files to trigger the no-product-code-changes classifier.
       getFilesChangedBetween: vi.fn().mockResolvedValue(['specs/942/tasks.md']),
+      // #1107: phase-scoped guard captures a start ref then measures the
+      // branch's own commits. Return spec-only own-commit files so the guard
+      // hits the genuine no-product-code-changes surface.
+      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['specs/942/tasks.md']),
     } as any,
     logger: mockLogger,
     signal: new AbortController().signal,

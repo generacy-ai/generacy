@@ -557,4 +557,13 @@ export interface PhaseTracker {
    */
   isDuplicateRaw(key: string): Promise<boolean>;
   markProcessedRaw(key: string): Promise<void>;
+  /**
+   * Raw-key arbitrary-string get/set/clear (#1107). Unlike the boolean
+   * mark/isDuplicate pair, these store and return an opaque string value with
+   * an explicit TTL. Used by the implement-phase product-diff guard to persist
+   * the phase-start commit ref across increments.
+   */
+  getValueRaw(key: string): Promise<string | null>;
+  setValueRaw(key: string, value: string, ttlSeconds: number): Promise<void>;
+  clearRaw(key: string): Promise<void>;
 }

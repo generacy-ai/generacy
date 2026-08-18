@@ -1393,6 +1393,43 @@ export class GhCliGitHubClient implements GitHubClient {
     return result.stdout.split('\n').filter(Boolean);
   }
 
+  async getCurrentCommitSha(): Promise<string> {
+    const result = await executeCommand('git', [
+      'rev-parse', 'HEAD',
+    ], { cwd: this.workdir });
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git rev-parse HEAD failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    return result.stdout.trim();
+  }
+
+  async getFilesChangedByOwnCommits(startRef: string): Promise<string[]> {
+    const result = await executeCommand('git', [
+      'log', '--first-parent', '--no-merges', '--name-only', '--pretty=format:',
+      `${startRef}..HEAD`,
+    ], { cwd: this.workdir });
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git log --first-parent --no-merges --name-only ${startRef}..HEAD failed ` +
+          `(exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    const seen = new Set<string>();
+    for (const line of result.stdout.split('\n')) {
+      const path = line.trim();
+      if (path) {
+        seen.add(path);
+      }
+    }
+    return [...seen];
+  }
+
   // ==========================================================================
   // Alias Methods (convenience wrappers)
   // ==========================================================================

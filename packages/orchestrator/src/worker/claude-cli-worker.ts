@@ -665,6 +665,7 @@ export class ClaudeCliWorker {
         jobEventEmitter: this.jobEventEmitter,
         ...(validateFixHandler ? { validateFixHandler } : {}),
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
+        ...(this.phaseTracker ? { phaseTracker: this.phaseTracker } : {}),
         phaseAfterHandlers: [
           // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
           async () => {

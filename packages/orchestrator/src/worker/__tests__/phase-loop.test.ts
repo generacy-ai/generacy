@@ -83,9 +83,15 @@ function createMockContext(startPhase: WorkflowPhase = 'validate'): WorkerContex
     } as any,
     startPhase,
     // Default github mocks satisfy the implement product-diff check with a
-    // non-spec (product) file. Individual tests may override.
+    // non-spec (product) file. The phase-scoped guard (#1107) captures a start
+    // ref via getCurrentCommitSha and measures the own-commit diff via
+    // getFilesChangedByOwnCommits. Individual tests may override.
     github: {
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getFilesChangedByOwnCommits: vi
+        .fn()
+        .mockResolvedValue(['packages/orchestrator/src/foo.ts']),
       getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
     } as any,
     logger: mockLogger,
@@ -1013,10 +1019,12 @@ describe('PhaseLoop - #915 classifier reason surfacing', () => {
 
   it('no-product-code-changes guard (:630) surfaces classifier reason and rewords descriptor', async () => {
     const context = createMockContext('implement');
-    // Override github to return ONLY excluded (spec) files → guard fires.
+    // Override github so the phase's OWN-commit diff is ONLY excluded (spec)
+    // files → guard fires no-product-code-changes.
     context.github = {
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getFilesChangedBetween: vi.fn().mockResolvedValue([
+      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getFilesChangedByOwnCommits: vi.fn().mockResolvedValue([
         'specs/915-found-during-cockpit-v1/tasks.md',
         'specs/915-found-during-cockpit-v1/plan.md',
       ]),
@@ -1060,10 +1068,14 @@ describe('PhaseLoop - #915 classifier reason surfacing', () => {
 
   it('product-diff-error catch (:600) surfaces classifier reason and rewords descriptor', async () => {
     const context = createMockContext('implement');
-    // resolveBaseRef → throws via getDefaultBranch rejection.
+    // Phase-scoped diff computation throws (own-commit git log fails) →
+    // detection failure routes to the product-diff-error classifier.
     context.github = {
-      getDefaultBranch: vi.fn().mockRejectedValue(new Error('network unreachable')),
-      getFilesChangedBetween: vi.fn(),
+      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getFilesChangedByOwnCommits: vi
+        .fn()
+        .mockRejectedValue(new Error('network unreachable')),
     } as any;
     const config = createConfig({ maxImplementRetries: 0 });
 
