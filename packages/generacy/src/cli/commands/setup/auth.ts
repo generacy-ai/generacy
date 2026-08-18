@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getLogger } from '../../utils/logger.js';
 import { exec, execSafe } from '../../utils/exec.js';
+import { jitCredentialHelperActive } from './jit-credentials.js';
 
 /**
  * Auth configuration resolved from CLI args and environment variables.
@@ -71,8 +72,19 @@ export function setupAuthCommand(): Command {
         }
       }
 
+      // Wizard clusters authenticate via the JIT credential helper; the only
+      // GH_TOKEN in their environment is the 1-hour activation token, and
+      // configuring it statically here would replace never-stale JIT auth
+      // with a token that dies within the hour. See jit-credentials.ts.
+      const jitActive = jitCredentialHelperActive();
+      if (jitActive) {
+        logger.info(
+          'JIT git credential helper active (wizard mode) — skipping static git/gh credential configuration',
+        );
+      }
+
       // Step 2: Configure git credential helper
-      if (config.token) {
+      if (config.token && !jitActive) {
         exec('git config --global credential.helper store');
 
         const home = homedir();
@@ -85,14 +97,14 @@ export function setupAuthCommand(): Command {
           { mode: 0o600 },
         );
         logger.info('Git credentials configured for github.com');
-      } else {
+      } else if (!config.token) {
         logger.warn(
           'GH_TOKEN not set — git push/pull to private repos will require manual authentication',
         );
       }
 
       // Step 3: Configure gh CLI auth
-      if (config.token) {
+      if (config.token && !jitActive) {
         const authCheck = execSafe('gh auth status');
         if (authCheck.ok) {
           logger.info('GitHub CLI authenticated via GH_TOKEN env var');
