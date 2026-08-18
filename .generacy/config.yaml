@@ -11,12 +11,12 @@ orchestrator:
       speckit-feature:
         phases:
           plan:
-            model: claude-fable-5
+            model: claude-opus-4-8
             effort: high
       speckit-bugfix:
         phases:
           plan:
-            model: claude-fable-5
+            model: claude-opus-4-8
             effort: high
 cockpit:
   auto:
