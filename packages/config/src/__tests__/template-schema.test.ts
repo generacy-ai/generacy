@@ -6,6 +6,7 @@ import {
   OrchestratorSettingsSchema,
   TemplateConfigSchema,
   WorkflowAgentEntriesSchema,
+  WorkflowOverrideSchema,
 } from '../template-schema.js';
 
 describe('TemplateConfigSchema', () => {
@@ -168,6 +169,80 @@ describe('OrchestratorSettingsSchema', () => {
   it('TemplateConfigSchema accepts missing orchestrator key', () => {
     const result = TemplateConfigSchema.parse({ repos: { primary: 'generacy' } });
     expect(result.orchestrator).toBeUndefined();
+  });
+});
+
+describe('orchestrator.workflows overrides (issue #1122)', () => {
+  it('parses a valid workflows block (feature + bugfix, with review)', () => {
+    const result = OrchestratorSettingsSchema.parse({
+      workflows: {
+        'speckit-feature': {
+          validateCommand: 'pnpm test && pnpm build',
+          maxRemediations: 3,
+          review: { profile: 'standard', blockingSeverity: 'major', failThenPass: false },
+        },
+        'speckit-bugfix': {
+          preValidateCommand: '',
+          maxRemediations: 2,
+          review: { profile: 'verification', blockingSeverity: 'minor' },
+        },
+      },
+    });
+    expect(result.workflows?.['speckit-feature']?.validateCommand).toBe('pnpm test && pnpm build');
+    expect(result.workflows?.['speckit-feature']?.review?.blockingSeverity).toBe('major');
+    expect(result.workflows?.['speckit-bugfix']?.review?.profile).toBe('verification');
+  });
+
+  it('rejects maxRemediations: -1 (.int().min(0)) — SC-004', () => {
+    expect(() =>
+      WorkflowOverrideSchema.parse({ maxRemediations: -1 }),
+    ).toThrow();
+  });
+
+  it('rejects review.profile: aggressive (enum) — SC-004', () => {
+    expect(() =>
+      WorkflowOverrideSchema.parse({ review: { profile: 'aggressive' } } as unknown as Record<string, unknown>),
+    ).toThrow();
+  });
+
+  it('rejects an unknown key inside workflows.<name> (.strict()) — SC-004, US3 AC-2', () => {
+    let caught: unknown;
+    try {
+      WorkflowOverrideSchema.parse({ unknownKey: 'x' } as unknown as Record<string, unknown>);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).toContain('unknownKey');
+  });
+
+  it('rejects an unknown key inside review (.strict())', () => {
+    let caught: unknown;
+    try {
+      WorkflowOverrideSchema.parse({
+        review: { unknownKey: 'x' } as unknown as Record<string, unknown>,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).toContain('unknownKey');
+  });
+
+  it('round-trips preValidateCommand: "" as "" — US1 AC-3', () => {
+    const result = WorkflowOverrideSchema.parse({ preValidateCommand: '' });
+    expect(result.preValidateCommand).toBe('');
+  });
+
+  it('round-trips maxRemediations: 0 as 0 (distinct from absent) — FR-002', () => {
+    const result = WorkflowOverrideSchema.parse({ maxRemediations: 0 });
+    expect(result.maxRemediations).toBe(0);
+  });
+
+  it('config with no workflows key still parses unchanged — US3 AC-1', () => {
+    const result = OrchestratorSettingsSchema.parse({ labelMonitor: true });
+    expect(result.workflows).toBeUndefined();
+    expect(result.labelMonitor).toBe(true);
   });
 });
 

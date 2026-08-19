@@ -74,6 +74,37 @@ export const AgentsConfigSchema = z
   .strict();
 export type AgentsConfig = z.infer<typeof AgentsConfigSchema>;
 
+/**
+ * Per-workflow review-phase tuning under `orchestrator.workflows.<name>.review`.
+ * All fields optional and resolve independently — a workflow may override only
+ * `blockingSeverity` and inherit `profile`/`failThenPass` from the built-in
+ * default. `.strict()` rejects unknown keys at parse time.
+ */
+export const WorkflowReviewSchema = z
+  .object({
+    profile: z.enum(['standard', 'verification']).optional(),
+    blockingSeverity: z.enum(['critical', 'major', 'minor']).optional(),
+    failThenPass: z.boolean().optional(),
+  })
+  .strict();
+export type WorkflowReview = z.infer<typeof WorkflowReviewSchema>;
+
+/**
+ * Per-workflow orchestrator overrides under `orchestrator.workflows.<name>`.
+ * Lets a target repo vary `validateCommand` / `preValidateCommand` /
+ * `maxRemediations` / `review` per workflow (e.g. `speckit-feature` vs
+ * `speckit-bugfix`). All fields optional; `.strict()` rejects unknown keys.
+ */
+export const WorkflowOverrideSchema = z
+  .object({
+    validateCommand: z.string().optional(),
+    preValidateCommand: z.string().optional(),
+    maxRemediations: z.number().int().min(0).optional(),
+    review: WorkflowReviewSchema.optional(),
+  })
+  .strict();
+export type WorkflowOverride = z.infer<typeof WorkflowOverrideSchema>;
+
 export const OrchestratorSettingsSchema = z.object({
   labelMonitor: z.boolean().optional(),
   webhookSetup: z.boolean().optional(),
@@ -97,6 +128,13 @@ export const OrchestratorSettingsSchema = z.object({
    * pr-feedback (bound to `implement`). See `AgentsConfigSchema`.
    */
   agents: AgentsConfigSchema.optional(),
+  /**
+   * Per-workflow overrides for `validateCommand` / `preValidateCommand` /
+   * `maxRemediations` / `review`. Keyed by workflow name (`speckit-feature`,
+   * `speckit-bugfix`, …). Resolved workflow-level > repo-level > cluster default
+   * by `resolveWorkflowOverrides` in the orchestrator. See `WorkflowOverrideSchema`.
+   */
+  workflows: z.record(z.string(), WorkflowOverrideSchema).optional(),
 });
 
 export const TemplateConfigSchema = z.object({
