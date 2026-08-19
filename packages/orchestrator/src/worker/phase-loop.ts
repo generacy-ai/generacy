@@ -362,8 +362,16 @@ export class PhaseLoop {
       // key.
       let phaseStartRef: string | undefined;
       const phaseStartRefBranch = context.branch ?? 'no-branch';
-      const phaseStartRefKey = PHASES_REQUIRING_CHANGES.has(phase)
+      const requiresChanges = PHASES_REQUIRING_CHANGES.has(phase);
+      const phaseStartRefKey = requiresChanges
         ? `phase-start-ref:${context.item.owner}:${context.item.repo}:${context.item.issueNumber}:${phaseStartRefBranch}:${phase}`
+        : undefined;
+      // Legacy (pre-#1110) key omits the branch component. Refs written by the
+      // pre-#1110 build are never read by the branch-scoped key and would linger
+      // to their 7-day TTL, so on a branch-scoped miss we read through to the
+      // legacy key once, migrate a valid value, then consume it (#1112 FR-001/2).
+      const legacyPhaseStartRefKey = requiresChanges
+        ? `phase-start-ref:${context.item.owner}:${context.item.repo}:${context.item.issueNumber}:${phase}`
         : undefined;
       if (phaseStartRefKey !== undefined) {
         try {
@@ -372,7 +380,50 @@ export class PhaseLoop {
           // empty string would silently invert the guard: `git log <empty>..HEAD`
           // parses as `HEAD..HEAD` → empty file list → a legitimate implement
           // phase that wrote real code is reported as `no product-code changes`.
-          const existing = isValidCommitSha(rawExisting) ? rawExisting : null;
+          let existing = isValidCommitSha(rawExisting) ? rawExisting : null;
+
+          // FR-001/FR-002: lazy legacy read-through on a branch-scoped miss.
+          if (existing === null && legacyPhaseStartRefKey !== undefined) {
+            const rawLegacy = await deps.phaseTracker?.getValueRaw(legacyPhaseStartRefKey);
+            if (rawLegacy != null) {
+              const legacyValid = isValidCommitSha(rawLegacy) ? rawLegacy : null;
+              if (legacyValid !== null) {
+                // Q1=A: re-persist under the branch-scoped key BEFORE clearing legacy.
+                await deps.phaseTracker?.setValueRaw(
+                  phaseStartRefKey, legacyValid, PHASE_START_REF_TTL_SECONDS,
+                );
+                existing = legacyValid;
+                this.logger.info(
+                  { phase },
+                  'migrated legacy phase-start-ref to branch-scoped key',
+                );
+              } else {
+                this.logger.warn(
+                  { phase },
+                  'legacy phase-start-ref failed SHA-shape check — discarding',
+                );
+              }
+              // Q3=A: consume-once — clear on ANY legacy read (accepted or
+              // rejected), after the branch write. Post-#1110 nothing re-creates
+              // the unbranched key, so a rejected value can never become valid.
+              await deps.phaseTracker?.clearRaw(legacyPhaseStartRefKey);
+            }
+          }
+
+          // FR-003/FR-004: a shape-valid ref may still not resolve in this
+          // checkout (e.g. an unpushed base-merge commit after re-entry on a
+          // fresh clone). Verify a reused ref before anchoring the diff window;
+          // commit-missing → treat as absent and re-capture. A non-commit-missing
+          // git fault throws → caught below → phaseStartRef undefined →
+          // product-diff-error (FR-005, preserved for free).
+          if (existing !== null && !(await context.github.commitExistsInCheckout(existing))) {
+            this.logger.warn(
+              { phase, ref: existing },
+              'persisted phase-start-ref does not resolve in this checkout — re-capturing',
+            );
+            existing = null;
+          }
+
           if (existing === null) {
             const captured = await context.github.getCurrentCommitSha();
             if (!isValidCommitSha(captured)) {

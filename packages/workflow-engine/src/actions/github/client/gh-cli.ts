@@ -1430,6 +1430,19 @@ export class GhCliGitHubClient implements GitHubClient {
     return [...seen];
   }
 
+  async commitExistsInCheckout(sha: string): Promise<boolean> {
+    const result = await executeCommand('git', [
+      'rev-parse', '--verify', '--quiet', `${sha}^{commit}`,
+    ], { cwd: this.workdir });
+
+    if (result.exitCode === 0) return true;
+    if (result.exitCode === 1) return false; // commit-missing (FR-003, Q4=B)
+    throw new Error(
+      `git rev-parse --verify --quiet ${sha}^{commit} failed ` +
+        `(exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+
   // ==========================================================================
   // Alias Methods (convenience wrappers)
   // ==========================================================================
