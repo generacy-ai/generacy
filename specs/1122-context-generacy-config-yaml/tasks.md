@@ -10,7 +10,7 @@
 
 ## Phase 1: Config Schema Extension (`@generacy-ai/config`)
 
-- [ ] T001 [US1] [US2] [US3] In `packages/config/src/template-schema.ts`, add two new
+- [X] T001 [US1] [US2] [US3] In `packages/config/src/template-schema.ts`, add two new
       `.strict()` Zod schemas **above** `OrchestratorSettingsSchema`:
       - `WorkflowReviewSchema` = `{ profile?: z.enum(['standard','verification']),
         blockingSeverity?: z.enum(['critical','major','minor']), failThenPass?: z.boolean() }`
@@ -23,13 +23,13 @@
       Leave `OrchestratorSettingsSchema` as a plain `z.object` (do not add `.strict()` — matches
       today). (FR-001, FR-002, FR-003, FR-008, FR-009)
 
-- [ ] T002 [US1] [US2] In `packages/config/src/index.ts`, re-export the new public surface:
+- [X] T002 [US1] [US2] In `packages/config/src/index.ts`, re-export the new public surface:
       `WorkflowReviewSchema`, `WorkflowOverrideSchema`, and the `WorkflowReview`,
       `WorkflowOverride` types. (FR-001; contracts/config-surface.md)
 
 ## Phase 2: Resolver (`@generacy-ai/orchestrator`)
 
-- [ ] T003 [US1] [US2] [US3] In `packages/orchestrator/src/worker/config.ts`, add siblings to
+- [X] T003 [US1] [US2] [US3] In `packages/orchestrator/src/worker/config.ts`, add siblings to
       `applyRepoValidateOverrides` / `resolveAgentForPhase`:
       - `export const DEFAULT_REVIEW = { profile: 'standard', blockingSeverity: 'critical',
         failThenPass: false } as const;`
@@ -55,7 +55,7 @@
 
 ## Phase 3: Tests
 
-- [ ] T004 [P] [US1] [US2] [US3] Extend `packages/config/src/__tests__/template-schema.test.ts`
+- [X] T004 [P] [US1] [US2] [US3] Extend `packages/config/src/__tests__/template-schema.test.ts`
       with parse/validation cases:
       - Valid `workflows` block (feature + bugfix, with `review`) parses.
       - `workflows.<name>.maxRemediations: -1` throws (`.int().min(0)`) — SC-004.
@@ -66,7 +66,7 @@
       - `maxRemediations: 0` round-trips as `0` (distinct from absent) — FR-002.
       - Config with no `workflows` key still parses unchanged — US3 AC-1.
 
-- [ ] T005 [P] [US1] [US2] [US3] Create `packages/orchestrator/src/worker/__tests__/resolve-workflow-overrides.test.ts`
+- [X] T005 [P] [US1] [US2] [US3] Create `packages/orchestrator/src/worker/__tests__/resolve-workflow-overrides.test.ts`
       covering the resolver (SC-001..SC-005):
       - SC-001: `settings = null` / no `workflows` → validate commands equal cluster
         `config` defaults; `maxRemediations` = 3 for `speckit-feature`, 2 for `speckit-bugfix`;
@@ -82,13 +82,13 @@
 
 ## Phase 4: Changeset & Verification
 
-- [ ] T006 [US1] [US2] [US3] Add `.changeset/1122-per-workflow-orchestrator-overrides.md` as a
+- [X] T006 [US1] [US2] [US3] Add `.changeset/1122-per-workflow-orchestrator-overrides.md` as a
       **newly added** file: `@generacy-ai/config` **minor** (new `orchestrator.workflows` config
       vocabulary + new public schema/type exports), `@generacy-ai/orchestrator` **patch** (new
       internal resolver, no public export/behavior change). Single file, both bumps. Required
       because `template-schema.ts` and `config.ts` are non-test `src/` changes.
 
-- [ ] T007 [US3] Verification: run `pnpm --filter @generacy-ai/config --filter @generacy-ai/orchestrator build`,
+- [X] T007 [US3] Verification: run `pnpm --filter @generacy-ai/config --filter @generacy-ai/orchestrator build`,
       the two new/updated test files (`pnpm --filter @generacy-ai/config test` +
       `pnpm --filter @generacy-ai/orchestrator test -- resolve-workflow-overrides`), and lint.
       Confirm SC-001..SC-005 pass and no existing `applyRepoValidateOverrides` /
