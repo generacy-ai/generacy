@@ -84,7 +84,7 @@ export const DEFAULT_PROVIDER = 'claude-code';
  */
 export const GateDefinitionSchema = z.object({
   /** Phase that triggers gate check */
-  phase: z.enum(['specify', 'clarify', 'plan', 'tasks', 'implement', 'validate'] as const satisfies readonly WorkflowPhase[]),
+  phase: z.enum(['specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate', 'remediate'] as const satisfies readonly WorkflowPhase[]),
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
@@ -114,6 +114,8 @@ export const PhaseTimeoutOverridesSchema = z
     plan: z.number().int().min(60_000).default(3_600_000),
     tasks: z.number().int().min(60_000).optional(),
     implement: z.number().int().min(60_000).default(3_600_000),
+    review: z.number().int().min(60_000).optional(),
+    remediate: z.number().int().min(60_000).optional(),
   })
   .default({});
 export type PhaseTimeoutOverrides = z.infer<typeof PhaseTimeoutOverridesSchema>;
@@ -124,6 +126,12 @@ export type PhaseTimeoutOverrides = z.infer<typeof PhaseTimeoutOverridesSchema>;
 export const WorkerConfigSchema = z.object({
   /** Fallback timeout per phase in milliseconds (used when no per-phase override applies) */
   phaseTimeoutMs: z.number().int().min(60_000).default(1_200_000),
+  /**
+   * Feature flag for the `review` phase (#1121). Default false: a live run
+   * skips `review` before any label/comment/journal side effect, keeping
+   * observable behavior byte-identical. Wired from `WORKER_REVIEW_PHASE_ENABLED`.
+   */
+  reviewPhaseEnabled: z.boolean().default(false),
   /** Per-phase timeout overrides keyed by phase name */
   phaseTimeoutOverrides: PhaseTimeoutOverridesSchema,
   /** Base directory for repo checkouts */
@@ -291,7 +299,7 @@ function mergeAgentsConfig(
       }
       // Both defined — merge default + phases field-by-field
       const mergedWorkflowDefault = mergeAgentEntry(b?.default, o?.default);
-      const phaseKeys = ['specify', 'clarify', 'plan', 'tasks', 'implement', 'validate'] as const;
+      const phaseKeys = ['specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate', 'remediate'] as const;
       const mergedPhases: Record<string, AgentsConfig['default']> = {};
       let anyPhase = false;
       for (const phase of phaseKeys) {

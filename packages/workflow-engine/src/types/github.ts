@@ -195,7 +195,9 @@ export type CorePhase =
   | 'plan'
   | 'tasks'
   | 'implement'
-  | 'validate';
+  | 'review'
+  | 'validate'
+  | 'remediate';
 
 /**
  * Workflow stages for stage comments
