@@ -147,6 +147,50 @@ describe('applyScopeMutation — remove', () => {
   });
 });
 
+// #1106 Q2=B — GitHub owner/repo names are case-insensitive. `lineMatchesRef`
+// must compare owner/repo case-insensitively so a body listing
+// `Painworth/doc-intel#24` and an incoming ref `painworth/doc-intel#24` are
+// treated as the same entry (idempotency on add, no-op on remove).
+describe('#1106 case-insensitive owner/repo comparison', () => {
+  it('add is noop when body has same ref with different owner casing', () => {
+    const body = '- [ ] Painworth/doc-intel#24\n';
+    const result = applyScopeMutation(body, {
+      kind: 'add',
+      ref: ref('painworth/doc-intel', 24),
+    });
+    expect(result.noop).toBe(true);
+    expect(result.body).toBe(body);
+  });
+
+  it('add is noop when body has same ref with different repo casing', () => {
+    const body = '- [ ] owner/Repo#5\n';
+    const result = applyScopeMutation(body, {
+      kind: 'add',
+      ref: ref('owner/repo', 5),
+    });
+    expect(result.noop).toBe(true);
+  });
+
+  it('remove finds and deletes line when body casing differs from ref casing', () => {
+    const body = '- [ ] Painworth/doc-intel#24\n- [ ] owner/other#7\n';
+    const result = applyScopeMutation(body, {
+      kind: 'remove',
+      ref: ref('painworth/doc-intel', 24),
+    });
+    expect(result.noop).toBe(false);
+    expect(result.body).toBe('- [ ] owner/other#7\n');
+  });
+
+  it('add on a phased body with mixed-case existing ref does not append duplicate', () => {
+    const body = '### Phase 1\n- [ ] Painworth/doc-intel#24\n';
+    const result = applyScopeMutation(body, {
+      kind: 'add',
+      ref: ref('painworth/doc-intel', 24),
+    });
+    expect(result.noop).toBe(true);
+  });
+});
+
 describe('invariants', () => {
   it('I-5 round-trip: add then remove leaves body content-equivalent', () => {
     const bodies = [

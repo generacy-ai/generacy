@@ -175,6 +175,68 @@ describe('webhookToStreamEvent — Q1=A mapping table', () => {
     ).toBeNull();
   });
 
+  // #1106 Q2=B — owner/repo membership checks must be case-insensitive. Set
+  // was built from operator-typed epic body (`o/r`); webhook payload carries
+  // GitHub-canonical casing (`O/R`). A case-sensitive check drops every event.
+  it('#1106 refSet lowercase vs. payload uppercase owner/repo → still matches', () => {
+    const body = {
+      repository: { name: 'R', owner: { login: 'O' } },
+      issue: { number: 42, labels: [{ name: 'foo' }] },
+      label: { name: 'foo' },
+    };
+    const result = webhookToStreamEvent('issues', 'labeled', body, refSetOf(), ts);
+    expect(result).not.toBeNull();
+    const ev = result as CockpitEventValidated;
+    expect(ev.event).toBe('label-change');
+    // Payload casing is preserved in the emitted event (repo/url).
+    expect(ev.repo).toBe('O/R');
+    expect(ev.url).toBe('https://github.com/O/R/issues/42');
+  });
+
+  // The RefSetView invariant (owned by smee-source.ts::buildRefSet) is that
+  // set entries are lowercased. This test pins the query-side normalization
+  // in webhook-to-event.ts against the invariant: any payload casing must hit
+  // a lowercased set entry. See smee-source-reconnect.test.ts for the
+  // producer-side invariant assertion.
+  it('#1106 mixed-case payload owner AND repo → still matches lowercased set', () => {
+    const body = {
+      repository: { name: 'R', owner: { login: 'O' } },
+      issue: { number: 42, labels: [] },
+      label: { name: 'foo' },
+    };
+    const result = webhookToStreamEvent('issues', 'labeled', body, refSetOf(), ts);
+    expect(result).not.toBeNull();
+  });
+
+  it('#1106 pull_request case mismatch — still matches', () => {
+    const body = {
+      repository: { name: 'R', owner: { login: 'O' } },
+      pull_request: { number: 43, merged: true },
+    };
+    const result = webhookToStreamEvent(
+      'pull_request',
+      'closed',
+      body,
+      refSetOf(),
+      ts,
+    );
+    expect(result).not.toBeNull();
+    const ev = result as CockpitEventValidated;
+    expect(ev.event).toBe('pr-merged');
+  });
+
+  it('#1106 check_run case mismatch — still matches', () => {
+    const body = {
+      repository: { name: 'R', owner: { login: 'O' } },
+      check_run: { pull_requests: [{ number: 43 }] },
+    };
+    const result = webhookToStreamEvent('check_run', 'completed', body, refSetOf(), ts);
+    expect(result).not.toBeNull();
+    const arr = Array.isArray(result) ? result : [result];
+    expect(arr).toHaveLength(1);
+    expect(arr[0]?.event).toBe('pr-checks');
+  });
+
   it('issues.opened → null (out of scope)', () => {
     const body = { ...repoBody(), issue: { number: 42, labels: [] } };
     expect(
