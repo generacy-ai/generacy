@@ -21,7 +21,11 @@ comment (line not in the diff), what should the engine do?
 - C: Drop the finding's anchor silently and always place unanchored + undiffable
      findings in the body, treating "postable inline" as the anchor test.
 
-**Answer**: *Pending*
+**Answer**: A — A finding whose valid anchor points outside the PR diff falls back to
+rendering in the review body (referencing its intended file/line) and is never dropped.
+The engine pre-checks diffability and renders non-postable findings in the body, because
+a bad inline anchor 422s the entire atomic review submission (#1047). B wastes a round
+and risks a double-post; C's silent anchor-drop is the anti-pattern.
 
 ### Q2: Finding→thread identity for resolution
 **Context**: FR-009 resolves inline threads for findings the artifact marks resolved on
@@ -39,7 +43,11 @@ thread it created earlier?
 - C: The #1124 artifact already carries the GitHub thread ID (persisted after the first
      post); resolution just reads it — no re-matching needed in this feature.
 
-**Answer**: *Pending*
+**Answer**: A — Embed the #1124 artifact's stable per-finding marker/ID in each inline
+comment body and match on it when resolving threads on re-review. `getPRReviewThreads`
+returns comment bodies, so a marker grep maps a resolved artifact finding to its thread
+across rounds. Path+line equality (B) is fragile (lines drift between commits and can
+collide); the artifact is produced before posting, so it cannot carry GitHub thread IDs (C).
 
 ### Q3: Draft-conversion gating on remediate entry
 **Context**: US3/FR-006 converts the PR back to draft "when entering remediate after the
@@ -57,7 +65,11 @@ ready.
 - C: Query the PR's live draft state and convert only if it is currently ready,
      regardless of who marked it.
 
-**Answer**: *Pending*
+**Answer**: B — Convert the PR back to draft on remediate entry only if the engine itself
+previously marked it ready (tracked flag); never touch a PR the engine did not mark ready.
+US3 scopes the transition to "after the PR was marked ready" by the engine (FR-005/007),
+and the invariant is don't disturb PRs the engine doesn't own — a human-marked-ready PR
+must be left alone. This rules out unconditional (A) and live-state-only (C) conversion.
 
 ### Q4: Round-level re-post idempotency
 **Context**: FR-003 notes the engine marker enables "idempotency checks," and US1
@@ -74,7 +86,11 @@ post a second review, and how is a round identified for that check?
 - C: Dedupe only the review body, but always (re-)post inline threads, relying on
      GitHub's own anchor de-duplication.
 
-**Answer**: *Pending*
+**Answer**: A — Before posting, grep existing engine reviews by marker + round number and
+skip if that round is already posted. FR-003 explicitly adds the marker and round number
+to enable idempotency checks, and the re-entrant-posting invariant requires surviving a
+mid-review restart. #1124 only guarantees the artifact, not GitHub-side single-post (B);
+C would duplicate inline threads.
 
 ### Q5: "Clean verdict" and advisory-only findings
 **Context**: FR-005 marks the PR ready on a "clean verdict"; FR-004 distinguishes
@@ -93,4 +109,9 @@ advisory-only count as clean?
 - C: Any finding at all (advisory or blocking) means not-clean; ready only when the
      artifact has zero findings.
 
-**Answer**: *Pending*
+**Answer**: A — The single explicit `verdict: clean|changes-required` field on the #1124
+artifact is the sole driver of mark-ready/stay-draft; this feature never re-derives it.
+The engine-owns-the-verdict invariant and #1124's contract ("consumes the artifact and
+does not compute the verdict") forbid re-derivation, and #1124 already folds advisory-only
+into `verdict=clean` via blockingSeverity gating. Deriving from per-finding severity (B)
+or counting any finding as not-clean (C) both violate the contract.

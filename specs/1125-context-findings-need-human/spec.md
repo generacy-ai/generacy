@@ -105,13 +105,15 @@ corresponding finding resolved on a verification (re-review) pass,
 |----|-------------|----------|-------|
 | FR-001 | Post each review round as exactly one PR review using the `COMMENT` event. | P1 | Own-PR `REQUEST_CHANGES` → 422; never emit that event. |
 | FR-002 | Post findings with a file/line anchor as inline review threads at that anchor; render findings without an anchor in the review body. | P1 | Anchors come from the findings artifact (#1124). |
-| FR-003 | Include a machine-greppable engine-authored marker and the round number in every engine review body. | P1 | Marker enables later exclusion of engine threads from the PR-feedback monitor (#1130) and idempotency checks. |
+| FR-002a | Pre-check anchor diffability before posting; a finding whose anchor points outside the PR diff falls back to the review body (referencing its intended file/line) and is never dropped. | P1 | [Q1→A] A bad inline anchor 422s the whole atomic review (#1047); "postable inline" is decided by the diffability pre-check, not by anchor presence alone. |
+| FR-003 | Include a machine-greppable engine-authored marker and the round number in every engine review body, plus a stable per-finding marker/ID (from the #1124 artifact) in each inline comment body. | P1 | [Q2→A] Per-finding marker enables cross-round thread matching (FR-009); body marker+round enables monitor exclusion (#1130) and round-level idempotency (FR-010). |
 | FR-004 | Mark advisory (sub-blocking) findings as clearly non-blocking, visually distinct from blocking findings. | P1 | Severity/blocking classification comes from the artifact. |
-| FR-005 | On a clean verdict, call `markReadyForReview` at the end of the review phase, before validate starts. | P1 | Reuses existing `worker/pr-manager.ts` method. |
-| FR-006 | Add a `convertPullRequestToDraft` (GraphQL) capability to the GitHub client and call it when entering remediate after the PR was marked ready. | P2 | New client method; GraphQL mutation. |
+| FR-005 | On a clean verdict, call `markReadyForReview` at the end of the review phase, before validate starts. | P1 | [Q5→A] "Clean verdict" = the artifact's explicit `verdict: clean` field; this feature never re-derives it from per-finding severity. Reuses existing `worker/pr-manager.ts` method. |
+| FR-006 | Add a `convertPullRequestToDraft` (GraphQL) capability to the GitHub client and call it on remediate entry **only if the engine itself previously marked the PR ready** (engine-tracked flag). | P2 | [Q3→B] Never touch a PR the engine did not mark ready (e.g., human-marked-ready). New client method; GraphQL mutation. |
 | FR-007 | Re-mark the PR ready on the next clean verdict after a draft conversion. | P2 | Same path as FR-005. |
 | FR-008 | Make ready↔draft transitions and thread resolution idempotent and best-effort — failures log a warning and do not fail the workflow. | P1 | Mirrors existing `markReadyForReview` semantics. |
-| FR-009 | On verification (re-review) passes, resolve inline threads for findings the artifact marks resolved via `resolveReviewThread`. | P2 | Existing mutation; artifact drives which threads resolve. |
+| FR-009 | On verification (re-review) passes, resolve inline threads for findings the artifact marks resolved via `resolveReviewThread`; match a resolved finding to its earlier thread by grepping the per-finding marker (FR-003) in `getPRReviewThreads` comment bodies. | P2 | [Q2→A] Marker match, not path+line equality (lines drift/collide). Existing mutation; artifact drives which threads resolve. |
+| FR-010 | Dedupe review posting per round: before posting, grep existing engine reviews by body marker + round number and skip if that round is already posted. | P1 | [Q4→A] Survives mid-review retry/worker restart; #1124 guarantees the artifact, not GitHub-side single-post. |
 
 ## Success Criteria
 
@@ -128,8 +130,18 @@ corresponding finding resolved on a verification (re-review) pass,
 
 - The review executor (#1124) produces a structured findings artifact (sidecar
   pattern) that, per finding, carries the finding text, an optional file/line anchor,
-  a blocking/advisory (severity) classification, and — on re-review — a resolved flag.
-  This feature consumes that artifact and does not compute the verdict.
+  a blocking/advisory (severity) classification, a stable per-finding marker/ID, and —
+  on re-review — a resolved flag. The artifact also carries a single explicit
+  `verdict: clean|changes-required` field [Q5→A]. This feature consumes that artifact
+  and does not compute or re-derive the verdict; #1124 already folds advisory-only
+  rounds into `verdict=clean` via its blocking-severity gating.
+- The engine tracks whether it marked the PR ready (a `markedReadyByEngine` flag) so
+  that remediate-entry draft conversion only fires on PRs the engine itself made ready,
+  leaving human-marked-ready PRs untouched [Q3→B].
+- A finding's anchor is only usable inline if it lands in the PR diff. The engine
+  pre-checks diffability and renders any anchored-but-undiffable finding in the review
+  body (referencing its intended file/line) rather than attempting an inline comment
+  that would 422 the whole review [Q1→A].
 - The round number is available from the review phase's loop iteration (review is a
   linear phase after implement; re-reviews are driven by the review⇄remediate loop).
 - `markReadyForReview` already exists (`worker/pr-manager.ts:424-446`) and is
