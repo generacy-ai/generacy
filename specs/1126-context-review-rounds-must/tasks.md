@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Create the module directory `packages/orchestrator/src/worker/review/` and its
+- [X] T001 Create the module directory `packages/orchestrator/src/worker/review/` and its
       test directory `packages/orchestrator/src/worker/review/__tests__/`. Add the changeset
       `.changeset/1126-verification-pass-convergence.md` — `@generacy-ai/orchestrator` **patch**
       (internal worker convergence logic + pause-context read-side field; no new public exports).
@@ -19,7 +19,7 @@
 
 ## Phase 2: Foundational (blocks all story work)
 
-- [ ] T002 [US1] Create the #1124 seam interface + severity helper in
+- [X] T002 [US1] Create the #1124 seam interface + severity helper in
       `packages/orchestrator/src/worker/review/findings-artifact.ts`: `Severity`
       (`'minor' | 'major' | 'critical'`), `FindingStatus`, `ReviewVerdict`, `ReviewFinding`,
       `FindingsArtifact` (per data-model.md). Add the `sev()` helper
@@ -36,23 +36,23 @@ artifact.
 status transitions, filter, verdict, and prompt content all pass against injected artifacts
 with no phase loop booted.
 
-- [ ] T003 [P] [US1] Implement `determineReviewMode(artifact?)` in
+- [X] T003 [P] [US1] Implement `determineReviewMode(artifact?)` in
       `packages/orchestrator/src/worker/review/review-mode.ts` (FR-001): absent / `round === 0` /
       no `lastReviewedSha` ⇒ `{ kind: 'full-review', round: 1 }`; else
       `{ kind: 'verification', round: artifact.round + 1 }`. Match the truth table in
       contracts/verification-pass.md.
 
-- [ ] T004 [P] [US1] Implement `composeVerificationInput(delta, artifact)` in
+- [X] T004 [P] [US1] Implement `composeVerificationInput(delta, artifact)` in
       `packages/orchestrator/src/worker/review/verification-input.ts` (FR-003): `deltaFiles =
       delta.files`; `openFindings = artifact.findings.filter(f => f.status === 'open')`. Enumerate
       ALL open findings even if outside the delta (Q2); do not filter here.
 
-- [ ] T005 [P] [US1] Implement `buildVerificationPrompt(parts)` in
+- [X] T005 [P] [US1] Implement `buildVerificationPrompt(parts)` in
       `packages/orchestrator/src/worker/review/verification-prompt.ts` (FR-004): output contains
       the literal round number (e.g. `Round 2`), each open finding's `title`/`detail` verbatim,
       and the verification-charter framing when `parts.charter === 'verification'` (SC-006).
 
-- [ ] T006 [P] [US1] Implement `computeReviewDelta(input)` in
+- [X] T006 [P] [US1] Implement `computeReviewDelta(input)` in
       `packages/orchestrator/src/worker/review/review-delta.ts` (FR-002 + FR-009 branches only;
       resolution branch lands in T013): base-selection order (2) artifact `lastReviewedSha` **and**
       `await commitExistsInCheckout(sha)` ⇒ `source: 'last-reviewed'`, head = `getCurrentCommitSha()`;
@@ -62,7 +62,7 @@ with no phase loop booted.
       A genuine git failure propagates; only a missing SHA (`commitExistsInCheckout === false`)
       triggers the fallback.
 
-- [ ] T007 [P] [US1] Implement the status machine in
+- [X] T007 [P] [US1] Implement the status machine in
       `packages/orchestrator/src/worker/review/findings-advance.ts`: `filterNewFindings(newFindings,
       round, blockingSeverity)` (FR-005 — round 1 keeps all; round ≥ 2 drops `sev < blockingSeverity`,
       returns `{ kept, dropped }`), `advanceArtifact(input)` (FR-006 — resolve delta-located addressed
@@ -71,24 +71,24 @@ with no phase loop booted.
       immutable), and `computeVerdict(artifact, blockingSeverity)` (FR-008 — `changes-required` iff any
       `open` finding `sev >= blockingSeverity`; else `clean`).
 
-- [ ] T008 [US1] Add barrel exports in `packages/orchestrator/src/worker/review/index.ts` for the
+- [X] T008 [US1] Add barrel exports in `packages/orchestrator/src/worker/review/index.ts` for the
       types and all pure functions from T002–T007.
 
-- [ ] T009 [P] [US1] Unit test `packages/orchestrator/src/worker/review/__tests__/review-mode.test.ts`
+- [X] T009 [P] [US1] Unit test `packages/orchestrator/src/worker/review/__tests__/review-mode.test.ts`
       (SC-001 mode selection) covering the full contract truth table.
 
-- [ ] T010 [P] [US1] Unit test `packages/orchestrator/src/worker/review/__tests__/review-delta.test.ts`
+- [X] T010 [P] [US1] Unit test `packages/orchestrator/src/worker/review/__tests__/review-delta.test.ts`
       (SC-001): last-reviewed base selected when `commitExistsInCheckout` true; identical SHAs ⇒ empty
       delta; missing/unresolvable SHA ⇒ `full-diff` fallback with `round` still `artifact.round + 1`;
       genuine git error propagates.
 
-- [ ] T011 [P] [US1] Unit test `packages/orchestrator/src/worker/review/__tests__/findings-advance.test.ts`
+- [X] T011 [P] [US1] Unit test `packages/orchestrator/src/worker/review/__tests__/findings-advance.test.ts`
       (SC-002/SC-003/SC-004): addressed delta-located open findings → `resolved`; unaddressed and
       non-delta open findings stay `open`; `resolved` never re-opened (Q1); new advisory findings
       dropped on round ≥ 2 and kept on round 1 (Q3); new blocking findings appended with correct
       round; `lastReviewedSha` advanced; verdict correctness.
 
-- [ ] T012 [P] [US1] Unit test
+- [X] T012 [P] [US1] Unit test
       `packages/orchestrator/src/worker/review/__tests__/verification-prompt.test.ts` (SC-006):
       assert the prompt contains the round number and each open finding's `title`/`detail` verbatim.
 
@@ -102,12 +102,12 @@ scoped to just the resolution diff (same verification charter, round still incre
 **Independent test**: `computeReviewDelta` with a `pauseContext` carrying resolution SHAs returns a
 `source: 'resolution'` delta excluding files untouched by the resolution.
 
-- [ ] T013 [US2] Extend `PauseContextSchema` in
+- [X] T013 [US2] Extend `PauseContextSchema` in
       `packages/orchestrator/src/worker/pause-context.ts` with optional
       `resolutionBaseSha?: string` and `resolutionHeadSha?: string` (both `.optional()`,
       non-breaking, read-side only — #1131 owns writing them).
 
-- [ ] T014 [US2] Add the resolution branch to `computeReviewDelta` in
+- [X] T014 [US2] Add the resolution branch to `computeReviewDelta` in
       `packages/orchestrator/src/worker/review/review-delta.ts` (FR-007): when
       `pauseContext.resolutionBaseSha && pauseContext.resolutionHeadSha` are both present, select
       `source: 'resolution'` with those SHAs (highest priority, before last-reviewed). Still returns
@@ -118,7 +118,7 @@ scoped to just the resolution diff (same verification charter, round still incre
 
 ## Phase 5: Integration — wire the convergence module through the phase loop
 
-- [ ] T015 [US1] Wire the `review` stub branch in
+- [X] T015 [US1] Wire the `review` stub branch in
       `packages/orchestrator/src/worker/phase-loop.ts` (`473-477`) through the convergence module:
       load/persist the artifact via `PhaseTracker.getValueRaw/setValueRaw/clearRaw` under the
       `review-findings:<owner>:<repo>:<issue>:<branch>` key (mirror the `phase-start-ref:` shape and
@@ -127,7 +127,7 @@ scoped to just the resolution diff (same verification charter, round still incre
       `advanceArtifact` → persist. Consume `ResolvedWorkflowConfig.review.blockingSeverity`
       (`config.ts:33`). Degrade to null/no-op when Redis is down (fresh full review, FR-009 posture).
 
-- [ ] T016 [US1/US2] Integration test
+- [X] T016 [US1/US2] Integration test
       `packages/orchestrator/src/worker/__tests__/phase-loop.verification-pass.test.ts` (SC-005):
       exercise the remediate re-review path AND the merge-conflict resolution-scoped path via the
       phase loop; assert the scoped input excludes unrelated files and that the artifact/`lastReviewedSha`
@@ -136,7 +136,7 @@ scoped to just the resolution diff (same verification charter, round still incre
 
 ## Phase 6: Verification & Polish
 
-- [ ] T017 Run `pnpm --filter @generacy-ai/orchestrator build`,
+- [X] T017 Run `pnpm --filter @generacy-ai/orchestrator build`,
       `pnpm --filter @generacy-ai/orchestrator test review`, and
       `pnpm --filter @generacy-ai/orchestrator test phase-loop` (per quickstart.md). Confirm the
       changeset from T001 exists as a newly-added file and the bump level is correct. Confirm the
