@@ -49,21 +49,21 @@
 
 <!-- Phase boundary: complete Phases 1–3 before starting — the audit reads every widened site. -->
 
-- [ ] T010 [US1] Create `packages/orchestrator/src/__tests__/phase-vocabulary-audit.test.ts` (NEW) following the `label-protocol-audit.test.ts` / `phase-tracker-audit.test.ts` pattern (FR-011/SC-003). Assert per `contracts/audit-test.md`:
+- [X] T010 [US1] Create `packages/orchestrator/src/__tests__/phase-vocabulary-audit.test.ts` (NEW) following the `label-protocol-audit.test.ts` / `phase-tracker-audit.test.ts` pattern (FR-011/SC-003). Assert per `contracts/audit-test.md`:
   - A1 union contains both phases; A2 `PHASE_SEQUENCE` has `review` at `indexOf('implement')+1` / `indexOf('validate')-1` and no `remediate`.
   - A3 `getPhaseSequence('speckit-feature'|'speckit-bugfix')` has `review` right after `implement`; `getPhaseSequence('speckit-epic')` deep-equals `['specify','clarify','plan','tasks']`; no sequence contains `remediate`.
   - A4 `PHASE_TO_STAGE['review'|'remediate'] === 'implementation'`.
   - A5 every full-vocabulary site (#1–#9 in `contracts/phase-vocabulary.md`) includes both phases (Zod `.options`/`.keyof().options` introspection or `.parse()` accept).
   - A6 LabelManager runtime probe registers `phase:review`/`completed:review`; all four families exist in `WORKFLOW_LABELS` for both phases; **no** `waiting-for:review`/`waiting-for:remediate`.
   - A7 the two launcher `PhaseIntent['phase']` unions (`orchestrator/src/launcher/types.ts`, `generacy-plugin-claude-code/src/launch/types.ts`) do **not** include the new phases — encoded as a documented exclusion set (D-3/A7).
-- [ ] T011 [US1][US2] Add a phase-loop unit test (co-located with existing phase-loop tests under `packages/orchestrator/src/worker/__tests__/`) proving:
+- [X] T011 [US1][US2] Add a phase-loop unit test (co-located with existing phase-loop tests under `packages/orchestrator/src/worker/__tests__/`) proving:
   - US1 AC4: with `reviewPhaseEnabled=false`, a feature/bugfix run **skips** `review` — no `onPhaseStart('review')`, no `phase:review`/`completed:review` labels (byte-identical behavior).
   - US2 AC1/AC2: with an injected fire-once-then-false `remediateTrigger`, the loop enters `remediate` off-sequence, returns to `review`, and terminates (no infinite loop, eventually advances past `review`).
 
 ## Phase 5: Verification & release
 
-- [ ] T012 [US1] Add `.changeset/1121-review-remediate-phase-machinery.md` (NEW file — CI gate): `@generacy-ai/workflow-engine` **minor** (new label vocabulary + `CorePhase` widening), `@generacy-ai/config` **minor** (public `template-schema` phase keys), `@generacy-ai/orchestrator` **patch** (internal plumbing), `@generacy-ai/generacy` **patch** (`resume.ts` `KNOWN_PHASES`). Copy the shape of a comparable existing changeset.
-- [ ] T013 [US1] Run `pnpm -r build` and the orchestrator/config/cockpit/launcher/workflow-engine test suites; confirm all green and that `PHASE_TO_STAGE` exhaustiveness / `satisfies readonly WorkflowPhase[]` compile clean (SC-001).
+- [X] T012 [US1] Add `.changeset/1121-review-remediate-phase-machinery.md` (NEW file — CI gate): `@generacy-ai/workflow-engine` **minor** (new label vocabulary + `CorePhase` widening), `@generacy-ai/config` **minor** (public `template-schema` phase keys), `@generacy-ai/orchestrator` **patch** (internal plumbing), `@generacy-ai/generacy` **patch** (`resume.ts` `KNOWN_PHASES`). Copy the shape of a comparable existing changeset.
+- [X] T013 [US1] Run `pnpm -r build` and the orchestrator/config/cockpit/launcher/workflow-engine test suites; confirm all green and that `PHASE_TO_STAGE` exhaustiveness / `satisfies readonly WorkflowPhase[]` compile clean (SC-001).
 
 ## Dependencies & Execution Order
 
