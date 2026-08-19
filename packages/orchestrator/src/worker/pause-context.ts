@@ -31,7 +31,9 @@ const WorkflowPhaseSchema = z.enum([
   'plan',
   'tasks',
   'implement',
+  'review',
   'validate',
+  'remediate',
 ]);
 
 export const PauseContextSchema = z.object({

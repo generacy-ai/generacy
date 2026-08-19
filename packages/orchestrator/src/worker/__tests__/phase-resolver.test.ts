@@ -39,6 +39,7 @@ describe('PhaseResolver', () => {
             'completed:plan',
             'completed:tasks',
             'completed:implement',
+            'completed:review',
             'completed:validate',
           ],
           'process',

@@ -4,6 +4,75 @@ import { AgentsConfigSchema } from '@generacy-ai/config';
 import type { WorkflowPhase } from './types.js';
 
 /**
+ * Built-in review-phase baseline used by `resolveWorkflowOverrides` when no
+ * workflow-level `review` override supplies a field. Two-tier resolution:
+ * workflow-level > this default (no repo-level tier — Q2).
+ */
+export const DEFAULT_REVIEW = {
+  profile: 'standard',
+  blockingSeverity: 'critical',
+  failThenPass: false,
+} as const;
+
+/**
+ * Built-in per-workflow `maxRemediations` default: `speckit-bugfix` → 2,
+ * `speckit-feature` and every other workflow name → 3 (Q3).
+ */
+function defaultMaxRemediations(workflowName: string): number {
+  return workflowName === 'speckit-bugfix' ? 2 : 3;
+}
+
+/**
+ * Fully-resolved per-workflow orchestrator config. Every field is resolved to a
+ * concrete value (never `undefined`) after walking the precedence chain.
+ */
+export interface ResolvedWorkflowConfig {
+  validateCommand: string;
+  preValidateCommand: string;
+  maxRemediations: number;
+  review: {
+    profile: 'standard' | 'verification';
+    blockingSeverity: 'critical' | 'major' | 'minor';
+    failThenPass: boolean;
+  };
+}
+
+/**
+ * Resolve the effective per-workflow orchestrator config for `workflowName`.
+ *
+ * Each field resolves INDEPENDENTLY via `??` (first non-nullish wins), so an
+ * explicit `""` / `0` / `false` at any tier survives — only `undefined`/`null`
+ * fall through. Pure function: does not mutate `config` or `settings`. Reads
+ * neither `settings.agents` nor `config.agents` (independent of the agent block).
+ *
+ * Precedence per field:
+ * - `validateCommand`: workflow → repo (`settings.validateCommand`) → cluster (`config.validateCommand`)
+ * - `preValidateCommand`: workflow → repo → cluster
+ * - `maxRemediations`: workflow → `defaultMaxRemediations(w)` (no repo tier)
+ * - `review.*`: workflow → `DEFAULT_REVIEW.*` (no repo tier)
+ */
+export function resolveWorkflowOverrides(
+  config: WorkerConfig,
+  settings: OrchestratorSettings | null | undefined,
+  workflowName: string,
+): ResolvedWorkflowConfig {
+  const wf = settings?.workflows?.[workflowName];
+  const review = wf?.review;
+  return {
+    validateCommand:
+      wf?.validateCommand ?? settings?.validateCommand ?? config.validateCommand,
+    preValidateCommand:
+      wf?.preValidateCommand ?? settings?.preValidateCommand ?? config.preValidateCommand,
+    maxRemediations: wf?.maxRemediations ?? defaultMaxRemediations(workflowName),
+    review: {
+      profile: review?.profile ?? DEFAULT_REVIEW.profile,
+      blockingSeverity: review?.blockingSeverity ?? DEFAULT_REVIEW.blockingSeverity,
+      failThenPass: review?.failThenPass ?? DEFAULT_REVIEW.failThenPass,
+    },
+  };
+}
+
+/**
  * Built-in provider fallback used by `resolveAgentForPhase` when no tier of
  * the precedence chain (config, repo `defaults.agent`, or env) supplies a
  * provider name.
@@ -15,7 +84,7 @@ export const DEFAULT_PROVIDER = 'claude-code';
  */
 export const GateDefinitionSchema = z.object({
   /** Phase that triggers gate check */
-  phase: z.enum(['specify', 'clarify', 'plan', 'tasks', 'implement', 'validate'] as const satisfies readonly WorkflowPhase[]),
+  phase: z.enum(['specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate', 'remediate'] as const satisfies readonly WorkflowPhase[]),
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
@@ -45,6 +114,8 @@ export const PhaseTimeoutOverridesSchema = z
     plan: z.number().int().min(60_000).default(3_600_000),
     tasks: z.number().int().min(60_000).optional(),
     implement: z.number().int().min(60_000).default(3_600_000),
+    review: z.number().int().min(60_000).optional(),
+    remediate: z.number().int().min(60_000).optional(),
   })
   .default({});
 export type PhaseTimeoutOverrides = z.infer<typeof PhaseTimeoutOverridesSchema>;
@@ -55,6 +126,12 @@ export type PhaseTimeoutOverrides = z.infer<typeof PhaseTimeoutOverridesSchema>;
 export const WorkerConfigSchema = z.object({
   /** Fallback timeout per phase in milliseconds (used when no per-phase override applies) */
   phaseTimeoutMs: z.number().int().min(60_000).default(1_200_000),
+  /**
+   * Feature flag for the `review` phase (#1121). Default false: a live run
+   * skips `review` before any label/comment/journal side effect, keeping
+   * observable behavior byte-identical. Wired from `WORKER_REVIEW_PHASE_ENABLED`.
+   */
+  reviewPhaseEnabled: z.boolean().default(false),
   /** Per-phase timeout overrides keyed by phase name */
   phaseTimeoutOverrides: PhaseTimeoutOverridesSchema,
   /** Base directory for repo checkouts */
@@ -222,7 +299,7 @@ function mergeAgentsConfig(
       }
       // Both defined — merge default + phases field-by-field
       const mergedWorkflowDefault = mergeAgentEntry(b?.default, o?.default);
-      const phaseKeys = ['specify', 'clarify', 'plan', 'tasks', 'implement', 'validate'] as const;
+      const phaseKeys = ['specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate', 'remediate'] as const;
       const mergedPhases: Record<string, AgentsConfig['default']> = {};
       let anyPhase = false;
       for (const phase of phaseKeys) {

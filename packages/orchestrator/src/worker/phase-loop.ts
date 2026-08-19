@@ -97,6 +97,14 @@ export interface PhaseLoopDeps {
    * server.ts.
    */
   phaseTracker?: PhaseTracker;
+  /**
+   * #1121: Off-sequence `remediate` trigger. When it returns true after a
+   * successful `review` phase, the loop runs `remediate` (off-sequence) and
+   * re-enters `review`. Defaults undefined → dead in production; concrete
+   * triggers land in later epic issues. The unit test injects a
+   * fire-once-then-false predicate to exercise the seam.
+   */
+  remediateTrigger?: (context: WorkerContext) => boolean;
 }
 
 /**
@@ -207,7 +215,17 @@ export class PhaseLoop {
     deps: PhaseLoopDeps,
     phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
-    const sequence = phaseSequence ?? PHASE_SEQUENCE;
+    // #1121 review feedback: derive the effective sequence from the flag so
+    // `review` is absent entirely (not merely skipped) when disabled. A
+    // skipped-but-present phase still leaks a spurious `review` row into
+    // buildPhaseProgress and shifts the resume startIndex, breaking the flag-OFF
+    // byte-identical guarantee (Q1=A / SC-004 / FR-009). Filtering here — in
+    // addition to getPhaseSequence at the call site — keeps the loop correct
+    // even when a caller passes the full sequence explicitly.
+    const providedSequence = phaseSequence ?? PHASE_SEQUENCE;
+    const sequence = config.reviewPhaseEnabled
+      ? providedSequence
+      : providedSequence.filter((phase) => phase !== 'review');
     const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger, jobEventEmitter } = deps;
     const baseMergeRunner: BaseMergeRunner = deps.baseMergeRunner ?? performBaseMerge;
     const results: PhaseResult[] = [];
@@ -274,6 +292,11 @@ export class PhaseLoop {
 
     for (let i = startIndex; i < sequence.length; i++) {
       const phase = sequence[i]!;
+
+      // #1121: `review` is gated out of `sequence` entirely when
+      // reviewPhaseEnabled is false (see the effective-sequence derivation
+      // above), so a disabled `review` never reaches this loop body — no
+      // per-iteration skip guard is needed.
 
       // #914: per-iteration guard enforcing at-most-one pre-phase base-merge
       // per cycle. Block-scoped `let` inside the for-body is load-bearing —
@@ -447,7 +470,12 @@ export class PhaseLoop {
       // 3. Execute the phase
       let result: PhaseResult;
       try {
-        if (phase === 'validate') {
+        if (phase === 'review' || phase === 'remediate') {
+          // #1121: inert stub executor. Real executors, prompts, and verdict/
+          // finding logic land in later epic issues. Returns a synthetic success
+          // without spawning the CLI so the loop advances normally.
+          result = this.runStubPhase(phase);
+        } else if (phase === 'validate') {
           // 3a. Pre-phase base-merge for the validate cycle (#864, #914) —
           // ephemeral. Runs ONCE before the first spawned command of the
           // cycle (install, or validate itself if no preValidateCommand).
@@ -520,7 +548,7 @@ export class PhaseLoop {
           const prompt = siblingBlock
             ? `${siblingBlock}\n\n${context.issueUrl}`
             : context.issueUrl;
-          const cliPhase = phase as Exclude<typeof phase, 'validate'>;
+          const cliPhase = phase as Exclude<typeof phase, 'validate' | 'review' | 'remediate'>;
 
           // #814/#1095: resolve provider+model+effort for this phase. Provider always
           // defined (built-in fallback). Model + effort optional (undefined = no
@@ -1122,6 +1150,20 @@ export class PhaseLoop {
 
       // Clear output buffer for next phase
       outputCapture.clear();
+
+      // #1121: off-sequence `remediate` seam. After `review` completes
+      // successfully, an injected trigger may drive a `remediate` pass that then
+      // re-enters `review`. Defaults undefined → dead in production (FR-007/D-5).
+      if (phase === 'review' && result.success && deps.remediateTrigger?.(context)) {
+        this.logger.info('review complete — remediateTrigger fired; running off-sequence remediate');
+        await labelManager.onPhaseStart('remediate');
+        const remediateResult = this.runStubPhase('remediate');
+        await labelManager.onPhaseComplete('remediate');
+        results.push(remediateResult);
+        outputCapture.clear();
+        i--; // Re-enter the review phase
+        continue;
+      }
     }
 
     this.logger.info('Phase loop completed successfully — all phases done');
@@ -1131,6 +1173,15 @@ export class PhaseLoop {
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
     };
+  }
+
+  /**
+   * #1121: inert stub executor for the `review` and `remediate` phases. Returns
+   * a synthetic success without spawning the CLI. Real executors, prompts, and
+   * verdict/finding logic land in later epic issues.
+   */
+  private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
+    return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
   }
 
   /**
