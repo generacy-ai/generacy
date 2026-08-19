@@ -1,5 +1,13 @@
 # @generacy-ai/cockpit
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [d533b41]
+- Updated dependencies [c5343ef]
+  - @generacy-ai/workflow-engine@0.6.0
+
 ## 0.8.0
 
 ### Minor Changes

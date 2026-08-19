@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.13.1
+
+### Patch Changes
+
+- d533b41: Tighten the implement-phase "produced no product-code changes" guard so it can no longer be structurally defeated on speckit branches (#1107).
+
+  `@generacy-ai/workflow-engine` gains two local-git `GitHubClient` methods: `getCurrentCommitSha()` (`git rev-parse HEAD`) and `getFilesChangedByOwnCommits(startRef)` (`git log --first-parent --no-merges --name-only <startRef>..HEAD`), which isolate the files a branch's own commits touched — immune to base-merge-introduced and earlier-phase files.
+
+  `@generacy-ai/orchestrator` now (a) excludes the spec-kit `update_agent` targets (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`) by exact root-relative filename via a new `EXCLUDED_EXACT_PATHS` set, and (b) measures a phase-scoped diff window anchored to a start ref captured after the pre-implement base merge and persisted in Redis (via new `PhaseTrackerService` raw string get/set/clear) so it spans all pre-restart increments. The pass/fail surface, escalation path, and detection-failure fallback are unchanged.
+
+- c5343ef: Remove two false-failure paths in the #1107 phase-scoped product-diff guard (#1112).
+
+  `@generacy-ai/workflow-engine` gains a local-git `GitHubClient` method `commitExistsInCheckout(sha)` (`git rev-parse --verify --quiet <sha>^{commit}`): exit 0 → true, exit 1 (commit-missing, full or abbreviated sha) → false, any other exit → throw, so an environment fault is never mistaken for a missing commit.
+
+  `@generacy-ai/orchestrator` reworks the phase-start-ref capture/reuse block so it (a) reads through to the pre-#1110 legacy Redis key (no branch component) on a branch-scoped miss, migrating a valid value to the branch-scoped key before consuming the legacy key once, and (b) verifies a reused ref resolves in the current checkout before anchoring the diff window — re-capturing fresh HEAD when it does not. A non-commit-missing git fault still surfaces via the existing detection-failure path (`product-diff-error` + escalation). The pass/fail surface, escalation path, exclusion lists, and TTL are unchanged.
+
+- Updated dependencies [d533b41]
+- Updated dependencies [c5343ef]
+  - @generacy-ai/workflow-engine@0.6.0
+  - @generacy-ai/cockpit@0.8.1
+
 ## 0.13.0
 
 ### Minor Changes

@@ -1,5 +1,38 @@
 # @generacy-ai/generacy
 
+## 0.10.2
+
+### Patch Changes
+
+- 674cc22: Cockpit doorbell + scope + queue: compare owner/repo case-insensitively (#1106).
+
+  GitHub owner/repo names are case-insensitive, but four sites in the cockpit
+  consumer path compared them with a raw `!==`, silently dropping legitimate
+  work whenever operator-typed and GitHub-canonical casings differed:
+
+  - `AnswersFileSource` repo-scope filter — dropped child-issue gate answers so
+    the /cockpit:auto doorbell never fired.
+  - `webhookToStreamEvent` + `SmeeDoorbellSource#buildRefSet` — every
+    `issues`/`pull_request`/`check_run` webhook returned null when the epic body
+    and the payload disagreed on casing, so the smee doorbell never fired at all.
+  - `applyScopeMutation` (`lineMatchesRef`) — `cockpit_scope_add` produced
+    duplicate task-list entries; `scope remove` was a silent no-op.
+  - `cockpit queue` (`classifyRow`, phase loop, `pickTargetRepo`) — mixed-case
+    refs were treated as separate repos or classified `cross-repo`, so no issue
+    was ever labeled or assigned.
+
+  All four sites now normalize owner/repo to lowercase before comparison. Issue
+  numbers, gate keys, gate ids, free-text, file paths, and drop-log lines are
+  unchanged. Emitted event `repo`/`url` fields still use the payload's original
+  casing.
+
+- ad5fb14: `setup auth` and `setup workspace` no longer clobber the JIT git credential helper on wizard-mode clusters. Both commands previously configured static credentials from the activation-time `GH_TOKEN` (a 1-hour GitHub App installation token) — `setup auth` wrote `credential.helper store` + `~/.git-credentials`, and `setup workspace` ran `gh auth setup-git`, replacing the `git-credential-generacy` helper wired by cluster-base's setup-credentials.sh. Workers (which run no git-helper-guard) then lost all git auth an hour after activation. When wizard mode is active and the JIT helper is present in git config, both commands now leave credential configuration untouched.
+- Updated dependencies [d533b41]
+- Updated dependencies [c5343ef]
+  - @generacy-ai/workflow-engine@0.6.0
+  - @generacy-ai/orchestrator@0.13.1
+  - @generacy-ai/cockpit@0.8.1
+
 ## 0.10.1
 
 ### Patch Changes
