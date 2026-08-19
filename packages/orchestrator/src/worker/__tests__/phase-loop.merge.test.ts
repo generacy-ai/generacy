@@ -85,7 +85,7 @@ function createMockContext(startPhase: WorkflowPhase = 'implement'): WorkerConte
       // #1107: phase-scoped guard captures a start ref then measures the
       // branch's own commits. Default to a captured ref + one product file so
       // the implement guard passes.
-      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
       getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
       // #1051 phase-loop-entry pre-push guard needs findPRForBranchAnyState.
       // Default to `null` (no PR in any state) so the guard falls through to

@@ -59,7 +59,7 @@ function makeGithub(ownFiles: string[], cumulativeFiles: string[] = ownFiles): a
   return {
     getDefaultBranch: vi.fn().mockResolvedValue('develop'),
     getPullRequest: vi.fn(),
-    getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+    getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
     getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(ownFiles),
     getFilesChangedBetween: vi.fn().mockResolvedValue(cumulativeFiles),
   };
@@ -146,7 +146,7 @@ describe('PhaseLoop - phase-scoped product-diff empty-implement detection', () =
 
     expect(result.completed).toBe(false);
     expect(result.lastPhase).toBe('implement');
-    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('startsha');
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('a1b2c3d4');
     expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
   });
 
@@ -158,7 +158,7 @@ describe('PhaseLoop - phase-scoped product-diff empty-implement detection', () =
     await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
 
     expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
-    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('startsha');
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('a1b2c3d4');
   });
 
   it('SC-005: detection failure (own-commit diff throws) routes to onError, does not silently pass', async () => {
@@ -166,7 +166,7 @@ describe('PhaseLoop - phase-scoped product-diff empty-implement detection', () =
     context.github = makeGithub([]);
     context.github.getFilesChangedByOwnCommits = vi
       .fn()
-      .mockRejectedValue(new Error('fatal: bad revision startsha..HEAD'));
+      .mockRejectedValue(new Error('fatal: bad revision a1b2c3d4..HEAD'));
     const config = createConfig();
 
     const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
@@ -244,7 +244,7 @@ describe('PhaseLoop - phase-scoped product-diff healthy path (SC-003)', () => {
     await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
 
     expect(clearRaw).toHaveBeenCalledWith(
-      'phase-start-ref:generacy-ai:generacy:1107:implement',
+      'phase-start-ref:generacy-ai:generacy:1107:no-branch:implement',
     );
   });
 
@@ -253,7 +253,7 @@ describe('PhaseLoop - phase-scoped product-diff healthy path (SC-003)', () => {
     context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
     const setValueRaw = vi.fn().mockResolvedValue(undefined);
     deps.phaseTracker = {
-      getValueRaw: vi.fn().mockResolvedValue('persisted-sha'),
+      getValueRaw: vi.fn().mockResolvedValue('deadbeef'),
       setValueRaw,
       clearRaw: vi.fn().mockResolvedValue(undefined),
     } as any;
@@ -264,6 +264,72 @@ describe('PhaseLoop - phase-scoped product-diff healthy path (SC-003)', () => {
     // Existing ref reused: getCurrentCommitSha never consulted, no re-persist.
     expect(context.github.getCurrentCommitSha).not.toHaveBeenCalled();
     expect(setValueRaw).not.toHaveBeenCalled();
-    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('persisted-sha');
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('deadbeef');
+  });
+
+  it('scopes the persisted start ref by branch (re-entry on a new branch captures fresh)', async () => {
+    const context = createMockContext('implement');
+    context.branch = '1107-b';
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    // Stub the branch-driven guards that only kick in when context.branch is
+    // set: the phase-loop-entry push guard (#1051) and the pre-implement
+    // base-merge (#864). Both are unrelated to the phase-start-ref capture
+    // site under test.
+    (context.github as any).findPRForBranchAnyState = vi.fn().mockResolvedValue(null);
+    deps.baseMergeRunner = vi.fn().mockResolvedValue({ ok: true, mergeSha: 'a1b2c3d4' }) as any;
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    const getValueRaw = vi.fn().mockResolvedValue(null);
+    deps.phaseTracker = {
+      getValueRaw,
+      setValueRaw,
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(getValueRaw).toHaveBeenCalledWith(
+      'phase-start-ref:generacy-ai:generacy:1107:1107-b:implement',
+    );
+    expect(setValueRaw).toHaveBeenCalledWith(
+      'phase-start-ref:generacy-ai:generacy:1107:1107-b:implement',
+      'a1b2c3d4',
+      expect.any(Number),
+    );
+  });
+
+  it('rejects a non-SHA persisted ref and re-captures via getCurrentCommitSha', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    // Empty-string persisted value would silently invert the guard by
+    // producing an empty file list. Must be rejected as if absent.
+    deps.phaseTracker = {
+      getValueRaw: vi.fn().mockResolvedValue(''),
+      setValueRaw,
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('a1b2c3d4');
+    expect(setValueRaw).toHaveBeenCalled();
+  });
+
+  it('SC-005: empty-string return from getCurrentCommitSha routes to detection failure', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    context.github.getCurrentCommitSha = vi.fn().mockResolvedValue('');
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(result.completed).toBe(false);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+    const last = result.results[result.results.length - 1]!;
+    expect(last.error?.message).toMatch(/product-diff detection failed/);
   });
 });

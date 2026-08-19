@@ -32,7 +32,7 @@ const SNAPPOLL_EVIDENCE = {
   outputTail: '(no output on either stream)',
   reason:
     'Phase "implement" produced no product-code changes — every file touched by the phase\'s own ' +
-    'commits (since startsha) is under an excluded prefix [specs/] ' +
+    'commits (since a1b2c3d4) is under an excluded prefix [specs/] ' +
     'or is an excluded agent-context file [CLAUDE.md, AGENTS.md, GEMINI.md, .github/copilot-instructions.md]. ' +
     'Own-commit files: [specs/942/tasks.md]. Implement must modify at least one product file.',
 };
@@ -124,7 +124,7 @@ function createContext(): WorkerContext {
       // #1107: phase-scoped guard captures a start ref then measures the
       // branch's own commits. Return spec-only own-commit files so the guard
       // hits the genuine no-product-code-changes surface.
-      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
       getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['specs/942/tasks.md']),
     } as any,
     logger: mockLogger,

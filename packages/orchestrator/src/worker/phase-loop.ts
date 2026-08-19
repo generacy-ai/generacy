@@ -40,6 +40,17 @@ const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement
  */
 const PHASE_START_REF_TTL_SECONDS = 7 * 24 * 60 * 60;
 
+/**
+ * Type-guard for a git commit SHA. Accepts full (40-hex) or short (7-40 hex)
+ * shapes — matches what `git rev-parse HEAD` and short-SHA callers produce.
+ * Load-bearing at both persisted-read and fresh-capture sites: an empty or
+ * malformed ref silently inverts the phase-scoped product-diff guard, so both
+ * paths must reject non-SHA values rather than proceed.
+ */
+function isValidCommitSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{7,40}$/i.test(value);
+}
+
 /** Narrow a `WorkflowPhase | string` union to WorkflowPhase. */
 function isWorkflowPhase(value: WorkflowPhase | string): value is WorkflowPhase {
   return (PHASE_SEQUENCE as readonly string[]).includes(value);
@@ -341,16 +352,38 @@ export class PhaseLoop {
       // resumes reuse the first-entry ref. Only phases that require product
       // changes need it. Left as `undefined` on any failure — the guard's
       // try/catch then routes to the product-diff-error detection path (SC-005).
+      //
+      // Key includes the current branch name so a re-entry on a different
+      // spec-slug branch (e.g. after a duplicate-PR-on-re-entry recovery)
+      // captures a fresh ref instead of reusing a stale one that would span
+      // unrelated develop merges — silently fail-open, the exact hazard #1107
+      // set out to close. Falls back to a `no-branch` sentinel only when the
+      // context branch is unknown, still scoping distinctly from a branch-known
+      // key.
       let phaseStartRef: string | undefined;
+      const phaseStartRefBranch = context.branch ?? 'no-branch';
       const phaseStartRefKey = PHASES_REQUIRING_CHANGES.has(phase)
-        ? `phase-start-ref:${context.item.owner}:${context.item.repo}:${context.item.issueNumber}:${phase}`
+        ? `phase-start-ref:${context.item.owner}:${context.item.repo}:${context.item.issueNumber}:${phaseStartRefBranch}:${phase}`
         : undefined;
       if (phaseStartRefKey !== undefined) {
         try {
-          const existing = (await deps.phaseTracker?.getValueRaw(phaseStartRefKey)) ?? null;
-          phaseStartRef = existing ?? (await context.github.getCurrentCommitSha());
+          const rawExisting = await deps.phaseTracker?.getValueRaw(phaseStartRefKey);
+          // Reject empty / whitespace / non-SHA-shaped persisted values. An
+          // empty string would silently invert the guard: `git log <empty>..HEAD`
+          // parses as `HEAD..HEAD` → empty file list → a legitimate implement
+          // phase that wrote real code is reported as `no product-code changes`.
+          const existing = isValidCommitSha(rawExisting) ? rawExisting : null;
           if (existing === null) {
+            const captured = await context.github.getCurrentCommitSha();
+            if (!isValidCommitSha(captured)) {
+              throw new Error(
+                `getCurrentCommitSha returned a non-SHA value: ${JSON.stringify(captured)}`,
+              );
+            }
+            phaseStartRef = captured;
             await deps.phaseTracker?.setValueRaw(phaseStartRefKey, phaseStartRef, PHASE_START_REF_TTL_SECONDS);
+          } else {
+            phaseStartRef = existing;
           }
         } catch (err) {
           this.logger.warn(

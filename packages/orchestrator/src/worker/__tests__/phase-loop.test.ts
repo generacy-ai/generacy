@@ -88,7 +88,7 @@ function createMockContext(startPhase: WorkflowPhase = 'validate'): WorkerContex
     // getFilesChangedByOwnCommits. Individual tests may override.
     github: {
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
       getFilesChangedByOwnCommits: vi
         .fn()
         .mockResolvedValue(['packages/orchestrator/src/foo.ts']),
@@ -1023,7 +1023,7 @@ describe('PhaseLoop - #915 classifier reason surfacing', () => {
     // files → guard fires no-product-code-changes.
     context.github = {
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
       getFilesChangedByOwnCommits: vi.fn().mockResolvedValue([
         'specs/915-found-during-cockpit-v1/tasks.md',
         'specs/915-found-during-cockpit-v1/plan.md',
@@ -1072,7 +1072,7 @@ describe('PhaseLoop - #915 classifier reason surfacing', () => {
     // detection failure routes to the product-diff-error classifier.
     context.github = {
       getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentCommitSha: vi.fn().mockResolvedValue('startsha'),
+      getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
       getFilesChangedByOwnCommits: vi
         .fn()
         .mockRejectedValue(new Error('network unreachable')),
