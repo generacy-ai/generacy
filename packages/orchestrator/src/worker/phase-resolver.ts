@@ -1,4 +1,4 @@
-import { PHASE_SEQUENCE, getPhaseSequence, type WorkflowPhase } from './types.js';
+import { getPhaseSequence, type WorkflowPhase } from './types.js';
 
 /**
  * Unified mapping from gate names to their owning phase and the phase to resume from.
@@ -44,16 +44,22 @@ export class PhaseResolver {
    *
    * @param workflowName - Optional workflow name for workflow-specific gate resolution.
    *   When provided, uses the workflow's phase sequence and gate mappings.
+   * @param reviewPhaseEnabled - Whether the `review` phase is active (#1121).
+   *   Threaded into the effective sequence so a flag-OFF run resolves the same
+   *   start phase as pre-change — otherwise `review` sits in the sequence and a
+   *   `process` requeue completed through `implement` would resolve to `review`
+   *   instead of `validate`, shifting the resume start index (SC-004 / FR-009).
    */
   resolveStartPhase(
     labels: string[],
     command: 'process' | 'continue',
     workflowName?: string,
+    reviewPhaseEnabled = false,
   ): WorkflowPhase {
     if (command === 'continue') {
-      return this.resolveFromContinue(labels, workflowName);
+      return this.resolveFromContinue(labels, workflowName, reviewPhaseEnabled);
     }
-    return this.resolveFromProcess(labels, workflowName);
+    return this.resolveFromProcess(labels, workflowName, reviewPhaseEnabled);
   }
 
   /**
@@ -65,8 +71,12 @@ export class PhaseResolver {
    *    (gate names like 'clarification' are normalized to phase names via GATE_MAPPING)
    * 3. If no phase labels, start from 'specify'
    */
-  private resolveFromProcess(labels: string[], workflowName?: string): WorkflowPhase {
-    const sequence = workflowName ? getPhaseSequence(workflowName) : PHASE_SEQUENCE;
+  private resolveFromProcess(
+    labels: string[],
+    workflowName?: string,
+    reviewPhaseEnabled = false,
+  ): WorkflowPhase {
+    const sequence = getPhaseSequence(workflowName ?? '', reviewPhaseEnabled);
     const effectiveGateMapping = this.getEffectiveGateMapping(workflowName);
 
     // Check for an active phase label
@@ -115,8 +125,12 @@ export class PhaseResolver {
    * Matches `completed:*` labels against the effective gate mapping (workflow-specific first,
    * then global GATE_MAPPING) and returns the most advanced gate's resumeFrom phase.
    */
-  private resolveFromContinue(labels: string[], workflowName?: string): WorkflowPhase {
-    const sequence = workflowName ? getPhaseSequence(workflowName) : PHASE_SEQUENCE;
+  private resolveFromContinue(
+    labels: string[],
+    workflowName?: string,
+    reviewPhaseEnabled = false,
+  ): WorkflowPhase {
+    const sequence = getPhaseSequence(workflowName ?? '', reviewPhaseEnabled);
     const effectiveGateMapping = this.getEffectiveGateMapping(workflowName);
 
     const completedGates = new Set<string>();
@@ -142,7 +156,7 @@ export class PhaseResolver {
     }
 
     // Fallback: use the process resolver
-    return this.resolveFromProcess(labels, workflowName);
+    return this.resolveFromProcess(labels, workflowName, reviewPhaseEnabled);
   }
 
   /**

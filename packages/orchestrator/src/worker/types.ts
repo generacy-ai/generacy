@@ -45,7 +45,15 @@ export interface JournalEntry {
 }
 
 /**
- * Ordered sequence of all workflow phases (default for feature/bugfix workflows)
+ * Ordered sequence of all workflow phases — the canonical *superset* for
+ * feature/bugfix workflows.
+ *
+ * `review` is present here for vocabulary/exhaustiveness (label registration,
+ * the phase-vocabulary audit, gate-index ordering), but it is a flag-gated
+ * phase. The *effective runtime* sequence is derived by
+ * `getPhaseSequence(workflow, reviewPhaseEnabled)`, which drops `review` when
+ * the flag is off so a flag-OFF run is byte-identical to pre-change (#1121).
+ * Consumers that iterate the loop must use the derived sequence, not this const.
  */
 export const PHASE_SEQUENCE: WorkflowPhase[] = [
   'specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate',
@@ -62,11 +70,23 @@ export const WORKFLOW_PHASE_SEQUENCES: Record<string, WorkflowPhase[]> = {
 };
 
 /**
- * Get the phase sequence for a given workflow name.
+ * Get the effective phase sequence for a given workflow name.
+ *
+ * `review` is included only when `reviewPhaseEnabled` is true. When the flag is
+ * off (the default) `review` is dropped entirely from the returned sequence —
+ * not merely skipped downstream — so it never leaks into `buildPhaseProgress`
+ * (a spurious stage-comment row) or the phase resolver (a shifted startIndex).
+ * This preserves the byte-identical guarantee for a flag-OFF run
+ * (#1121 / Q1=A / SC-004 / FR-009).
+ *
  * Falls back to PHASE_SEQUENCE for unknown workflows.
  */
-export function getPhaseSequence(workflowName: string): WorkflowPhase[] {
-  return WORKFLOW_PHASE_SEQUENCES[workflowName] ?? PHASE_SEQUENCE;
+export function getPhaseSequence(
+  workflowName: string,
+  reviewPhaseEnabled = false,
+): WorkflowPhase[] {
+  const base = WORKFLOW_PHASE_SEQUENCES[workflowName] ?? PHASE_SEQUENCE;
+  return reviewPhaseEnabled ? base : base.filter((phase) => phase !== 'review');
 }
 
 /**

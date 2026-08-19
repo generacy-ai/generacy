@@ -81,15 +81,27 @@ describe('#1121 phase-vocabulary audit', () => {
     expect(PHASE_SEQUENCE).not.toContain('remediate');
   });
 
-  // A3 — per-workflow sequences
-  it('A3: feature/bugfix sequences have review after implement; epic is unchanged; no sequence has remediate', () => {
+  // A3 — per-workflow effective sequences with the flag ON
+  it('A3: with the flag ON, feature/bugfix sequences have review after implement; epic is unchanged; no sequence has remediate', () => {
     for (const wf of ['speckit-feature', 'speckit-bugfix']) {
-      const seq = getPhaseSequence(wf);
+      const seq = getPhaseSequence(wf, true);
       expect(seq[seq.indexOf('implement') + 1]).toBe('review');
       expect(seq).not.toContain('remediate');
     }
-    expect(getPhaseSequence('speckit-epic')).toEqual(['specify', 'clarify', 'plan', 'tasks']);
-    expect(getPhaseSequence('speckit-epic')).not.toContain('remediate');
+    expect(getPhaseSequence('speckit-epic', true)).toEqual(['specify', 'clarify', 'plan', 'tasks']);
+    expect(getPhaseSequence('speckit-epic', true)).not.toContain('remediate');
+  });
+
+  // A3b — the flag-OFF (default) effective sequence drops review entirely so a
+  // flag-OFF run stays byte-identical to pre-change (#1121 review feedback:
+  // review must be absent from the runtime sequence, not merely skipped).
+  it('A3b: with the flag OFF (default), review is absent from the effective sequence', () => {
+    for (const wf of ['speckit-feature', 'speckit-bugfix']) {
+      const seq = getPhaseSequence(wf);
+      expect(seq).not.toContain('review');
+      expect(seq).not.toContain('remediate');
+      expect(seq[seq.indexOf('implement') + 1]).toBe('validate');
+    }
   });
 
   // A4 — exhaustive stage map values

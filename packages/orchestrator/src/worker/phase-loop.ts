@@ -215,7 +215,17 @@ export class PhaseLoop {
     deps: PhaseLoopDeps,
     phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
-    const sequence = phaseSequence ?? PHASE_SEQUENCE;
+    // #1121 review feedback: derive the effective sequence from the flag so
+    // `review` is absent entirely (not merely skipped) when disabled. A
+    // skipped-but-present phase still leaks a spurious `review` row into
+    // buildPhaseProgress and shifts the resume startIndex, breaking the flag-OFF
+    // byte-identical guarantee (Q1=A / SC-004 / FR-009). Filtering here — in
+    // addition to getPhaseSequence at the call site — keeps the loop correct
+    // even when a caller passes the full sequence explicitly.
+    const providedSequence = phaseSequence ?? PHASE_SEQUENCE;
+    const sequence = config.reviewPhaseEnabled
+      ? providedSequence
+      : providedSequence.filter((phase) => phase !== 'review');
     const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger, jobEventEmitter } = deps;
     const baseMergeRunner: BaseMergeRunner = deps.baseMergeRunner ?? performBaseMerge;
     const results: PhaseResult[] = [];
@@ -283,13 +293,10 @@ export class PhaseLoop {
     for (let i = startIndex; i < sequence.length; i++) {
       const phase = sequence[i]!;
 
-      // #1121: feature-flag skip for the `review` phase. When disabled (default),
-      // skip BEFORE any label/comment/journal side effect fires so feature/bugfix
-      // runs are byte-identical to pre-change (FR-008, SC-004).
-      if (phase === 'review' && !config.reviewPhaseEnabled) {
-        this.logger.debug({ phase }, 'review phase disabled (reviewPhaseEnabled=false); skipping');
-        continue;
-      }
+      // #1121: `review` is gated out of `sequence` entirely when
+      // reviewPhaseEnabled is false (see the effective-sequence derivation
+      // above), so a disabled `review` never reaches this loop body — no
+      // per-iteration skip guard is needed.
 
       // #914: per-iteration guard enforcing at-most-one pre-phase base-merge
       // per cycle. Block-scoped `let` inside the for-body is load-bearing —

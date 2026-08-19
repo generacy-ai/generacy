@@ -428,7 +428,17 @@ export class ClaudeCliWorker {
       );
 
       // 4. Resolve starting phase (for process/continue commands)
-      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command as 'process' | 'continue', item.workflowName);
+      // #1121: thread reviewPhaseEnabled so the resolver's effective sequence
+      // matches the phase loop — with the flag off, `review` is excluded and a
+      // requeue completed through `implement` resolves to `validate`, not
+      // `review`. Sourced from the base config (repo-agent overrides never
+      // touch this flag, so it equals effectiveConfig.reviewPhaseEnabled).
+      const startPhase = this.phaseResolver.resolveStartPhase(
+        labels,
+        item.command as 'process' | 'continue',
+        item.workflowName,
+        this.config.reviewPhaseEnabled,
+      );
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
 
       // 5. Setup: ensure the feature branch exists and is checked out.
@@ -630,7 +640,9 @@ export class ClaudeCliWorker {
       }
 
       // 8. Execute the phase loop
-      const phaseSequence = getPhaseSequence(item.workflowName);
+      // #1121: pass reviewPhaseEnabled so the effective sequence excludes
+      // `review` when the flag is off (byte-identical flag-OFF run).
+      const phaseSequence = getPhaseSequence(item.workflowName, effectiveConfig.reviewPhaseEnabled);
       const phaseLoop = new PhaseLoop(workerLogger);
 
       // #892: construct ValidateFixHandler only when PhaseTracker is available.
