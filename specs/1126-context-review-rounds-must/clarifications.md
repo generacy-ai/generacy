@@ -15,7 +15,7 @@ already marked `resolved` and the issue is present again, what happens?
 - B: `resolved` is terminal — a regressed issue is recorded as a *new* finding (subject to the "blocking-only after round 1" rule), never a re-open.
 - C: Out of scope for this feature — regression handling is deferred; `resolved` stays terminal with no new finding raised.
 
-**Answer**: *Pending*
+**Answer**: B — `resolved` is terminal. A re-broken location whose finding was already resolved is recorded as a **new** finding (subject to the blocking-only-after-round-1 rule), never a re-open. A monotonic terminal `resolved` keeps the status machine convergent; a genuine re-break at/above `blockingSeverity` is captured by the already-permitted "new blocking finding" path, while an advisory-level regression is suppressed as churn.
 
 ### Q2: Open finding outside the delta
 **Context**: FR-003 composes the verification input as (delta) ∪ (open findings),
@@ -29,7 +29,7 @@ verification-pass delta, what is the expected outcome of the pass?
 - B: The reviewer may still mark it `resolved` if it judges it addressed from the enumerated finding context, even without a delta hunk.
 - C: Its full original hunk (from the artifact) is added to the review input so the reviewer can re-verify it regardless of the delta.
 
-**Answer**: *Pending*
+**Answer**: A — It stays `open` unconditionally; only findings whose location appears in the delta may transition to `resolved`. Resolution is evidence-based: a real fix necessarily appears in the last-reviewed-SHA→head delta, so a file the delta never touched is genuinely un-addressed. B/C would reintroduce the evidence-free re-litigation this feature exists to eliminate.
 
 ### Q3: Enforcement of "no new sub-blocking after round 1"
 **Context**: FR-005 constrains the *charter/prompt* to forbid new sub-blocking
@@ -44,7 +44,7 @@ despite the charter, what does the engine do?
 - B: Prompt-only — trust the charter; write whatever the reviewer returns; SC-003 verifies via harness but the engine does not filter.
 - C: Engine-side downgrade — record it but mark it advisory/non-blocking so it never gates the verdict.
 
-**Answer**: *Pending*
+**Answer**: A — Engine-side filter: drop/discard any new sub-blocking (advisory) finding a verification-pass reviewer emits before it is written to the artifact, with the charter as the first line of defense. The engine is authoritative and distrustful of agent-claimed output, so a deterministic engine drop is the robust enforcement. C is a no-op (advisory findings already don't gate the verdict yet still post as churn) and B relies on the prompt nondeterminism being eliminated. [Judgment call: B=prompt-only is the lighter-touch alternative.]
 
 ### Q4: Merge-conflict re-review convergence charter
 **Context**: FR-007 scopes the merge-conflict re-review to the resolution base/head
@@ -59,7 +59,7 @@ distinct mode?
 - B: Distinct mode — resolution-scoped review with its own charter; does not increment the artifact round and may raise advisory findings on the resolution diff.
 - C: Same charter but does NOT increment the round (round is unchanged; it is an out-of-band scoped check).
 
-**Answer**: *Pending*
+**Answer**: A — Same verification charter: it increments the round and is blocking-only, with only the delta source (the resolution base/head SHAs) differing. FR-007 frames it as scoping the delta to the resolution SHAs instead of the artifact's last-reviewed SHA, and it produces a first-class verdict routing into remediate, so it must obey the convergence charter. B's advisory findings would reintroduce churn.
 
 ### Q5: FR-009 full-review fallback semantics
 **Context**: FR-009 says an unresolvable scoping SHA (e.g. after a rebase) falls
@@ -74,4 +74,4 @@ semantics or stay a verification pass?
 - B: Reset to round 1 — full-diff review with advisory findings permitted again; round counter resets/re-anchors.
 - C: Verification pass over the full diff, but the round counter is preserved and advisory findings from the artifact are carried forward unchanged.
 
-**Answer**: *Pending*
+**Answer**: A — It stays a verification pass over the full diff: the round stays n+1, no new sub-blocking findings, only the delta widens to the whole diff. FR-009 fails toward a full review, not toward round-1 semantics; resetting to round 1 (B) would re-permit advisory findings on every rebase and reintroduce the full-diff nitpick churn the feature eliminates, and C's "carry advisory findings forward unchanged" is a muddled no-op.

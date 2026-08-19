@@ -40,6 +40,28 @@ Full design: `docs/engine-review-remediate-plan.md` in generacy-ai/tetrad-develo
   (`worker/pause-context.ts`). This feature consumes those SHAs to scope the pass;
   #1131 owns producing them.
 
+## Clarifications
+
+### Session 2026-08-19
+
+- Q: When a verification-pass delta re-touches the location of a finding already
+  marked `resolved` and the issue is present again → **A: `resolved` is terminal.**
+  The re-break is recorded as a **new** finding (subject to the blocking-only-after-
+  round-1 rule), never a re-open. Keeps the status machine monotonic and convergent.
+- Q: For an `open` finding whose file/line is NOT in the current delta → **A: it
+  stays `open` unconditionally.** Only findings whose location appears in the delta
+  may transition to `resolved`. Resolution is evidence-based; a genuine fix appears
+  in the delta.
+- Q: If a verification-pass reviewer emits a new sub-blocking (advisory) finding
+  despite the charter → **A: engine-side filter.** The engine drops/discards it
+  before it is written to the artifact; the charter is the first line of defense.
+- Q: Is the merge-conflict-resolution re-review a verification pass under the same
+  convergence charter → **A: same charter.** It increments the round and is
+  blocking-only; only the delta source (resolution base/head SHAs) differs.
+- Q: When FR-009 falls back to a full review → **A: it stays a verification pass**
+  over the full diff — round stays n+1, no new sub-blocking findings; only the delta
+  widens to the whole diff.
+
 ## User Stories
 
 ### US1: Converging re-reviews after remediation (Primary)
@@ -83,13 +105,13 @@ reviewed code.
 |----|-------------|----------|-------|
 | FR-001 | Determine review mode from the findings artifact: absent/round 0 ⇒ **full review** (round 1); present with a last-reviewed SHA ⇒ **verification pass** (round n+1). | P1 | Round number is the artifact round + 1. |
 | FR-002 | Compute the delta for a verification pass as the change set between the last-reviewed commit SHA and the current head SHA. | P1 | Delta = source of "what to re-review". |
-| FR-003 | Compose the verification-pass input as the union of (a) the computed delta and (b) the findings still marked `open` in the artifact. | P1 | Both parts required. |
+| FR-003 | Compose the verification-pass input as the union of (a) the computed delta and (b) the findings still marked `open` in the artifact. | P1 | Both parts required. An `open` finding whose location is NOT in the delta stays `open` unconditionally — only delta-located findings may resolve (Q2). |
 | FR-004 | Build the reviewer prompt for a verification pass with the explicit round number and a verbatim list of prior open findings, under a verification charter. | P1 | Charter selection (`standard` vs `verification`) originates in #1124. |
-| FR-005 | Constrain the verification charter: confirm each open finding addressed → mark it `resolved`; new findings permitted **only** at/above `blockingSeverity`; no new sub-blocking findings after round 1. | P1 | Convergence rule. |
-| FR-006 | Advance artifact state each round: transition addressed findings `open → resolved`, append new blocking findings with the current round, and update the last-reviewed SHA to the head just reviewed. | P1 | Status-transition machine. |
-| FR-007 | For a merge-conflict-resolution re-review, scope the delta to the resolution base/head SHAs supplied by the pause-context sidecar instead of the artifact's last-reviewed SHA. | P1 | Depends on #1131 populating those SHAs. |
+| FR-005 | Constrain the verification charter: confirm each open finding addressed → mark it `resolved`; new findings permitted **only** at/above `blockingSeverity`; no new sub-blocking findings after round 1. The engine also filters: any new sub-blocking finding a reviewer emits after round 1 is dropped before it is written to the artifact (charter is first line of defense; engine drop is authoritative). | P1 | Convergence rule + engine-side enforcement (Q3). |
+| FR-006 | Advance artifact state each round: transition addressed findings `open → resolved`, append new blocking findings with the current round, and update the last-reviewed SHA to the head just reviewed. `resolved` is **terminal** — a later delta that re-breaks a resolved location produces a **new** finding (subject to the blocking-only-after-round-1 rule), never a `resolved → open` re-open. | P1 | Status-transition machine; monotonic `resolved` (Q1). |
+| FR-007 | For a merge-conflict-resolution re-review, scope the delta to the resolution base/head SHAs supplied by the pause-context sidecar instead of the artifact's last-reviewed SHA. It is the **same verification pass** under the convergence charter — increments the round and is blocking-only; only the delta source differs. | P1 | Depends on #1131 populating those SHAs. Same charter, not a distinct mode (Q4). |
 | FR-008 | Overall verdict for a verification pass is `changes-required` iff any finding at/above `blockingSeverity` remains `open` (or a new blocking finding was raised); otherwise `clean`. | P1 | Reuses #1124 severity gating over the post-pass artifact. |
-| FR-009 | Degrade safely when a scoping SHA is missing or unresolvable (e.g., last-reviewed SHA no longer in history after a rebase): fall back to a full review rather than an empty/erroring delta. | P2 | Fail toward a full review, never toward "reviewed nothing". |
+| FR-009 | Degrade safely when a scoping SHA is missing or unresolvable (e.g., last-reviewed SHA no longer in history after a rebase): fall back to a full review rather than an empty/erroring delta. The fallback **remains a verification pass** — round stays n+1, no new sub-blocking findings; only the delta widens to the whole diff (it does NOT reset to round-1 semantics). | P2 | Fail toward a full review, never toward "reviewed nothing"; no advisory-finding reset (Q5). |
 
 ## Success Criteria
 
