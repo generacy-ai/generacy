@@ -46,7 +46,7 @@ export class CliSpawner {
    * with a SIGTERM -> grace period -> SIGKILL sequence.
    */
   async spawnPhase(
-    phase: Exclude<WorkflowPhase, 'validate'>,
+    phase: Exclude<WorkflowPhase, 'validate' | 'review' | 'remediate'>,
     options: CliSpawnOptions,
     capture: OutputCapture,
   ): Promise<PhaseResult> {

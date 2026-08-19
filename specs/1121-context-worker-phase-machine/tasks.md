@@ -12,7 +12,7 @@
 
 <!-- Everything downstream depends on the WorkflowPhase union widening. Must land first. -->
 
-- [ ] T001 [US1] Widen the canonical vocabulary in `packages/orchestrator/src/worker/types.ts`:
+- [X] T001 [US1] Widen the canonical vocabulary in `packages/orchestrator/src/worker/types.ts`:
   - Add `'review'` and `'remediate'` to the `WorkflowPhase` union (:9).
   - Insert `'review'` into `PHASE_SEQUENCE` between `'implement'` and `'validate'` → `['specify','clarify','plan','tasks','implement','review','validate']` (:50). Do **not** add `remediate` (FR-004).
   - Confirm `WORKFLOW_PHASE_SEQUENCES` `speckit-feature`/`speckit-bugfix` still reference `PHASE_SEQUENCE` by identity; leave `speckit-epic` as its explicit `['specify','clarify','plan','tasks']` literal (FR-003).
@@ -22,24 +22,24 @@
 
 <!-- Phase boundary: complete T001 before starting — every site below references the widened union. -->
 
-- [ ] T002 [US1][US3] Update `packages/orchestrator/src/worker/config.ts`:
+- [X] T002 [US1][US3] Update `packages/orchestrator/src/worker/config.ts`:
   - Add `review`, `remediate` to `GateDefinitionSchema.phase` `z.enum` (keep `satisfies readonly WorkflowPhase[]`) (:18).
   - Add `review`/`remediate` optional keys to `PhaseTimeoutOverridesSchema` as `z.number().int().min(60_000).optional()` (:41-49, FR-005).
   - Add `review`, `remediate` to agent-merge `phaseKeys` `as const` array (:225).
   - Add `reviewPhaseEnabled: z.boolean().default(false)` to `WorkerConfigSchema` (:55, D-4/FR-008).
   - Do **NOT** add any default gate for `review` — it ships gate-less (Q2=A/FR-010).
-- [ ] T003 [P] [US1] Add `review`, `remediate` to `WorkflowPhaseSchema` `z.enum` in `packages/orchestrator/src/worker/pause-context.ts` (:28).
-- [ ] T004 [US3] Update `packages/orchestrator/src/config/loader.ts`: add `review`, `remediate` to `overridablePhases` `as const` array (:243, keeps `validate` excluded), and read `WORKER_REVIEW_PHASE_ENABLED` env → wire into `reviewPhaseEnabled`. (Depends on T002 for the schema field.)
-- [ ] T005 [P] [US3] Add `review: AgentEntrySchema.optional()` and `remediate: AgentEntrySchema.optional()` to the `.strict()` `phases` object in `packages/config/src/template-schema.ts` (:40-47, FR-005).
-- [ ] T006 [P] [US3] Add `review`, `remediate` to `KNOWN_PHASES` in `packages/generacy/src/cli/commands/cockpit/resume.ts` (:54-61).
-- [ ] T007 [P] [US1] Add `review`, `remediate` to the `CorePhase` union in `packages/workflow-engine/src/types/github.ts` (:190-193).
-- [ ] T008 [P] [US3] Add the four phase-progress label families for both phases to `WORKFLOW_LABELS` in `packages/workflow-engine/src/actions/github/label-definitions.ts`: `phase:review`, `completed:review`, `failed:review`, `failed:review-repeated` and the `remediate` equivalents (8 entries, FR-006/Q3=A). Add **no** `waiting-for:review`/`waiting-for:remediate` gate labels.
+- [X] T003 [P] [US1] Add `review`, `remediate` to `WorkflowPhaseSchema` `z.enum` in `packages/orchestrator/src/worker/pause-context.ts` (:28).
+- [X] T004 [US3] Update `packages/orchestrator/src/config/loader.ts`: add `review`, `remediate` to `overridablePhases` `as const` array (:243, keeps `validate` excluded), and read `WORKER_REVIEW_PHASE_ENABLED` env → wire into `reviewPhaseEnabled`. (Depends on T002 for the schema field.)
+- [X] T005 [P] [US3] Add `review: AgentEntrySchema.optional()` and `remediate: AgentEntrySchema.optional()` to the `.strict()` `phases` object in `packages/config/src/template-schema.ts` (:40-47, FR-005).
+- [X] T006 [P] [US3] Add `review`, `remediate` to `KNOWN_PHASES` in `packages/generacy/src/cli/commands/cockpit/resume.ts` (:54-61).
+- [X] T007 [P] [US1] Add `review`, `remediate` to the `CorePhase` union in `packages/workflow-engine/src/types/github.ts` (:190-193).
+- [X] T008 [P] [US3] Add the four phase-progress label families for both phases to `WORKFLOW_LABELS` in `packages/workflow-engine/src/actions/github/label-definitions.ts`: `phase:review`, `completed:review`, `failed:review`, `failed:review-repeated` and the `remediate` equivalents (8 entries, FR-006/Q3=A). Add **no** `waiting-for:review`/`waiting-for:remediate` gate labels.
 
 ## Phase 3: Phase-loop wiring (stub execution + seams)
 
 <!-- Phase boundary: complete Phase 1 and T002 before starting. -->
 
-- [ ] T009 [US1][US2] Apply the three surgical inserts in `packages/orchestrator/src/worker/phase-loop.ts` (plan §phase-loop.ts changes):
+- [X] T009 [US1][US2] Apply the three surgical inserts in `packages/orchestrator/src/worker/phase-loop.ts` (plan §phase-loop.ts changes):
   - Add optional `remediateTrigger?: (context: WorkerContext) => boolean` to `PhaseLoopDeps` (default undefined → dead in prod, FR-007/D-5).
   - **Feature-flag skip**: at the top of the `for` body, before `labelManager.onPhaseStart(phase)` (:309), add `if (phase === 'review' && !config.reviewPhaseEnabled) { logger.debug(...); continue; }` (FR-008, SC-004).
   - **Stub executor**: add `private runStubPhase(phase: 'review' | 'remediate'): PhaseResult { return { phase, success: true, exitCode: 0, durationMs: 0, output: [] }; }`; dispatch it via a branch placed **before** `if (phase === 'validate')` in the execute-phase `try` (:449). Tighten the CLI-path cast (:523) to `Exclude<typeof phase, 'validate' | 'review' | 'remediate'>` (D-6).

@@ -97,6 +97,14 @@ export interface PhaseLoopDeps {
    * server.ts.
    */
   phaseTracker?: PhaseTracker;
+  /**
+   * #1121: Off-sequence `remediate` trigger. When it returns true after a
+   * successful `review` phase, the loop runs `remediate` (off-sequence) and
+   * re-enters `review`. Defaults undefined → dead in production; concrete
+   * triggers land in later epic issues. The unit test injects a
+   * fire-once-then-false predicate to exercise the seam.
+   */
+  remediateTrigger?: (context: WorkerContext) => boolean;
 }
 
 /**
@@ -275,6 +283,14 @@ export class PhaseLoop {
     for (let i = startIndex; i < sequence.length; i++) {
       const phase = sequence[i]!;
 
+      // #1121: feature-flag skip for the `review` phase. When disabled (default),
+      // skip BEFORE any label/comment/journal side effect fires so feature/bugfix
+      // runs are byte-identical to pre-change (FR-008, SC-004).
+      if (phase === 'review' && !config.reviewPhaseEnabled) {
+        this.logger.debug({ phase }, 'review phase disabled (reviewPhaseEnabled=false); skipping');
+        continue;
+      }
+
       // #914: per-iteration guard enforcing at-most-one pre-phase base-merge
       // per cycle. Block-scoped `let` inside the for-body is load-bearing —
       // it re-initializes on every iteration (including retry re-entries via
@@ -447,7 +463,12 @@ export class PhaseLoop {
       // 3. Execute the phase
       let result: PhaseResult;
       try {
-        if (phase === 'validate') {
+        if (phase === 'review' || phase === 'remediate') {
+          // #1121: inert stub executor. Real executors, prompts, and verdict/
+          // finding logic land in later epic issues. Returns a synthetic success
+          // without spawning the CLI so the loop advances normally.
+          result = this.runStubPhase(phase);
+        } else if (phase === 'validate') {
           // 3a. Pre-phase base-merge for the validate cycle (#864, #914) —
           // ephemeral. Runs ONCE before the first spawned command of the
           // cycle (install, or validate itself if no preValidateCommand).
@@ -520,7 +541,7 @@ export class PhaseLoop {
           const prompt = siblingBlock
             ? `${siblingBlock}\n\n${context.issueUrl}`
             : context.issueUrl;
-          const cliPhase = phase as Exclude<typeof phase, 'validate'>;
+          const cliPhase = phase as Exclude<typeof phase, 'validate' | 'review' | 'remediate'>;
 
           // #814/#1095: resolve provider+model+effort for this phase. Provider always
           // defined (built-in fallback). Model + effort optional (undefined = no
@@ -1122,6 +1143,20 @@ export class PhaseLoop {
 
       // Clear output buffer for next phase
       outputCapture.clear();
+
+      // #1121: off-sequence `remediate` seam. After `review` completes
+      // successfully, an injected trigger may drive a `remediate` pass that then
+      // re-enters `review`. Defaults undefined → dead in production (FR-007/D-5).
+      if (phase === 'review' && result.success && deps.remediateTrigger?.(context)) {
+        this.logger.info('review complete — remediateTrigger fired; running off-sequence remediate');
+        await labelManager.onPhaseStart('remediate');
+        const remediateResult = this.runStubPhase('remediate');
+        await labelManager.onPhaseComplete('remediate');
+        results.push(remediateResult);
+        outputCapture.clear();
+        i--; // Re-enter the review phase
+        continue;
+      }
     }
 
     this.logger.info('Phase loop completed successfully — all phases done');
@@ -1131,6 +1166,15 @@ export class PhaseLoop {
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
     };
+  }
+
+  /**
+   * #1121: inert stub executor for the `review` and `remediate` phases. Returns
+   * a synthetic success without spawning the CLI. Real executors, prompts, and
+   * verdict/finding logic land in later epic issues.
+   */
+  private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
+    return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
   }
 
   /**

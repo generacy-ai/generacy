@@ -238,9 +238,19 @@ function loadFromEnv(): Record<string, unknown> {
     (config.worker as Record<string, unknown>).phaseTimeoutMs = parseInt(phaseTimeoutMs, 10);
   }
 
+  // Review phase feature flag (#1121): WORKER_REVIEW_PHASE_ENABLED=true opts into
+  // the (otherwise skipped) review phase. Default false keeps behavior byte-identical.
+  const reviewPhaseEnabled = process.env['WORKER_REVIEW_PHASE_ENABLED'] ?? process.env[`${ENV_PREFIX}WORKER_REVIEW_PHASE_ENABLED`];
+  if (reviewPhaseEnabled !== undefined) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).reviewPhaseEnabled = reviewPhaseEnabled === 'true' || reviewPhaseEnabled === '1';
+  }
+
   // Per-phase timeout overrides: WORKER_PHASE_TIMEOUT_<PHASE>_MS (e.g. WORKER_PHASE_TIMEOUT_PLAN_MS).
   // `validate` is excluded — it runs a shell command on a separate timeout path.
-  const overridablePhases = ['specify', 'clarify', 'plan', 'tasks', 'implement'] as const;
+  const overridablePhases = ['specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'remediate'] as const;
   for (const phase of overridablePhases) {
     const suffix = `WORKER_PHASE_TIMEOUT_${phase.toUpperCase()}_MS`;
     const value = process.env[suffix] ?? process.env[`${ENV_PREFIX}${suffix}`];

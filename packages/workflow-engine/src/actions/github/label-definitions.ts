@@ -24,7 +24,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'phase:plan', color: '0052CC', description: 'Planning phase' },
   { name: 'phase:tasks', color: '0052CC', description: 'Task generation phase' },
   { name: 'phase:implement', color: '0052CC', description: 'Implementation phase' },
+  { name: 'phase:review', color: '0052CC', description: 'Review phase' },
   { name: 'phase:validate', color: '0052CC', description: 'Validation phase' },
+  { name: 'phase:remediate', color: '0052CC', description: 'Remediation phase' },
 
   // Waiting-for labels (review gates)
   { name: 'waiting-for:spec-review', color: 'FBCA04', description: 'Waiting for spec review' },
@@ -57,7 +59,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:plan', color: '0E8A16', description: 'Planning phase completed' },
   { name: 'completed:tasks', color: '0E8A16', description: 'Task generation completed' },
   { name: 'completed:implement', color: '0E8A16', description: 'Implementation completed' },
+  { name: 'completed:review', color: '0E8A16', description: 'Review phase completed' },
   { name: 'completed:validate', color: '0E8A16', description: 'Validation completed' },
+  { name: 'completed:remediate', color: '0E8A16', description: 'Remediation phase completed' },
   { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
 
@@ -67,7 +71,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'failed:plan', color: 'D73A4A', description: 'Phase plan failed' },
   { name: 'failed:tasks', color: 'D73A4A', description: 'Phase tasks failed' },
   { name: 'failed:implement', color: 'D73A4A', description: 'Phase implement failed' },
+  { name: 'failed:review', color: 'D73A4A', description: 'Phase review failed' },
   { name: 'failed:validate', color: 'D73A4A', description: 'Phase validate failed' },
+  { name: 'failed:remediate', color: 'D73A4A', description: 'Phase remediate failed' },
 
   // #942: Repeat-identical failure escalation labels — applied by
   // LabelManager.onRepeatedError when the same fingerprint fires ≥2×.
@@ -76,7 +82,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'failed:plan-repeated', color: 'B60205', description: 'Phase plan failed with the same defect ≥2×' },
   { name: 'failed:tasks-repeated', color: 'B60205', description: 'Phase tasks failed with the same defect ≥2×' },
   { name: 'failed:implement-repeated', color: 'B60205', description: 'Phase implement failed with the same defect ≥2×' },
+  { name: 'failed:review-repeated', color: 'B60205', description: 'Phase review failed with the same defect ≥2×' },
   { name: 'failed:validate-repeated', color: 'B60205', description: 'Phase validate failed with the same defect ≥2×' },
+  { name: 'failed:remediate-repeated', color: 'B60205', description: 'Phase remediate failed with the same defect ≥2×' },
 
   // Issue type labels
   { name: 'type:feature', color: '1D76DB', description: 'Feature request' },

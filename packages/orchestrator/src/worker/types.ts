@@ -6,7 +6,7 @@ import type { PushGuardDecision } from './push-guard.js';
 /**
  * Workflow phases in execution order
  */
-export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'validate';
+export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'review' | 'validate' | 'remediate';
 
 /**
  * Event types captured in the conversation JSONL log.
@@ -48,7 +48,7 @@ export interface JournalEntry {
  * Ordered sequence of all workflow phases (default for feature/bugfix workflows)
  */
 export const PHASE_SEQUENCE: WorkflowPhase[] = [
-  'specify', 'clarify', 'plan', 'tasks', 'implement', 'validate',
+  'specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate',
 ];
 
 /**
@@ -83,7 +83,9 @@ export const PHASE_TO_STAGE: Record<WorkflowPhase, StageType> = {
   plan: 'planning',
   tasks: 'planning',
   implement: 'implementation',
+  review: 'implementation',
   validate: 'implementation',
+  remediate: 'implementation',
 };
 
 /**

@@ -57,7 +57,9 @@ const KNOWN_PHASES: readonly WorkflowPhase[] = [
   'plan',
   'tasks',
   'implement',
+  'review',
   'validate',
+  'remediate',
 ];
 
 function isKnownPhase(candidate: string): candidate is WorkflowPhase {

@@ -43,7 +43,9 @@ export const WorkflowAgentEntriesSchema = z
         plan: AgentEntrySchema.optional(),
         tasks: AgentEntrySchema.optional(),
         implement: AgentEntrySchema.optional(),
+        review: AgentEntrySchema.optional(),
         validate: AgentEntrySchema.optional(),
+        remediate: AgentEntrySchema.optional(),
       })
       .strict()
       .optional(),
