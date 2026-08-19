@@ -167,4 +167,66 @@ export class PhaseTrackerService implements PhaseTracker {
       );
     }
   }
+
+  /**
+   * Raw-key arbitrary-string GET (#1107). Returns `null` when Redis is
+   * unavailable or the key is absent; otherwise the stored string value.
+   */
+  async getValueRaw(key: string): Promise<string | null> {
+    if (!this.redis) {
+      this.logger.warn('Redis unavailable for phase tracker, getValueRaw returning null');
+      return null;
+    }
+
+    try {
+      return await this.redis.get(key);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in getValueRaw, returning null',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Raw-key arbitrary-string SET with explicit TTL (#1107). No-op + warn when
+   * Redis is unavailable.
+   */
+  async setValueRaw(key: string, value: string, ttlSeconds: number): Promise<void> {
+    if (!this.redis) {
+      this.logger.warn('Redis unavailable for phase tracker, skipping setValueRaw');
+      return;
+    }
+
+    try {
+      await this.redis.set(key, value, 'EX', ttlSeconds);
+      this.logger.info({ key, ttl: ttlSeconds }, 'Set value (raw key)');
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in setValueRaw, value not persisted',
+      );
+    }
+  }
+
+  /**
+   * Raw-key clear (#1107). Caller-owned key namespace. No-op when Redis
+   * unavailable.
+   */
+  async clearRaw(key: string): Promise<void> {
+    if (!this.redis) {
+      return;
+    }
+
+    try {
+      await this.redis.del(key);
+      this.logger.info({ key }, 'Cleared raw key');
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in clearRaw, key may persist until TTL',
+      );
+    }
+  }
 }

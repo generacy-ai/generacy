@@ -11,6 +11,23 @@ import type { PrManager } from './pr-manager.js';
  */
 export const EXCLUDED_PATH_PREFIXES: readonly string[] = ['specs/'];
 
+/**
+ * Exact repo-root file paths excluded from the "product diff" check (#1107).
+ *
+ * These are the spec-kit `update_agent` targets, written at repo root by the
+ * specify phase. Matched by exact string equality against the root-relative
+ * path — NOT `startsWith` (which would swallow `CLAUDE.md.bak`) and NOT
+ * basename-at-any-depth (which would exclude genuine `packages/<pkg>/CLAUDE.md`
+ * documentation work). Module-level constant per Clarification Q1 (no
+ * `WorkerConfig` field, no YAML key).
+ */
+export const EXCLUDED_EXACT_PATHS: readonly string[] = [
+  'CLAUDE.md',
+  'AGENTS.md',
+  'GEMINI.md',
+  '.github/copilot-instructions.md',
+];
+
 export interface ProductDiffResult {
   /** Every file returned by `git diff --name-only base...HEAD`. */
   changedFiles: string[];
@@ -21,15 +38,18 @@ export interface ProductDiffResult {
 }
 
 /**
- * Returns `true` when `path` is NOT under any excluded prefix.
+ * Returns `true` when `path` is NOT under any excluded prefix and does NOT
+ * exactly equal any excluded root-relative path.
  *
  * @param prefixes Defaults to `EXCLUDED_PATH_PREFIXES`; injected for tests.
+ * @param exactPaths Defaults to `EXCLUDED_EXACT_PATHS`; injected for tests.
  */
 export function isProductFile(
   path: string,
   prefixes: readonly string[] = EXCLUDED_PATH_PREFIXES,
+  exactPaths: readonly string[] = EXCLUDED_EXACT_PATHS,
 ): boolean {
-  return !prefixes.some((prefix) => path.startsWith(prefix));
+  return !prefixes.some((prefix) => path.startsWith(prefix)) && !exactPaths.includes(path);
 }
 
 /**
@@ -65,4 +85,23 @@ export async function computeProductDiff(
   const changedFiles = await github.getFilesChangedBetween(baseRef, 'HEAD');
   const productFiles = changedFiles.filter((p) => isProductFile(p));
   return { changedFiles: [...changedFiles], productFiles, baseRef };
+}
+
+/**
+ * Phase-scoped product diff (#1107).
+ *
+ * Measures only the files touched by the branch's OWN commits since `startRef`
+ * (first-parent, no-merges), so base-merge-introduced and earlier-phase files
+ * never satisfy the guard. Used by the implement-phase step-5b guard in place
+ * of the cumulative `computeProductDiff` window.
+ *
+ * The result's `baseRef` field carries `startRef` for diagnostics.
+ */
+export async function computePhaseScopedProductDiff(
+  github: GitHubClient,
+  startRef: string,
+): Promise<ProductDiffResult> {
+  const changedFiles = await github.getFilesChangedByOwnCommits(startRef);
+  const productFiles = changedFiles.filter((p) => isProductFile(p));
+  return { changedFiles: [...changedFiles], productFiles, baseRef: startRef };
 }

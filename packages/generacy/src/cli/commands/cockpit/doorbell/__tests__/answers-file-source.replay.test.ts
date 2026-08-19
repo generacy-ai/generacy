@@ -171,6 +171,52 @@ describe('AnswersFileSource — startup replay', () => {
     expect(capWarns).toHaveLength(0);
   });
 
+  it('mixed-case same-repo replay: 0 same-repo answers dropped for casing reasons', async () => {
+    // Observed live pattern: one answers.ndjson carrying same-repo child-issue
+    // answers whose gateKey owner/repo casing diverges from the bound epicRef.
+    // Bound epic is painworth/doc-intel#3; every line is the same repo under a
+    // different casing → all must emit, none dropped as cross-epic.
+    const line = (gateId: string, gateKey: string): string =>
+      JSON.stringify({
+        type: 'gate-answer',
+        gateId,
+        gateKey,
+        optionId: 'opt-1',
+        freeText: null,
+        actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
+        answeredAt: '2027-01-14T12:00:00.000Z',
+        deliveryId: `d-${gateId}`,
+      }) + '\n';
+    const content =
+      line('m1', 'Painworth/doc-intel#23:clarification:batch-1') +
+      line('m2', 'painworth/Doc-Intel#24:implementation-review:abc') +
+      line('m3', 'PAINWORTH/DOC-INTEL#3:phase-queue:xyz');
+    const fs = makeFacade(content);
+
+    const events: GateAnswerEvent[] = [];
+    const logger = makeLogger();
+    const src = new AnswersFileSource({
+      epicRef: 'painworth/doc-intel#3',
+      filePath: FILE_PATH,
+      onEvent: async (e) => {
+        events.push(e);
+      },
+      logger,
+      useFsWatch: false,
+      pollIntervalMs: 100,
+      fs,
+    });
+
+    await src.start();
+    await src.stop();
+
+    expect(events.map((e) => e.gateId)).toEqual(['m1', 'm2', 'm3']);
+    const drops = logger.info.mock.calls
+      .map((c) => c[0] as string)
+      .filter((m) => m.includes('cross-epic drop'));
+    expect(drops).toHaveLength(0);
+  });
+
   it('replay ordering: pre-populated lines emit in file-append order', async () => {
     const lines: string[] = [];
     for (let i = 1; i <= 5; i++) lines.push(goodLine(`g${i}`));

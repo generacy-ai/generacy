@@ -38,6 +38,11 @@ const mockGithub = {
   getCommitsBetween: vi.fn().mockResolvedValue([]),
   // Default: implement product-diff check sees at least one product file
   getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/foo/src/bar.ts']),
+  // #1107: phase-scoped product-diff guard captures a start ref via
+  // getCurrentCommitSha, then measures the branch's own commits since it.
+  // Default to a captured ref + one product file so the guard passes.
+  getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
+  getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/foo/src/bar.ts']),
   // PR operations for PrFeedbackHandler
   getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
   getPRReviewThreads: vi.fn().mockResolvedValue([]),

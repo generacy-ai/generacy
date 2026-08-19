@@ -498,6 +498,107 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(onEvent).toHaveBeenCalledTimes(1);
   });
 
+  it('forward case divergence (lowercase epic, mixed-case gateKey owner) → emitted, no drop', async () => {
+    const mem = makeMemFs();
+    // Bound epic owner is lowercase; the gateKey owner differs only by case.
+    mem.setContent(
+      goodLine({ gateKey: 'Painworth/x#1:clarification:batch-abc' }),
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ epicRef: 'painworth/x#1', fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const infoDrops = logger.info.mock.calls.filter((c) =>
+      (c[0] as string).includes('cross-epic drop'),
+    );
+    expect(infoDrops).toHaveLength(0);
+  });
+
+  it('reverse case divergence (mixed-case epic, lowercase gateKey owner) → emitted', async () => {
+    const mem = makeMemFs();
+    mem.setContent(
+      goodLine({ gateKey: 'painworth/x#1:clarification:batch-abc' }),
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ epicRef: 'Painworth/x#1', fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const infoDrops = logger.info.mock.calls.filter((c) =>
+      (c[0] as string).includes('cross-epic drop'),
+    );
+    expect(infoDrops).toHaveLength(0);
+  });
+
+  it('repo-name case divergence → emitted (fold covers the repo component)', async () => {
+    const mem = makeMemFs();
+    mem.setContent(
+      goodLine({ gateKey: 'owner/repo#1:clarification:batch-abc' }),
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ epicRef: 'owner/Repo#1', fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const infoDrops = logger.info.mock.calls.filter((c) =>
+      (c[0] as string).includes('cross-epic drop'),
+    );
+    expect(infoDrops).toHaveLength(0);
+  });
+
+  it('genuine foreign repo (differs beyond casing) → still dropped + logged', async () => {
+    const mem = makeMemFs();
+    mem.setContent(
+      goodLine({ gateKey: 'painworth/y#1:clarification:batch-abc' }),
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ epicRef: 'painworth/x#1', fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    const infoDrops = logger.info.mock.calls.filter((c) =>
+      (c[0] as string).includes('cross-epic drop'),
+    );
+    expect(infoDrops).toHaveLength(1);
+  });
+
+  it('foreign owner (differs beyond casing) → still dropped', async () => {
+    const mem = makeMemFs();
+    mem.setContent(
+      goodLine({ gateKey: 'other/x#1:clarification:batch-abc' }),
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ epicRef: 'painworth/x#1', fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    const infoDrops = logger.info.mock.calls.filter((c) =>
+      (c[0] as string).includes('cross-epic drop'),
+    );
+    expect(infoDrops).toHaveLength(1);
+  });
+
   it('event.ts uses injected now() clock (deterministic)', async () => {
     const mem = makeMemFs();
     mem.setContent(goodLine());

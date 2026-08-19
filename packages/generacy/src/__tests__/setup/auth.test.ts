@@ -51,6 +51,7 @@ beforeEach(() => {
   delete process.env['GH_EMAIL'];
   delete process.env['GH_USERNAME'];
   delete process.env['GH_TOKEN'];
+  delete process.env['GENERACY_BOOTSTRAP_MODE'];
 });
 
 afterEach(() => {
@@ -266,6 +267,66 @@ describe('setup auth command', () => {
       expect(mockWriteFileSync).not.toHaveBeenCalled();
       expect(mockLogger.warn).toHaveBeenCalledWith(
         'GH_TOKEN not set — git push/pull to private repos will require manual authentication',
+      );
+    });
+  });
+
+  describe('JIT credential helper gating (wizard mode)', () => {
+    // Wizard clusters authenticate git via git-credential-generacy; the only
+    // GH_TOKEN in their environment is the 1-hour activation token, so static
+    // credential configuration must be skipped when the JIT helper is active.
+    it('skips static git/gh credential configuration when the JIT helper is active', async () => {
+      process.env['GH_TOKEN'] = 'ghs_wizardtoken';
+      process.env['GENERACY_BOOTSTRAP_MODE'] = 'wizard';
+      mockExecBehavior({
+        'credential.https://github.com.helper': {
+          stdout: "!CONTROL_PLANE_SOCKET_PATH='/run/generacy-git-token/control.sock' node 'git-credential-generacy.js'",
+        },
+      });
+
+      await runAuthCommand([]);
+
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      const cmds = mockExecSync.mock.calls.map((call) => call[0] as string);
+      expect(cmds).not.toContain('git config --global credential.helper store');
+      expect(cmds.some((cmd) => cmd.includes('gh auth login --with-token'))).toBe(false);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'JIT git credential helper active (wizard mode) — skipping static git/gh credential configuration',
+      );
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        'GH_TOKEN not set — git push/pull to private repos will require manual authentication',
+      );
+    });
+
+    it('still configures static credentials in wizard mode when the JIT helper is absent', async () => {
+      process.env['GH_TOKEN'] = 'ghp_abc123';
+      process.env['GENERACY_BOOTSTRAP_MODE'] = 'wizard';
+      mockExecBehavior(); // helper lookup returns '' → no JIT marker
+
+      await runAuthCommand([]);
+
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'git config --global credential.helper store',
+        expect.any(Object),
+      );
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        '/home/testuser/.git-credentials',
+        'https://git:ghp_abc123@github.com\n',
+        { mode: 0o600 },
+      );
+    });
+
+    it('still configures static credentials outside wizard mode even when the JIT helper is configured', async () => {
+      process.env['GH_TOKEN'] = 'ghp_abc123';
+      mockExecBehavior({
+        'credential.https://github.com.helper': { stdout: 'git-credential-generacy' },
+      });
+
+      await runAuthCommand([]);
+
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'git config --global credential.helper store',
+        expect.any(Object),
       );
     });
   });

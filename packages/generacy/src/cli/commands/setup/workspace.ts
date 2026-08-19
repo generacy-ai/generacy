@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getLogger } from '../../utils/logger.js';
 import { exec, execSafe } from '../../utils/exec.js';
+import { jitCredentialHelperActive } from './jit-credentials.js';
 import { tryLoadWorkspaceConfig, getRepoNames, parseRepoList, scanForWorkspaceConfig } from '@generacy-ai/config';
 
 /**
@@ -155,6 +156,17 @@ function detectPackageManager(repoPath: string): 'pnpm' | 'npm' {
  */
 function ensureGitCredentials(): void {
   const logger = getLogger();
+
+  // Wizard clusters already authenticate via the JIT credential helper.
+  // `gh auth setup-git` REPLACES the per-host helper list, so running it here
+  // would swap never-stale JIT auth for the 1-hour activation token that
+  // happens to satisfy `gh auth status`. See jit-credentials.ts.
+  if (jitCredentialHelperActive()) {
+    logger.info(
+      'JIT git credential helper active (wizard mode) — leaving git credential configuration untouched',
+    );
+    return;
+  }
 
   const ghAuth = execSafe('gh auth status');
   if (ghAuth.ok) {

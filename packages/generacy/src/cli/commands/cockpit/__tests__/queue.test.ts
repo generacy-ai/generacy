@@ -307,6 +307,52 @@ describe('runQueue', () => {
   });
 });
 
+// #1106 Q2=B — owner/repo comparisons in the queue loop and `classifyRow`
+// must be case-insensitive. Without the fix: `--repo` in one casing and phase
+// refs in another (URL-form vs. bare form) yield every row as `cross-repo` and
+// nothing is ever labeled.
+describe('#1106 case-insensitive owner/repo classification', () => {
+  it('mixed-case phase refs collapse into a single target repo', async () => {
+    const body = epicBody([
+      { heading: 'S1', refs: ['Painworth/doc-intel#23', 'painworth/doc-intel#24'] },
+    ]);
+    const gh = ghWithBody(body);
+    const cockpitGh = stubGhWrapper();
+    const out: string[] = [];
+
+    const result = await runQueue(
+      'owner/epic#42',
+      's1',
+      { yes: true },
+      { gh, cockpitGh, stdout: (l) => out.push(l) },
+    );
+
+    // Without the fix, pickTargetRepo would report `multi-repo-no-flag`.
+    expect(result.rows).toHaveLength(2);
+    for (const row of result.rows) {
+      expect(row.eligibility.kind).toBe('eligible');
+    }
+    expect(cockpitGh.addLabel).toHaveBeenCalledTimes(2);
+  });
+
+  it('--repo casing differs from phase refs → still eligible, not skipped as cross-repo', async () => {
+    const body = epicBody([{ heading: 'S1', refs: ['painworth/doc-intel#23'] }]);
+    const gh = ghWithBody(body);
+    const cockpitGh = stubGhWrapper();
+
+    const result = await runQueue(
+      'owner/epic#42',
+      's1',
+      { yes: true, repo: 'Painworth/doc-intel' },
+      { gh, cockpitGh },
+    );
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]?.eligibility.kind).toBe('eligible');
+    expect(cockpitGh.addLabel).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('runQueueSingleIssue (#935)', () => {
   const loadConfig = vi.fn(async () => ({
     config: { assignee: 'octocat' },

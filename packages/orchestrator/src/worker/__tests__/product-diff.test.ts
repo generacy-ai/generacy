@@ -3,14 +3,27 @@ import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { PrManager } from '../pr-manager.js';
 import {
   EXCLUDED_PATH_PREFIXES,
+  EXCLUDED_EXACT_PATHS,
   isProductFile,
   resolveBaseRef,
   computeProductDiff,
+  computePhaseScopedProductDiff,
 } from '../product-diff.js';
 
 describe('EXCLUDED_PATH_PREFIXES', () => {
   it('contains specs/', () => {
     expect(EXCLUDED_PATH_PREFIXES).toEqual(['specs/']);
+  });
+});
+
+describe('EXCLUDED_EXACT_PATHS', () => {
+  it('contains the four agent-context targets', () => {
+    expect(EXCLUDED_EXACT_PATHS).toEqual([
+      'CLAUDE.md',
+      'AGENTS.md',
+      'GEMINI.md',
+      '.github/copilot-instructions.md',
+    ]);
   });
 });
 
@@ -38,6 +51,33 @@ describe('isProductFile', () => {
   it('respects injected prefixes over default', () => {
     expect(isProductFile('docs/foo.md', ['docs/'])).toBe(false);
     expect(isProductFile('specs/foo.md', ['docs/'])).toBe(true);
+  });
+
+  // T013 / SC-002: root-relative exact-filename exclusion (#1107 FR-001).
+  it('excludes root CLAUDE.md', () => {
+    expect(isProductFile('CLAUDE.md')).toBe(false);
+  });
+
+  it('excludes root AGENTS.md / GEMINI.md', () => {
+    expect(isProductFile('AGENTS.md')).toBe(false);
+    expect(isProductFile('GEMINI.md')).toBe(false);
+  });
+
+  it('excludes .github/copilot-instructions.md', () => {
+    expect(isProductFile('.github/copilot-instructions.md')).toBe(false);
+  });
+
+  it('includes CLAUDE.md.bak (exact match, not startsWith)', () => {
+    expect(isProductFile('CLAUDE.md.bak')).toBe(true);
+  });
+
+  it('includes nested packages/foo/CLAUDE.md (root-relative only)', () => {
+    expect(isProductFile('packages/foo/CLAUDE.md')).toBe(true);
+  });
+
+  it('respects injected exactPaths over default', () => {
+    expect(isProductFile('OWNERS', EXCLUDED_PATH_PREFIXES, ['OWNERS'])).toBe(false);
+    expect(isProductFile('CLAUDE.md', EXCLUDED_PATH_PREFIXES, ['OWNERS'])).toBe(true);
   });
 });
 
@@ -127,5 +167,45 @@ describe('computeProductDiff', () => {
     const result = await computeProductDiff(github, 'origin/develop');
     result.changedFiles.push('extra.ts');
     expect(result.productFiles).toEqual(['README.md']);
+  });
+});
+
+describe('computePhaseScopedProductDiff', () => {
+  const makeGithub = (files: string[]): GitHubClient => ({
+    getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(files),
+  } as unknown as GitHubClient);
+
+  it('queries own-commit files from the passed startRef', async () => {
+    const getFilesChangedByOwnCommits = vi.fn().mockResolvedValue(['packages/x/y.ts']);
+    const github = { getFilesChangedByOwnCommits } as unknown as GitHubClient;
+    const result = await computePhaseScopedProductDiff(github, 'abc123');
+    expect(getFilesChangedByOwnCommits).toHaveBeenCalledWith('abc123');
+    expect(result.baseRef).toBe('abc123');
+  });
+
+  it('SC-002: own-diff of CLAUDE.md only yields no productFiles', async () => {
+    const github = makeGithub(['CLAUDE.md']);
+    const result = await computePhaseScopedProductDiff(github, 'abc123');
+    expect(result.changedFiles).toEqual(['CLAUDE.md']);
+    expect(result.productFiles).toEqual([]);
+  });
+
+  it('SC-001: own-diff of an earlier-phase CLAUDE.md + a spec log yields no productFiles', async () => {
+    const github = makeGithub(['CLAUDE.md', 'specs/1107/conversation-log.jsonl']);
+    const result = await computePhaseScopedProductDiff(github, 'abc123');
+    expect(result.productFiles).toEqual([]);
+  });
+
+  it('partitions a mixed own-diff, keeping real product files', async () => {
+    const github = makeGithub(['CLAUDE.md', 'specs/1107/plan.md', 'packages/x/y.ts']);
+    const result = await computePhaseScopedProductDiff(github, 'abc123');
+    expect(result.productFiles).toEqual(['packages/x/y.ts']);
+  });
+
+  it('empty own-diff yields empty productFiles', async () => {
+    const github = makeGithub([]);
+    const result = await computePhaseScopedProductDiff(github, 'abc123');
+    expect(result.changedFiles).toEqual([]);
+    expect(result.productFiles).toEqual([]);
   });
 });
