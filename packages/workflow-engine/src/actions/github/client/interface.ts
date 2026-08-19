@@ -435,6 +435,19 @@ export interface GitHubClient {
   getFilesChangedByOwnCommits(startRef: string): Promise<string[]>;
 
   /**
+   * Whether `sha` resolves to a commit object in the local checkout (#1112).
+   * Runs `git rev-parse --verify --quiet <sha>^{commit}` in the workdir.
+   *
+   * @param sha A 7-40 hex commit ref (as accepted by isValidCommitSha).
+   * @returns true when the commit exists (git exit 0); false when it is missing
+   *   (git exit 1 — for both full and abbreviated shas).
+   * @throws Error on any other git exit (e.g. 128 — corrupt/inaccessible git dir,
+   *   not a repository) with the exit code and stderr, so an environment fault is
+   *   never mistaken for a missing commit.
+   */
+  commitExistsInCheckout(sha: string): Promise<boolean>;
+
+  /**
    * List all branches in the repository
    */
   listBranches(owner: string, repo: string): Promise<string[]>;

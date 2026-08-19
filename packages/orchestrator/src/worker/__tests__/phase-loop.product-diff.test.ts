@@ -62,6 +62,9 @@ function makeGithub(ownFiles: string[], cumulativeFiles: string[] = ownFiles): a
     getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
     getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(ownFiles),
     getFilesChangedBetween: vi.fn().mockResolvedValue(cumulativeFiles),
+    // #1112: a reused phase-start-ref is resolve-checked before use. Default to
+    // "resolves" so existing cases exercise the reuse path unchanged.
+    commitExistsInCheckout: vi.fn().mockResolvedValue(true),
   };
 }
 
@@ -322,6 +325,174 @@ describe('PhaseLoop - phase-scoped product-diff healthy path (SC-003)', () => {
     const context = createMockContext('implement');
     context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
     context.github.getCurrentCommitSha = vi.fn().mockResolvedValue('');
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(result.completed).toBe(false);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+    const last = result.results[result.results.length - 1]!;
+    expect(last.error?.message).toMatch(/product-diff detection failed/);
+  });
+});
+
+describe('PhaseLoop - phase-start-ref legacy migration + resolve-check (#1112)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  const BRANCH_KEY = 'phase-start-ref:generacy-ai:generacy:1107:no-branch:implement';
+  const LEGACY_KEY = 'phase-start-ref:generacy-ai:generacy:1107:implement';
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('SC-001: migrates a valid legacy ref on a branch-scoped miss and reuses it', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === LEGACY_KEY ? 'deadbeef' : null,
+    );
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    const clearRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = { getValueRaw, setValueRaw, clearRaw } as any;
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    // Legacy ref reused directly — no fresh HEAD capture.
+    expect(context.github.getCurrentCommitSha).not.toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('deadbeef');
+    // Re-persisted under the branch-scoped key BEFORE the legacy clear (Q1=A).
+    expect(setValueRaw).toHaveBeenCalledWith(BRANCH_KEY, 'deadbeef', expect.any(Number));
+    expect(clearRaw).toHaveBeenCalledWith(LEGACY_KEY);
+    const setOrder = setValueRaw.mock.invocationCallOrder[0]!;
+    const legacyClearIdx = clearRaw.mock.calls.findIndex((c) => c[0] === LEGACY_KEY);
+    const clearOrder = clearRaw.mock.invocationCallOrder[legacyClearIdx]!;
+    expect(setOrder).toBeLessThan(clearOrder);
+    // Phase passed to validate.
+    expect(result.completed).toBe(true);
+    expect(deps.labelManager.onError).not.toHaveBeenCalledWith('implement');
+  });
+
+  it('SC-002: clears the legacy key exactly once on the shape-invalid legacy case', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === LEGACY_KEY ? '' : null,
+    );
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    const clearRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = { getValueRaw, setValueRaw, clearRaw } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    // Shape-invalid legacy → not migrated, but consumed (cleared) exactly once.
+    const legacyClears = clearRaw.mock.calls.filter((c) => c[0] === LEGACY_KEY);
+    expect(legacyClears).toHaveLength(1);
+    // No migration write; fresh HEAD captured instead.
+    expect(setValueRaw).not.toHaveBeenCalledWith(BRANCH_KEY, '', expect.any(Number));
+    expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
+  });
+
+  it('SC-002: clears the legacy key exactly once on the shape-valid-but-unresolvable legacy case', async () => {
+    // Q3=A third arm: a well-formed sha in the legacy key whose commit does
+    // not exist in this checkout (attempt-1-merge-never-pushed after re-entry
+    // on a fresh clone). The clear must still fire — otherwise the same
+    // unresolvable legacy value is re-read and re-rejected on every subsequent
+    // branch-scoped miss until its 7-day TTL. Kills the mutation that defers
+    // the legacy clear until after the resolve check.
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    context.github.commitExistsInCheckout = vi.fn().mockResolvedValue(false);
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === LEGACY_KEY ? 'deadbeef' : null,
+    );
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    const clearRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = { getValueRaw, setValueRaw, clearRaw } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    // Shape-valid legacy ref → migrated + consumed even though the resolve
+    // check subsequently rejects it. Clear fires exactly once, regardless of
+    // whether the ref survived the resolve check.
+    const legacyClears = clearRaw.mock.calls.filter((c) => c[0] === LEGACY_KEY);
+    expect(legacyClears).toHaveLength(1);
+    // Fresh HEAD capture followed the resolve-check rejection.
+    expect(context.github.commitExistsInCheckout).toHaveBeenCalledWith('deadbeef');
+    expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('a1b2c3d4');
+  });
+
+  it('SC-003: re-captures fresh HEAD when the persisted ref does not resolve in this checkout', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    context.github.commitExistsInCheckout = vi.fn().mockResolvedValue(false);
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === BRANCH_KEY ? 'deadbeef' : null,
+    );
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = {
+      getValueRaw,
+      setValueRaw,
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const config = createConfig();
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    expect(context.github.commitExistsInCheckout).toHaveBeenCalledWith('deadbeef');
+    // Unresolvable → treat as absent → capture fresh HEAD and persist it.
+    expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
+    expect(setValueRaw).toHaveBeenCalledWith(BRANCH_KEY, 'a1b2c3d4', expect.any(Number));
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('a1b2c3d4');
+    // No throw, no product-diff-error, no escalation.
+    expect(result.completed).toBe(true);
+    expect(deps.labelManager.onError).not.toHaveBeenCalledWith('implement');
+  });
+
+  it('SC-004: reuses a branch-scoped ref directly when it resolves (no legacy read)', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === BRANCH_KEY ? 'deadbeef' : null,
+    );
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = {
+      getValueRaw,
+      setValueRaw,
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    // Branch-scoped hit that resolves → no legacy read-through, no re-capture.
+    expect(getValueRaw).not.toHaveBeenCalledWith(LEGACY_KEY);
+    expect(context.github.getCurrentCommitSha).not.toHaveBeenCalled();
+    expect(setValueRaw).not.toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('deadbeef');
+  });
+
+  it('SC-005: a non-commit-missing git fault (throw) routes to product-diff-error', async () => {
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    context.github.commitExistsInCheckout = vi
+      .fn()
+      .mockRejectedValue(new Error('git rev-parse ... failed (exit 128): fatal: not a git repository'));
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === BRANCH_KEY ? 'deadbeef' : null,
+    );
+    deps.phaseTracker = {
+      getValueRaw,
+      setValueRaw: vi.fn().mockResolvedValue(undefined),
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+    } as any;
     const config = createConfig();
 
     const result = await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
