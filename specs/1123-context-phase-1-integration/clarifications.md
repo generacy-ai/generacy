@@ -12,7 +12,7 @@ Issue: generacy-ai/generacy#1123
 - B: Assume #1121/#1122 merge to `develop` first; this branch is **rebased** on them and adds only tests + the contract note (implement phase blocks until they land).
 - C: Add the union/config members as **test-only fixtures/doubles** in the harness, leaving production types unchanged until #1121/#1122 land.
 
-**Answer**: *Pending*
+**Answer**: B — Assume #1121/#1122 merge to `develop` first; this branch is rebased on them and adds only tests + the contract note (implement phase blocks until they land). Rationale: #1123 is the epic's integration checkpoint whose purpose is to prove #1121+#1122 wired together; they are orthogonal and land as their own independent PRs. Co-landing (A) collapses three issues into one and conflicts with #1121/#1122's PRs; test-only doubles (C) would test a fake universe that never exercises the real production types (FR-006's audit must run on the real union).
 
 ### Q2: How the stub harness enters `remediate` (loop-control seam)
 **Context**: FR-003 calls `remediate` "reachable off-sequence via loop control" and names this "the loop-control seam of record" (FR-007). To assert it, the harness needs a concrete trigger, but the mechanism is unspecified.
@@ -22,7 +22,7 @@ Issue: generacy-ai/generacy#1123
 - B: A **gate/label** (e.g. `waiting-for:remediation`) drives entry, resolved by the existing resume/gate machinery.
 - C: A **direct loop-control return value** from the phase-loop step contract (a new discriminated outcome, e.g. `{ next: 'remediate' }`) independent of any review verdict.
 
-**Answer**: *Pending*
+**Answer**: C — A direct loop-control return value from the phase-loop step contract (a new discriminated outcome, e.g. `{ next: 'remediate' }`) independent of any review verdict. Rationale: the design has three remediate entry points (review verdict, validate failure, external PR feedback) all converging on "entered only via loop control", so a general discriminated loop-control outcome is the seam-of-record that P3 (absorbing validate-fix + pr-feedback) can reuse. A review-verdict-only trigger (A) serves just one path; a gate/label (B) requires a `waiting-for:remediation` label #1121 Q3=A does not add.
 
 ### Q3: Resume target when paused mid-`remediate`
 **Context**: US2's acceptance criterion is explicitly unresolved: "Pausing in `remediate` and resuming lands the loop back at `remediate` (**or** its documented re-`review` target, per the seam)." The `GATE_MAPPING` entry's `resumeFrom` must pick exactly one.
@@ -31,7 +31,7 @@ Issue: generacy-ai/generacy#1123
 - A: Back to **`remediate`** (re-enter the remediation step).
 - B: To **`review`** (the delta-scoped re-review that remediate always backtracks to).
 
-**Answer**: *Pending*
+**Answer**: A — Back to `remediate` (re-enter the remediation step). Rationale: the design doc's remediation-limit gate specifies "human answer resumes into remediate and resets the counter", and remediate must be resumable and partial-work-safe; resuming into remediate to finish is the design-faithful semantics, not re-reviewing incomplete work. The pause-context sidecar already resumes the exact interrupted phase (merge-conflict precedent).
 
 ### Q4: Where per-workflow config is observed inside the loop
 **Context**: FR-004/SC-003 require `maxRemediations` (feature 3 / bugfix 2) and the review profile to be "observable inside the phase loop." The read surface is unspecified, and the stub test needs a definite place to read from. Worker gate/config lives in `packages/orchestrator/src/worker/config.ts`; broader config lives in `@generacy-ai/config`.
@@ -41,7 +41,7 @@ Issue: generacy-ai/generacy#1123
 - B: In **`@generacy-ai/config`** (workspace/workflow config) and read via the config object the worker already holds.
 - C: A **new phase-loop dependency** (injected value on the loop deps) that the stub executor reads directly.
 
-**Answer**: *Pending*
+**Answer**: B — In `@generacy-ai/config` (workspace/workflow config), read via the config object the worker already holds. Rationale: per #1122 Q1=A the per-workflow schema lives in OrchestratorSettings (`@generacy-ai/config`), and per #1122 Q4=A the resolved values come from a `worker/config.ts` resolver over the OrchestratorSettings the worker already loaded — so the loop reads them via that held config object, not a `WorkerConfig` field. Option A contradicts #1122 Q1; a new injected loop dependency (C) is unnecessary plumbing.
 
 ### Q5: Stage + gate-label assignment for the new phases
 **Context**: US3's phase-union audit requires every total `Record<WorkflowPhase, …>` to enumerate the new phases. `PHASE_TO_STAGE` (types.ts) maps each phase to `specification|planning|implementation`, and `GATE_MAPPING`/`WORKFLOW_GATE_MAPPING` (phase-resolver.ts) map gate labels to phases. Both need entries for `review`/`remediate`, and pause/resume (FR-005) depends on the gate labels.
@@ -51,4 +51,4 @@ Issue: generacy-ai/generacy#1123
 - B: A **new `StageType`** (e.g. `review`) is introduced for these phases; new gate labels as above.
 - C: Defer stage/gate naming to the plan phase — assert only *that* entries exist and round-trip, not their specific names.
 
-**Answer**: *Pending*
+**Answer**: C — Defer stage/gate naming to the plan phase; assert only *that* entries exist and round-trip, not their specific names. Rationale: option B (new StageType) contradicts #1121 FR-002, which fixes review/remediate → implementation stage; option A invents a `waiting-for:review` gate the design explicitly does not want (review is autonomous — the only human gates are remediation-limit and final approval). C neither re-decides #1121's implementation-stage nor hardcodes design-wrong / upstream-owned gate labels.

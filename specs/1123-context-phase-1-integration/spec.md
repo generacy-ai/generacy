@@ -17,6 +17,14 @@ This issue ships no product behavior of its own. It ships **integration tests** 
 
 Depends on: #1121 (phase machinery), #1122 (per-workflow config). This issue integrates them; it does not re-implement either.
 
+### Resolved decisions (clarifications Batch 1, 2026-08-19)
+
+- **Dependency landing (Q1=B)**: #1121 and #1122 merge to `develop` first; this branch is **rebased** on them and ships **only** tests + the contract note. It does not co-land the union/config additions (that would collide with #1121/#1122's own PRs) and does not use test-only doubles (FR-006's audit must run on the real production union). The implement phase blocks until #1121/#1122 land.
+- **Remediate entry seam (Q2=C)**: `remediate` is entered via a **direct loop-control return value** from the phase-loop step contract — a new discriminated outcome (e.g. `{ next: 'remediate' }`) independent of any review verdict. This general loop-control outcome is the seam-of-record; it is designed to serve all three future remediate entry points (review verdict, validate failure, external PR feedback), which P3 will converge onto it. No `waiting-for:remediation` gate/label drives entry.
+- **Resume-after-pause target (Q3=A)**: pausing mid-`remediate` and resuming resolves back to **`remediate`** (re-enter the remediation step; the pause-context sidecar resumes the exact interrupted phase, per merge-conflict precedent). It does **not** resolve to `review`.
+- **Per-workflow config surface (Q4=B)**: `maxRemediations` and the review profile live in `@generacy-ai/config` (OrchestratorSettings, per #1122 Q1) and are read inside the loop via the config object the worker already holds (resolved by a `worker/config.ts` resolver, per #1122 Q4). They are **not** a new `WorkerConfig` field and **not** a new injected loop dependency.
+- **Stage + gate naming (Q5=C)**: stage/gate naming is **deferred to the plan phase**. Per #1121 FR-002, `review`/`remediate` map to the `implementation` stage (no new `StageType`). Review is autonomous — the only human gates in the design are remediation-limit and final approval — so no `waiting-for:review` gate is invented here. The P1 tests assert only *that* the companion enumerations have entries for the new phases and round-trip, not their specific stage/label names.
+
 ## User Stories
 
 ### US1: Engine developer proves the phase loop traverses review and remediate
@@ -38,7 +46,7 @@ Depends on: #1121 (phase machinery), #1122 (per-workflow config). This issue int
 
 **Acceptance Criteria**:
 - [ ] Pausing in `review` and resuming lands the loop back at `review` (gate/label round-trip intact).
-- [ ] Pausing in `remediate` and resuming lands the loop back at `remediate` (or its documented re-`review` target, per the seam).
+- [ ] Pausing in `remediate` and resuming lands the loop back at `remediate` (re-enter the remediation step — resolved per Q3=A).
 - [ ] `waiting-for:*` / `phase:*` / `agent:*` labels for the new phases apply and clear symmetrically — no residual label after resume.
 
 ### US3: The phase union cannot silently drift out of sync
@@ -57,9 +65,9 @@ Depends on: #1121 (phase machinery), #1122 (per-workflow config). This issue int
 |----|-------------|----------|-------|
 | FR-001 | An integration test drives the worker phase loop end-to-end with **stub** review and remediate executors (no real review/remediation behavior). | P1 | Stubs return a controllable verdict/outcome so the harness can steer loop control. |
 | FR-002 | For both `speckit-feature` and `speckit-bugfix`, the loop sequences `review` immediately after `implement`. | P1 | Asserted per workflow. |
-| FR-003 | `remediate` is reachable off-sequence via loop control and, on completion, backtracks to a `review` pass rather than advancing the linear sequence. | P1 | This is the loop-control seam of record. |
-| FR-004 | Per-workflow config values (`maxRemediations`, review profile) are observable inside the phase loop and resolve to the correct per-workflow values (feature 3 / bugfix 2). | P1 | Proves #1122 is wired into the loop, not just parsed. |
-| FR-005 | Cockpit resume + the pause-context round-trip correctly resolve `review` and `remediate` back to their phases, with labels applied and cleared symmetrically. | P1 | Covers gate mapping / resume-phase resolution for the new phases. |
+| FR-003 | `remediate` is reachable off-sequence via a **direct loop-control return value** (a discriminated step outcome, e.g. `{ next: 'remediate' }`, independent of any review verdict — Q2=C) and, on completion, backtracks to a `review` pass rather than advancing the linear sequence. | P1 | This is the loop-control seam of record; designed to serve all three future remediate entry points. |
+| FR-004 | Per-workflow config values (`maxRemediations`, review profile) are observable inside the phase loop — read via the `@generacy-ai/config` OrchestratorSettings object the worker already holds (Q4=B), not a new `WorkerConfig` field — and resolve to the correct per-workflow values (feature 3 / bugfix 2). | P1 | Proves #1122 is wired into the loop, not just parsed. |
+| FR-005 | Cockpit resume + the pause-context round-trip correctly resolve `review` (back to `review`) and `remediate` (back to `remediate`, Q3=A) to their phases, with labels applied and cleared symmetrically. Stage/gate label names are deferred to plan (Q5=C); the test asserts entries exist and round-trip, not their specific names. | P1 | Covers gate mapping / resume-phase resolution for the new phases. |
 | FR-006 | A phase-union sync audit is codified as a test (if not already present), failing on drift between the `WorkflowPhase` union and every companion enumeration. | P1 | Requirements say "if not already done" — confirm coverage; add only what is missing. |
 | FR-007 | A shipped contract note (a `contracts/` doc and/or a load-bearing code comment at the seam) captures the `remediate → review` loop-control contract that P2/P3 build on. | P1 | The durable acceptance artifact. |
 | FR-008 | No real review/remediate executor logic, PR posting, severity gating, or CI/validate orchestration is introduced. | P1 | Those are P2–P4; this issue is stubs + wiring proof only. |
@@ -77,11 +85,12 @@ Depends on: #1121 (phase machinery), #1122 (per-workflow config). This issue int
 
 ## Assumptions
 
-- #1121 and #1122 are merged (or co-landed) so `WorkflowPhase` includes `review`/`remediate` and per-workflow config is parseable; this issue does not modify their public surface.
+- #1121 and #1122 are merged to `develop` **first** and this branch is rebased on them (Q1=B); this issue ships only tests + the contract note and does not modify their public surface, co-land the union/config additions, or use test-only doubles. The implement phase blocks until #1121/#1122 land.
 - Stub executors are test-only doubles injected through the existing phase-loop dependency seams — no production executor files ship here.
 - "Review profile" is whatever per-workflow shape #1122 defines (e.g., a verification-vs-full charter selector); this issue only asserts it is *observable and per-workflow*, not its semantics.
 - The pause-context round-trip reuses the existing pause/resume and gate-mapping machinery; the new phases slot into it without a new persistence mechanism.
 - Where a phase-union audit already exists, this issue extends it to cover the new phases rather than adding a duplicate.
+- `review`/`remediate` map to the `implementation` stage (#1121 FR-002); stage/gate label names are deferred to plan (Q5=C). Review is autonomous — no `waiting-for:review` gate is introduced; the only human gates in the broader design are remediation-limit and final approval.
 
 ## Out of Scope
 
