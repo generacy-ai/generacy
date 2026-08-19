@@ -50,7 +50,14 @@ function lineMatchesRef(line: string, ref: IssueRef): boolean {
   const refToken = refText.split(/\s+/)[0]!;
   const parsed = parseRef(refToken);
   if (parsed == null) return false;
-  return parsed.repo === ref.repo && parsed.number === ref.number;
+  // GitHub owner/repo names are case-insensitive. A raw `===` here silently
+  // treats `Painworth/doc-intel#24` and `painworth/doc-intel#24` as different
+  // refs — producing duplicate task-list entries on the add path and silent
+  // no-ops on the remove path.
+  return (
+    parsed.repo.toLowerCase() === ref.repo.toLowerCase() &&
+    parsed.number === ref.number
+  );
 }
 
 function bodyContainsRef(body: string, ref: IssueRef): boolean {

@@ -200,6 +200,40 @@ describe('SmeeDoorbellSource integration', () => {
     await source.stop();
   }, 10_000);
 
+  // #1106 Q2=B — smee-source's buildRefSet builds `watchedRepos`/`issues`
+  // sets from the epic body (operator-typed casing) while the webhook payload
+  // always carries GitHub-canonical casing. Verify end-to-end that a case
+  // mismatch between the two still emits the event. Without the fix, every
+  // `issues.*` webhook whose casing differs from the epic body would be
+  // silently dropped and the smee doorbell would appear dead.
+  it('#1106 emits event when payload owner/repo casing differs from epic ref casing', async () => {
+    const events: CockpitStreamEvent[] = [];
+    const source = new SmeeDoorbellSource({
+      channelUrl: fake.url,
+      epicRef: 'o/r#100',
+      gh: {} as unknown as GhWrapper,
+      logger: { warn: () => undefined, info: () => undefined },
+      onEvent: async (ev) => {
+        events.push(ev);
+      },
+      onReconnectAttempt: () => undefined,
+      onReconnectSuccess: () => undefined,
+      baseReconnectDelayMs: 10,
+    });
+
+    await source.start();
+    await waitFor(() => fake.activeResponses.size > 0);
+    // Epic body says `o/r`; payload sends GitHub-canonical `O/R`.
+    fake.writeFrame(
+      issueFrame('labeled', { number: 42, repoOwner: 'O', repoName: 'R' }),
+    );
+
+    await waitFor(() => events.length >= 1);
+    expect(events[0]?.type).toBe('issue-transition');
+
+    await source.stop();
+  }, 10_000);
+
   it('drops payload for repo not in watched set', async () => {
     const events: CockpitStreamEvent[] = [];
     const source = new SmeeDoorbellSource({

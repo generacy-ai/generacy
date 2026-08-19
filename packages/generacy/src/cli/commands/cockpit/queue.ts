@@ -225,7 +225,13 @@ function classifyRow(
   workflowLabel: string,
   viewResult: IssueStateResult | null,
 ): EligibilityStatus {
-  if (ref.repo !== targetRepo) return { kind: 'skip', reason: 'cross-repo' };
+  // GitHub owner/repo names are case-insensitive. A raw `!==` here would
+  // classify every URL-form ref (parsed as lowercase) as `cross-repo` when the
+  // targetRepo is derived from a bare form with different casing — no issue
+  // ever gets labeled or assigned.
+  if (ref.repo.toLowerCase() !== targetRepo.toLowerCase()) {
+    return { kind: 'skip', reason: 'cross-repo' };
+  }
   if (viewResult == null) return { kind: 'skip', reason: 'not-found' };
   if (viewResult.state === 'CLOSED') return { kind: 'skip', reason: 'closed' };
   if (viewResult.labels.includes(workflowLabel)) {
@@ -349,12 +355,20 @@ function pickTargetRepo(
   refs: IssueRef[],
   repoFlag: string | undefined,
 ): string | { kind: 'multi-repo-no-flag'; repos: string[] } | { kind: 'flag-not-in-repos'; repos: string[] } {
-  const seen = new Set<string>();
-  for (const r of refs) seen.add(r.repo);
-  const repos = [...seen].sort();
+  // GitHub owner/repo names are case-insensitive. Dedup by lowercase so
+  // `painworth/doc-intel` (URL-form) and `Painworth/doc-intel` (bare form)
+  // collapse into one repo entry. First-seen casing wins for the returned
+  // canonical form (arbitrary but stable within a run).
+  const canonicalByLower = new Map<string, string>();
+  for (const r of refs) {
+    const lower = r.repo.toLowerCase();
+    if (!canonicalByLower.has(lower)) canonicalByLower.set(lower, r.repo);
+  }
+  const repos = [...canonicalByLower.values()].sort();
   if (repoFlag != null) {
-    if (!repos.includes(repoFlag)) return { kind: 'flag-not-in-repos', repos };
-    return repoFlag;
+    const flagLower = repoFlag.toLowerCase();
+    if (!canonicalByLower.has(flagLower)) return { kind: 'flag-not-in-repos', repos };
+    return canonicalByLower.get(flagLower)!;
   }
   if (repos.length === 1) return repos[0]!;
   return { kind: 'multi-repo-no-flag', repos };
@@ -450,7 +464,8 @@ export async function runQueue(
 
   const rows: QueueRow[] = [];
   for (const ref of phase.refs) {
-    if (ref.repo !== targetRepo) {
+    // Case-insensitive owner/repo comparison — see `classifyRow` for rationale.
+    if (ref.repo.toLowerCase() !== targetRepo.toLowerCase()) {
       rows.push({
         ref,
         title: '',

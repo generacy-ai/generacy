@@ -50,6 +50,10 @@ export interface SmeeDoorbellSourceOptions {
   baseReconnectDelayMs?: number;
 }
 
+// IssueRef.repo casing is captured verbatim from the epic body (operator-typed)
+// but the webhook payload always carries GitHub-canonical casing. Lowercase the
+// set entries so `webhookToStreamEvent`'s membership checks match; the emitted
+// event's `repo`/`url` still use the payload's original casing (buildEvent).
 function repoRefsToSets(allRefs: IssueRef[]): {
   issues: Set<string>;
   prs: Set<string>;
@@ -59,18 +63,18 @@ function repoRefsToSets(allRefs: IssueRef[]): {
   const prs = new Set<string>();
   const repos = new Set<string>();
   for (const ref of allRefs) {
-    const key = `${ref.repo}#${ref.number}`;
+    const key = `${ref.repo.toLowerCase()}#${ref.number}`;
     issues.add(key);
     prs.add(key);
-    repos.add(ref.repo);
+    repos.add(ref.repo.toLowerCase());
   }
   return { issues, prs, repos };
 }
 
-function buildRefSet(resolved: ResolvedEpic): RefSetView {
+export function buildRefSet(resolved: ResolvedEpic): RefSetView {
   const sets = repoRefsToSets(resolved.parsed.allRefs);
-  sets.issues.add(`${resolved.epic.repo}#${resolved.epic.number}`);
-  sets.repos.add(resolved.epic.repo);
+  sets.issues.add(`${resolved.epic.repo.toLowerCase()}#${resolved.epic.number}`);
+  sets.repos.add(resolved.epic.repo.toLowerCase());
   return {
     epicRef: `${resolved.epic.repo}#${resolved.epic.number}`,
     epicNumber: resolved.epic.number,

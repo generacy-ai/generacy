@@ -21,12 +21,19 @@ export interface RefSetView {
   watchedRepos: Set<string>;
 }
 
+// GitHub owner/repo names are case-insensitive but the webhook payload's
+// `repository.owner.login` / `repository.name` are always GitHub-canonical
+// casing, while the ref-set is derived from the epic body (operator-typed —
+// arbitrary casing). Comparing raw would silently drop every same-repo event
+// whose casing differs from GitHub's canonical form. Lowercase both sides of
+// the Set membership check to match. The emitted event's `repo`/`url` still
+// use the payload's original casing (buildEvent).
 function refKey(owner: string, repo: string, num: number): string {
-  return `${owner}/${repo}#${num}`;
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${num}`;
 }
 
 function repoKey(owner: string, repo: string): string {
-  return `${owner}/${repo}`;
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
 }
 
 function extractRepo(body: Record<string, unknown>): {
