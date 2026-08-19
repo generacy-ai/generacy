@@ -72,14 +72,16 @@ feature reviews.
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Extend `OrchestratorSettingsSchema` with optional `workflows: Record<string, WorkflowOverride>` where `WorkflowOverride` = `{ validateCommand?, preValidateCommand?, maxRemediations?, review? }`. | P1 | `workflows` stays a `z.record(z.string(), …)` because workflow names are extensible; the value schema is `.strict()`. |
-| FR-002 | `maxRemediations` is `z.number().int().min(0)`. Defaults applied at resolve time (not schema default): `speckit-feature` → 3, `speckit-bugfix` → 2. | P1 | Default lives in resolve logic so an absent key is distinguishable from an explicit `0`. |
+| FR-002 | `maxRemediations` is `z.number().int().min(0)`. Defaults applied at resolve time (not schema default): `speckit-feature` → 3, `speckit-bugfix` → 2, any other workflow name → 3 (per Q3). | P1 | Default lives in resolve logic so an absent key is distinguishable from an explicit `0`. |
 | FR-003 | `review` = `{ profile?: 'standard'\|'verification', blockingSeverity?: 'critical'\|'major'\|'minor', failThenPass?: boolean }`, `.strict()`. | P1 | Enums closed. |
-| FR-004 | Precedence for `validateCommand`/`preValidateCommand`/`review.*`: workflow-level > repo-level `orchestrator.*` > cluster worker-config default. Each field resolves independently. | P1 | Extends the existing `applyRepoValidateOverrides` semantics. |
+| FR-004 | Precedence: `validateCommand`/`preValidateCommand` resolve workflow-level > repo-level `orchestrator.*` > cluster worker-config default (three tiers). `review.*`/`maxRemediations` resolve workflow-level > built-in default (two tiers — **no repo-level tier**, per Q2). Each field resolves independently. | P1 | Extends the existing `applyRepoValidateOverrides` semantics. |
 | FR-005 | Loader (`packages/config/src/loader.ts` `tryLoadOrchestratorSettings`) parses and returns the new block unchanged. | P1 | No new loader entrypoint; existing parse path carries the extended schema. |
 | FR-006 | Worker merge (`packages/orchestrator/src/worker/config.ts`) resolves per-workflow overrides given a workflow name. | P1 | New resolver(s) sibling to `applyRepoValidateOverrides` / `resolveAgentForPhase`. |
 | FR-007 | `claude-cli-worker` plumbs the resolved per-workflow values to the phase that consumes them. | P1 | Mirrors existing `agents: effectiveConfig.agents` plumb-through at `claude-cli-worker.ts:496`. |
-| FR-008 | The new `workflows` block composes with the existing `orchestrator.agents.workflows` keying without conflict. Exact top-level shape resolved during clarify. | P1 | Two candidate shapes: (a) separate sibling `orchestrator.workflows`, or (b) fold non-agent fields into `orchestrator.agents.workflows.<name>`. See Assumptions. |
+| FR-008 | The new per-workflow non-agent fields live in a **new sibling map** `orchestrator.workflows.<name>` holding `{ validateCommand, preValidateCommand, maxRemediations, review }`, kept separate from `orchestrator.agents.workflows.<name>` (which holds `{ default, phases }` agent selectors). Both maps key on the same workflow-name space (per Q1). | P1 | Keeps the agent-specific `AgentsConfigSchema` untouched; the two blocks compose without conflict. |
 | FR-009 | Schema stays `.strict()`; unknown keys fail loudly at parse time. | P1 | |
+| FR-010 | Built-in `review` default when unconfigured: `{ profile: 'standard', blockingSeverity: 'critical', failThenPass: false }` (per Q3). Each sub-field falls back independently. | P1 | `blockingSeverity: 'critical'` is the conservative baseline; `profile: 'standard'` is the general profile; `failThenPass` is opt-in. |
+| FR-011 | This feature ships the resolver function(s) in `worker/config.ts` only. `maxRemediations`/`review` are **not** added to `WorkerContext` yet — that wiring lands with the consuming review/remediate phase (epic #1120), per Q4. | P1 | Avoids dead fields no code reads. |
 
 ## Success Criteria
 
@@ -91,18 +93,25 @@ feature reviews.
 | SC-004 | Invalid values rejected | pass | Test: `maxRemediations: -1`, unknown `review.profile`, unknown top-level key each throw at parse. |
 | SC-005 | Non-breaking | pass | Test: config without the new block yields byte-identical worker config to pre-change behavior. |
 
+## Clarifications
+
+### Batch 1 — 2026-08-19
+
+- **Q1 (top-level shape → A)**: The new per-workflow non-agent fields live in a
+  **new sibling map** `orchestrator.workflows.<name>` holding `{ validateCommand,
+  preValidateCommand, maxRemediations, review }`, kept separate from
+  `orchestrator.agents.workflows.<name>`. See FR-008.
+- **Q2 (repo-level tier → A)**: No repo-level tier for `review`/`maxRemediations` —
+  they resolve workflow-level > built-in default only. Only
+  `validateCommand`/`preValidateCommand` keep the three-tier chain. See FR-004.
+- **Q3 (built-in defaults → A)**: Built-in `review` default `{ profile: 'standard',
+  blockingSeverity: 'critical', failThenPass: false }`; `maxRemediations` fallback
+  for non-feature/bugfix workflows → 3. See FR-002, FR-010.
+- **Q4 (plumb-through target → A)**: Ship resolver function(s) in `worker/config.ts`
+  only; do **not** add `maxRemediations`/`review` to `WorkerContext` yet. See FR-011.
+
 ## Assumptions
 
-- **Top-level shape (FR-008)** — deferred to clarify. Leading candidate: a **new
-  sibling** `orchestrator.workflows.<name>` map holding `{ validateCommand,
-  preValidateCommand, maxRemediations, review }`, kept separate from
-  `orchestrator.agents.workflows.<name>` (which holds `{ default, phases }` agent
-  selectors). Rationale: the agents block is already shipped and its value schema
-  (`WorkflowAgentEntriesSchema`) is agent-specific; overloading it would blur two
-  concerns. Both maps key on the same workflow-name string space.
-- Default `maxRemediations` values (feature 3, bugfix 2) are applied at resolve time,
-  keyed on workflow name; workflows with no configured default fall back to a sensible
-  constant (decided in clarify — likely feature's 3).
 - Precedence and independent-field resolution follow the established pattern in
   `resolveAgentForPhase` (`worker/config.ts:283-302`).
 - `speckit-feature` and `speckit-bugfix` are the two named workflows in scope; the

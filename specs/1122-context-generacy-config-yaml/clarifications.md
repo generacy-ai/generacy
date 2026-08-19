@@ -14,7 +14,12 @@ change the schema surface, the loader parse target, and every test fixture.
 - B: Fold the non-agent fields into `orchestrator.agents.workflows.<name>`
   alongside the existing `{ default, phases }` agent selectors.
 
-**Answer**: *Pending*
+**Answer**: A — New sibling map `orchestrator.workflows.<name>` holding
+`{ validateCommand, preValidateCommand, maxRemediations, review }`, kept separate
+from `orchestrator.agents.workflows.<name>`. The already-shipped
+`AgentsConfigSchema` is agent-specific (`{ default, phases }`); folding non-agent
+fields into it (B) would blur two concerns and rework a strict, shipped schema.
+Both maps key on the same workflow-name space and compose cleanly.
 
 ### Q2: Repo-level tier for `review` and `maxRemediations` (FR-004 vs FR-001)
 **Context**: FR-004's precedence chain is "workflow-level > repo-level > cluster
@@ -31,7 +36,12 @@ default" and names `review.*`. But FR-001/FR-003 only define `review` and
 - B: Add repo-level `orchestrator.review` and `orchestrator.maxRemediations`
   sibling fields too, so the full three-tier chain applies to all four fields.
 
-**Answer**: *Pending*
+**Answer**: A — No repo tier. Only `validateCommand`/`preValidateCommand` keep the
+existing repo-level tier (workflow > repo > cluster). `review`/`maxRemediations`
+resolve workflow-level > built-in default only. FR-001/FR-003 define `review` and
+`maxRemediations` only under `WorkflowOverride`, and the design's config sketch
+shows them only under `workflows.<name>`; option B adds schema surface, an extra
+tier, and fixtures the design never calls for.
 
 ### Q3: Built-in defaults for `review.*` and `maxRemediations` fallback
 **Context**: Out of Scope excludes cluster-level defaults for `review`, and
@@ -46,7 +56,12 @@ but not the fallback for other workflow names, nor any `review` defaults.
 - B: Provide different built-in `review` defaults / a different maxRemediations
   fallback (specify in answer).
 
-**Answer**: *Pending*
+**Answer**: A — Built-in `review` default `{ profile: 'standard',
+blockingSeverity: 'critical', failThenPass: false }`; `maxRemediations` fallback
+for non-feature/bugfix workflows → 3 (feature's value). `blockingSeverity: critical`
+is the conservative baseline (the feature config sets `major` as an explicit
+override), `profile: standard` is the general profile vs bugfix-specific
+`verification`, and `failThenPass` is opt-in (default false).
 
 ### Q4: Plumb-through target for `maxRemediations`/`review` (FR-007)
 **Context**: The consuming review/remediate phases are Out of Scope (epic #1120).
@@ -63,4 +78,10 @@ FR-007 says "plumb the resolved values to the phase that consumes them, mirrorin
 - B: Also add the resolved `maxRemediations`/`review` to `WorkerContext` now
   (even though no phase reads them yet), mirroring the `agents` plumb-through.
 
-**Answer**: *Pending*
+**Answer**: A — Ship resolver function(s) in `worker/config.ts` (sibling to
+`resolveAgentForPhase`) returning the resolved `{ validateCommand,
+preValidateCommand, maxRemediations, review }` for a workflow name, tested via
+SC-001..SC-005. Do NOT add `maxRemediations`/`review` to `WorkerContext` yet —
+the consuming review/remediate phases are out of scope (epic #1120), so wiring
+them now creates dead fields no code reads. WorkerContext wiring lands with the
+consuming phase.
