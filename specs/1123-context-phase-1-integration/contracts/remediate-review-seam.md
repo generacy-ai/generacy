@@ -15,25 +15,40 @@ This contract pins the boundary that lets later phases add **real** review/remed
 
 Both map to the `implementation` stage (#1121 FR-002). No new `StageType`.
 
-## 2. Loop-control outcome
+## 2. Loop-control seam
 
-A phase step returns a discriminated loop-control outcome that steers the loop. It is **independent of any review verdict** (clarification Q2=C):
+As shipped by #1121, the off-sequence entry is driven by an **injectable predicate** on `PhaseLoopDeps`, evaluated after a successful `review` pass, plus an `i--; continue;` backtrack that re-enters `review`. It is **independent of any review verdict** (clarification Q2=C) — the predicate is the steering seam, not a verdict. (This supersedes the earlier draft's `{ next: <phase> }` step-outcome sketch; the mechanism #1121 actually delivered is the predicate below.)
 
 ```ts
-type LoopControlOutcome =
-  | { next?: undefined }      // advance to the next linear phase (default)
-  | { next: WorkflowPhase };  // off-sequence jump
+// PhaseLoopDeps (packages/orchestrator/src/worker/phase-loop.ts)
+remediateTrigger?: (context: WorkerContext) => boolean;
 ```
+
+The loop body, after `review` completes successfully:
+
+```ts
+if (phase === 'review' && result.success && deps.remediateTrigger?.(context)) {
+  await labelManager.onPhaseStart('remediate');
+  const remediateResult = this.runStubPhase('remediate');
+  await labelManager.onPhaseComplete('remediate');
+  results.push(remediateResult);
+  outputCapture.clear();
+  i--;            // re-enter the same review index
+  continue;       // backtrack — control returns to review, never advances
+}
+```
+
+In production the predicate defaults to `undefined`, so `remediate` is unreachable; tests inject a fire-once predicate to steer exactly one off-sequence pass.
 
 ### Invariants
 
-1. **Entry.** `remediate` is entered **only** when a step returns `{ next: 'remediate' }`. It is never reached by linear index advance, never directly by a review verdict, and never by a gate/label. (There is no `waiting-for:remediation` label — #1121 Q3=A does not add one.)
-2. **Backtrack.** On completion, `remediate` returns `{ next: 'review' }`. Control **always** returns to a delta-scoped re-`review` pass — never to the next linear phase (validate/merge).
-3. **Single seam.** `{ next: <phase> }` is the one seam for all three future `remediate` entry points, which P3 converges onto:
+1. **Entry.** `remediate` is entered **only** when `deps.remediateTrigger` is present and returns `true` for the just-completed `review` pass. It is never reached by linear index advance, never directly by a review verdict, and never by a gate/label. (There is no `waiting-for:remediation` label — #1121 Q3=A does not add one.) `remediate` appears in **no** linear phase sequence.
+2. **Backtrack.** On completion, the loop runs `i--; continue;` — control **always** returns to a delta-scoped re-`review` pass — never to the next linear phase (validate/merge).
+3. **Single seam.** The `remediateTrigger` predicate is the one seam for all three future `remediate` entry points, which P3 converges onto:
    - a `review` verdict of "needs remediation",
    - a `validate` failure (retiring the standalone validate-fix handler),
    - external PR feedback.
-   Each becomes a caller that returns `{ next: 'remediate' }`; none introduces a parallel entry mechanism.
+   Each becomes a `remediateTrigger` implementation; none introduces a parallel entry mechanism.
 
 ## 3. Pause / resume
 
