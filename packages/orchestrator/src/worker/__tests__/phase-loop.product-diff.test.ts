@@ -398,6 +398,37 @@ describe('PhaseLoop - phase-start-ref legacy migration + resolve-check (#1112)',
     expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
   });
 
+  it('SC-002: clears the legacy key exactly once on the shape-valid-but-unresolvable legacy case', async () => {
+    // Q3=A third arm: a well-formed sha in the legacy key whose commit does
+    // not exist in this checkout (attempt-1-merge-never-pushed after re-entry
+    // on a fresh clone). The clear must still fire — otherwise the same
+    // unresolvable legacy value is re-read and re-rejected on every subsequent
+    // branch-scoped miss until its 7-day TTL. Kills the mutation that defers
+    // the legacy clear until after the resolve check.
+    const context = createMockContext('implement');
+    context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
+    context.github.commitExistsInCheckout = vi.fn().mockResolvedValue(false);
+    const getValueRaw = vi.fn(async (key: string) =>
+      key === LEGACY_KEY ? 'deadbeef' : null,
+    );
+    const setValueRaw = vi.fn().mockResolvedValue(undefined);
+    const clearRaw = vi.fn().mockResolvedValue(undefined);
+    deps.phaseTracker = { getValueRaw, setValueRaw, clearRaw } as any;
+    const config = createConfig();
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement', 'validate']);
+
+    // Shape-valid legacy ref → migrated + consumed even though the resolve
+    // check subsequently rejects it. Clear fires exactly once, regardless of
+    // whether the ref survived the resolve check.
+    const legacyClears = clearRaw.mock.calls.filter((c) => c[0] === LEGACY_KEY);
+    expect(legacyClears).toHaveLength(1);
+    // Fresh HEAD capture followed the resolve-check rejection.
+    expect(context.github.commitExistsInCheckout).toHaveBeenCalledWith('deadbeef');
+    expect(context.github.getCurrentCommitSha).toHaveBeenCalled();
+    expect(context.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith('a1b2c3d4');
+  });
+
   it('SC-003: re-captures fresh HEAD when the persisted ref does not resolve in this checkout', async () => {
     const context = createMockContext('implement');
     context.github = makeGithub(['packages/orchestrator/src/foo.ts']);
