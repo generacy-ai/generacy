@@ -4,6 +4,75 @@ import { AgentsConfigSchema } from '@generacy-ai/config';
 import type { WorkflowPhase } from './types.js';
 
 /**
+ * Built-in review-phase baseline used by `resolveWorkflowOverrides` when no
+ * workflow-level `review` override supplies a field. Two-tier resolution:
+ * workflow-level > this default (no repo-level tier — Q2).
+ */
+export const DEFAULT_REVIEW = {
+  profile: 'standard',
+  blockingSeverity: 'critical',
+  failThenPass: false,
+} as const;
+
+/**
+ * Built-in per-workflow `maxRemediations` default: `speckit-bugfix` → 2,
+ * `speckit-feature` and every other workflow name → 3 (Q3).
+ */
+function defaultMaxRemediations(workflowName: string): number {
+  return workflowName === 'speckit-bugfix' ? 2 : 3;
+}
+
+/**
+ * Fully-resolved per-workflow orchestrator config. Every field is resolved to a
+ * concrete value (never `undefined`) after walking the precedence chain.
+ */
+export interface ResolvedWorkflowConfig {
+  validateCommand: string;
+  preValidateCommand: string;
+  maxRemediations: number;
+  review: {
+    profile: 'standard' | 'verification';
+    blockingSeverity: 'critical' | 'major' | 'minor';
+    failThenPass: boolean;
+  };
+}
+
+/**
+ * Resolve the effective per-workflow orchestrator config for `workflowName`.
+ *
+ * Each field resolves INDEPENDENTLY via `??` (first non-nullish wins), so an
+ * explicit `""` / `0` / `false` at any tier survives — only `undefined`/`null`
+ * fall through. Pure function: does not mutate `config` or `settings`. Reads
+ * neither `settings.agents` nor `config.agents` (independent of the agent block).
+ *
+ * Precedence per field:
+ * - `validateCommand`: workflow → repo (`settings.validateCommand`) → cluster (`config.validateCommand`)
+ * - `preValidateCommand`: workflow → repo → cluster
+ * - `maxRemediations`: workflow → `defaultMaxRemediations(w)` (no repo tier)
+ * - `review.*`: workflow → `DEFAULT_REVIEW.*` (no repo tier)
+ */
+export function resolveWorkflowOverrides(
+  config: WorkerConfig,
+  settings: OrchestratorSettings | null | undefined,
+  workflowName: string,
+): ResolvedWorkflowConfig {
+  const wf = settings?.workflows?.[workflowName];
+  const review = wf?.review;
+  return {
+    validateCommand:
+      wf?.validateCommand ?? settings?.validateCommand ?? config.validateCommand,
+    preValidateCommand:
+      wf?.preValidateCommand ?? settings?.preValidateCommand ?? config.preValidateCommand,
+    maxRemediations: wf?.maxRemediations ?? defaultMaxRemediations(workflowName),
+    review: {
+      profile: review?.profile ?? DEFAULT_REVIEW.profile,
+      blockingSeverity: review?.blockingSeverity ?? DEFAULT_REVIEW.blockingSeverity,
+      failThenPass: review?.failThenPass ?? DEFAULT_REVIEW.failThenPass,
+    },
+  };
+}
+
+/**
  * Built-in provider fallback used by `resolveAgentForPhase` when no tier of
  * the precedence chain (config, repo `defaults.agent`, or env) supplies a
  * provider name.

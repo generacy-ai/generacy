@@ -26,12 +26,16 @@ export {
   AgentEntrySchema,
   WorkflowAgentEntriesSchema,
   AgentsConfigSchema,
+  WorkflowReviewSchema,
+  WorkflowOverrideSchema,
   EffortSchema,
   type TemplateConfig,
   type OrchestratorSettings,
   type AgentEntry,
   type WorkflowAgentEntries,
   type AgentsConfig,
+  type WorkflowReview,
+  type WorkflowOverride,
   type Effort,
 } from './template-schema.js';
 
