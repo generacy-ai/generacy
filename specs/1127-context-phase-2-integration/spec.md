@@ -18,11 +18,12 @@ This issue ships **no product behavior of its own**. It ships **integration test
 
 Depends on: #1124 (review executor + findings artifact), #1125 (PR posting + draft/ready lifecycle), #1126 (re-review convergence). This issue integrates them; it does not re-implement any.
 
-### Open decisions (to resolve in `/clarify`)
+### Resolved decisions (from `/clarify` batch 1)
 
-- **[NEEDS CLARIFICATION] Dependency landing order.** Mirroring P1 (#1123 Q1=B), the intended pattern is: #1124/#1125/#1126 merge to `develop` first, this branch is **rebased** on them, and it ships **only** integration tests + the contract artifacts (no re-implementation, no test-only doubles standing in for the real executors — except the P3 `remediate` stub). Confirm this vs. co-landing.
-- **[NEEDS CLARIFICATION] Contract authorship vs. pinning.** The engine-authored review marker and findings-artifact shape are produced by #1124/#1125. This issue must land the marker/artifact **contracts documented in shipped code/contracts** (issue Acceptance). Confirm whether those contract docs are *authored here* (this issue is the documentation home) or *already shipped by #1124/#1125 and merely asserted + cross-referenced here*.
-- **[NEEDS CLARIFICATION] `remediate` stub fidelity.** The changes-required branch needs a stub `remediate` that (a) returns control to a delta-scoped re-`review` and (b) triggers the ready→draft conversion. Confirm the stub is a test-only double injected through the existing phase-loop seam (as in #1123), not a shipped placeholder executor.
+- **Dependency landing order (Q1=A).** Rebase-on-develop: #1124/#1125/#1126 merge to `develop` first, this branch is **rebased** on them, and it ships **only** integration tests + the two contract artifacts (no re-implementation; no test-only doubles standing in for the real executors — except the P3 `remediate` stub). Mirrors #1123 Q1=B. While #1124–#1126 remain open, the implement phase dependency-blocks until they merge (skip→requeue-after-deps).
+- **Contract authorship vs. pinning (Q2=B).** Pin/assert only: #1124/#1125 are the **authorship home** for the engine-authored marker + findings-artifact contracts (co-located with their producing code). This issue **asserts against and cross-references** them, authoring no new contract. What ships in this diff is the integration tests plus a cross-reference/pin note; the contract docs themselves are shipped by #1124/#1125.
+- **`remediate` stub fidelity (Q3=A).** The changes-required branch uses a **test-only double** injected through the existing phase-loop dependency seam (as in #1123) — no shipped placeholder executor (satisfies FR-008; real executor is P3/#1128).
+- **Exclusion-predicate ownership (Q4=B).** #1130 owns the engine-authored-exclusion predicate. This issue ships/pins the marker contract and asserts a **standalone deterministic marker-match helper**, not `PrFeedbackMonitorService` behavior. `PrFeedbackMonitorService` has no engine-authored exclusion predicate today; wiring the marker exclusion into routing is #1130 (Out of Scope).
 
 ## User Stories
 
@@ -53,13 +54,13 @@ Depends on: #1124 (review executor + findings artifact), #1125 (PR posting + dra
 ### US3: The PR-feedback monitor never races the engine's own review loop
 
 **As a** maintainer relying on the P3 monitor exclusion (#1130),
-**I want** a test that proves `PrFeedbackMonitorService` does **not** trigger on engine-authored review threads,
-**So that** when P3 wires external-feedback routing into remediate, the monitor excludes the engine's own inline threads by the documented marker contract instead of racing the engine.
+**I want** a test that proves a **standalone deterministic marker-match helper** identifies engine-authored review threads as "exclude,"
+**So that** when P3 (#1130) wires external-feedback routing into `PrFeedbackMonitorService`, it excludes the engine's own inline threads by the documented marker contract instead of racing the engine.
 
 **Acceptance Criteria**:
 - [ ] Engine-authored review threads/comments carry a stable, documented marker.
-- [ ] `PrFeedbackMonitorService`'s engine-authored-exclusion predicate returns "exclude" for a comment/thread carrying that marker (asserted against the real predicate, following the existing marker-family precedent).
-- [ ] The marker contract and the findings-artifact shape are captured in a shipped `contracts/` artifact and/or load-bearing code comment.
+- [ ] A standalone marker-match helper returns "exclude" for a comment/thread carrying that marker (deterministic, following the existing marker-family precedent). `PrFeedbackMonitorService` routing behavior is **not** modified here — that is #1130 (Out of Scope).
+- [ ] The marker contract and the findings-artifact shape are captured in a shipped `contracts/` artifact and/or load-bearing code comment — cross-referencing #1124/#1125 as the authorship home (per Q2=B).
 
 ## Functional Requirements
 
@@ -69,9 +70,9 @@ Depends on: #1124 (review executor + findings artifact), #1125 (PR posting + dra
 | FR-002 | On a clean review verdict, the test asserts a `COMMENT`-event PR review is posted (never `REQUEST_CHANGES`) carrying the engine-authored marker. | P1 | Closes the own-PR 422 footgun by construction. |
 | FR-003 | On a clean verdict, the test asserts the PR is marked ready (`markReadyForReview`) and the loop advances into `validate`. | P1 | Draft/ready lifecycle (#1125) wired into the loop. |
 | FR-004 | The changes-required branch is exercised: a blocking verdict routes off-sequence toward a **stub** `remediate`, converts the PR back to draft if it was ready, then backtracks to a delta-scoped re-`review`. | P1 | Stub remediate acceptable — real executor is P3/#1128. |
-| FR-005 | A test asserts `PrFeedbackMonitorService` does **not** trigger on engine-authored review threads — the engine-authored exclusion predicate returns "exclude" for the documented marker. | P1 | The seam #1130 depends on. |
-| FR-006 | The engine-authored review marker contract is documented in shipped code/contracts (stable prefix, match rule, authorship rule — deterministic code, never LLM free-write), mirroring the existing clarification-marker families. | P1 | Durable acceptance artifact. |
-| FR-007 | The findings-artifact (sidecar) shape is documented in a shipped `contracts/` artifact and/or load-bearing code comment (fields: severity enum, file/line, round number, overall verdict). | P1 | Durable acceptance artifact; the shape P3 remediate consumes. |
+| FR-005 | A test asserts a **standalone deterministic marker-match helper** returns "exclude" for a comment/thread carrying the engine-authored marker. `PrFeedbackMonitorService` routing is **not** modified (Q4=B — #1130 owns wiring the predicate into routing). | P1 | The seam #1130 depends on; proven via the marker-match contract, not monitor behavior. |
+| FR-006 | The engine-authored review marker contract is **pinned/cross-referenced** in this diff (stable prefix, match rule, authorship rule — deterministic code, never LLM free-write), with #1124/#1125 as the authorship home (Q2=B). | P1 | Durable acceptance artifact; pinned, not authored here. |
+| FR-007 | The findings-artifact (sidecar) shape is **pinned/cross-referenced** in this diff (fields: severity enum, file/line, round number, overall verdict), with #1124 as the authorship home (Q2=B). | P1 | Durable acceptance artifact; the shape P3 remediate consumes. |
 | FR-008 | No real `remediate` executor, remediation counter, `waiting-for:remediation-limit` gate, validate-failure routing, external-feedback routing, or merge-conflict re-arm is introduced. | P1 | Those are P3–P4; this issue is P2 integration + the two contracts only. |
 
 ## Success Criteria
@@ -82,12 +83,12 @@ Depends on: #1124 (review executor + findings artifact), #1125 (PR posting + dra
 | SC-002 | Both workflows traverse `implement → review → ready → validate` on a clean verdict. | 2/2 workflows | Test assertions in the harness. |
 | SC-003 | A `COMMENT`-event review with the engine-authored marker is posted; no `REQUEST_CHANGES` on the own PR. | 1 COMMENT / 0 REQUEST_CHANGES | Assertion on the posting call. |
 | SC-004 | The changes-required branch reaches the remediate seam and backtracks to a re-review with the correct ready↔draft transitions. | 1 round-trip | Draft/ready state + phase-sequence assertion. |
-| SC-005 | `PrFeedbackMonitorService` excludes engine-authored review threads. | Excluded | Assertion against the real exclusion predicate. |
-| SC-006 | The engine-authored marker + findings-artifact contracts ship in the diff. | 2 artifacts | `contracts/` doc(s) and/or load-bearing code comments present in the PR. |
+| SC-005 | A standalone deterministic marker-match helper excludes engine-authored review threads. | Excluded | Assertion against the marker-match helper (not `PrFeedbackMonitorService` routing — Q4=B). |
+| SC-006 | The engine-authored marker + findings-artifact contracts are pinned/cross-referenced in the diff (authorship home #1124/#1125 per Q2=B). | 2 contracts pinned | Cross-reference/pin note and/or load-bearing code comments present in the PR. |
 
 ## Assumptions
 
-- #1124/#1125/#1126 merge to `develop` **first** and this branch is rebased on them (mirrors #1123 Q1=B); this issue ships only integration tests + the contract artifacts and does not re-implement the executors. The implement phase blocks until the P2 executors land. *(Pending `/clarify` confirmation.)*
+- #1124/#1125/#1126 merge to `develop` **first** and this branch is rebased on them (Q1=A, mirrors #1123 Q1=B); this issue ships only integration tests + the contract cross-reference/pin note and does not re-implement the executors. The implement phase blocks until the P2 executors land.
 - The `remediate` used by the changes-required branch is a **test-only stub** injected through the existing phase-loop dependency seam — no production remediate executor ships here.
 - The engine-authored review marker follows the established marker-family convention (stable `<!-- generacy-… -->` prefix, line-anchored, case-sensitive, stamped exclusively by deterministic code — see `packages/orchestrator/src/worker/clarification-markers.ts`).
 - `review`/`remediate` map to the `implementation` stage (#1121 FR-002); review is autonomous, so no `waiting-for:review` gate is introduced. The only human gates in the broader design are remediation-limit (P3) and final approval (P4).
