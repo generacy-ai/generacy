@@ -71,7 +71,7 @@ function repoRefsToSets(allRefs: IssueRef[]): {
   return { issues, prs, repos };
 }
 
-function buildRefSet(resolved: ResolvedEpic): RefSetView {
+export function buildRefSet(resolved: ResolvedEpic): RefSetView {
   const sets = repoRefsToSets(resolved.parsed.allRefs);
   sets.issues.add(`${resolved.epic.repo.toLowerCase()}#${resolved.epic.number}`);
   sets.repos.add(resolved.epic.repo.toLowerCase());

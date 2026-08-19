@@ -35,8 +35,16 @@ export interface PrSnapshot {
 export type Snapshot = IssueSnapshot | PrSnapshot;
 export type SnapshotMap = Map<SnapshotKey, Snapshot>;
 
+// #1106 Q2=B — normalize `repo` to lowercase so map lookups match regardless
+// of caller casing. `poll-loop.ts` builds keys from `IssueRef.repo` (operator-
+// typed via epic body — arbitrary casing), while `smee-source.ts` looks up
+// keys via `ev.repo` (webhook payload — GitHub-canonical casing). Prior to
+// this normalization, `smee-source.ts:375`'s `PrSnapshot` cache lookup missed
+// on every case mismatch, causing `pr-checks` and `completed:validate` events
+// to be emitted with `checks: undefined` instead of `green`/`red`. Snapshot
+// values retain original casing on their own `.repo` field.
 export function snapshotKey(repo: string, kind: 'issue' | 'pr', number: number): SnapshotKey {
-  return `${repo}#${kind}#${number}`;
+  return `${repo.toLowerCase()}#${kind}#${number}`;
 }
 
 export function buildIssueSnapshot(
