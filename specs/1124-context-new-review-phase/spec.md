@@ -57,15 +57,16 @@ This issue supplies the executor + artifact + verdict-to-next-phase mapping; it 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Add a real `review` phase executor invoked from `phase-loop.ts` in place of `runStubPhase('review')`, spawning the CLI via the `cli-spawner` path. | P1 | `remediate` remains a stub. |
-| FR-002 | Select the charter prompt from the workflow's resolved `review.profile` (`standard` \| `verification`). Bugfix charter content is out of scope. | P1 | `verification` profile emits "needs verification" findings for `validate` to confirm. |
+| FR-002 | Select the charter prompt from the workflow's resolved `review.profile` (`standard` \| `verification`). The engine builds the charter prompt string in-process and passes it as the CLI prompt via the existing prepared-prompt spawn path (as pr-feedback/merge-conflict do with `intent.prompt`); no new slash command is registered and `PHASE_TO_COMMAND` is not extended. Bugfix charter content is out of scope. | P1 | Clarified (Q4→B). `verification` profile emits "needs verification" findings for `validate` to confirm. |
 | FR-003 | The charter prompt directs a correctness/regression review of the PR diff and explicitly forbids running tests or builds. | P1 | |
 | FR-004 | The charter must flag an implausibly empty/trivial diff as a finding. | P2 | Closes implement-phase empty-diff bypass. |
-| FR-005 | Persist a structured findings artifact engine-side using the sidecar pattern (`worker/pause-context.ts`): Zod-validated, atomic temp+rename write, read returns `null` on missing/invalid. | P1 | |
+| FR-005 | The charter instructs the agent to write its findings to a known engine-side sidecar path; the engine reads that file and persists it using the sidecar pattern (`worker/pause-context.ts`): Zod-validated, atomic temp+rename write, read returns `null` on missing/invalid. Any agent-claimed verdict is ignored — the engine recomputes it (FR-007) and rewrites the artifact. | P1 | Clarified (Q1→A). Agent writes the file; engine owns validation + verdict. |
 | FR-006 | Artifact schema: `findings: [{ severity: critical\|major\|minor, file, line?, title, detail, round, status: open\|resolved }]`, `verdict: clean\|changes-required`, `round` (number), `lastReviewedCommitSha`. | P1 | |
 | FR-007 | Compute `verdict` = `changes-required` iff ≥1 finding with `severity >= blockingSeverity` and `status: open`; else `clean`. Severity ordering: `critical > major > minor`. | P1 | `blockingSeverity` from resolved workflow config. |
-| FR-008 | `clean` verdict → continue toward `validate`; `changes-required` → enter the off-sequence `remediate` seam, then re-enter `review`. | P1 | Reuses the `remediateTrigger` hook from #1121. |
+| FR-008 | `clean` verdict → continue toward `validate`; `changes-required` → enter the off-sequence `remediate` seam, then re-enter `review`. The executor only persists the artifact; the existing `remediateTrigger(context)` reads the persisted sidecar's verdict and returns its boolean (the current phase-loop line is unchanged). | P1 | Clarified (Q2→B). Reuses the `remediateTrigger` hook from #1121. |
 | FR-009 | Record the round number and the last-reviewed commit SHA in the artifact so successive review rounds are distinguishable. | P1 | Round increments per review pass on the same issue/branch. |
 | FR-010 | With `reviewPhaseEnabled=false`, behavior is byte-identical to today (phase absent from the effective sequence). | P1 | Executor never runs when the phase is gated out. |
+| FR-011 | Bound the review↔remediate cycle with a max-round count built on FR-009's round number. On exhaustion, escalate/pause the workflow with a review gate label (`waiting-for:remediation-limit` + `agent:paused`, per the epic plan's `maxRemediations` cap) instead of looping forever. | P1 | Clarified (Q3→A). Needed because `remediate` is still a stub — an unchanged diff would otherwise re-produce `changes-required` indefinitely. |
 
 ## Success Criteria
 
@@ -82,7 +83,9 @@ This issue supplies the executor + artifact + verdict-to-next-phase mapping; it 
 - The review config surface (`review.profile`, `review.blockingSeverity`, `review.failThenPass`, `resolveWorkflowOverrides`, `DEFAULT_REVIEW`) already exists and is not re-implemented here.
 - The `remediate` executor is not implemented in this issue — only the verdict→seam signal is wired; `remediate` continues to run as `runStubPhase('remediate')`.
 - The artifact sidecar lives under the checkout's `.generacy/` directory, keyed by workflow/issue identity, following the `pause-context.ts` sanitization + atomic-write layout.
-- The agent is trusted to return findings in the charter-specified structured form; the engine validates the shape and computes the verdict independently of any agent-claimed verdict.
+- The agent is trusted to return findings in the charter-specified structured form by writing them to the known sidecar path; the engine validates the shape and computes the verdict independently of any agent-claimed verdict (Q1→A).
+- The verdict→next-phase decision is read from the persisted sidecar by `remediateTrigger(context)`, not carried on `PhaseResult` or `WorkerContext` (Q2→B).
+- The charter prompt is built in-process by profile and passed as the CLI prompt; no `/speckit:review` slash command is added (Q4→B).
 - Severity default nuance: the config default (`DEFAULT_REVIEW.blockingSeverity = 'critical'`) governs unless a workflow override sets it; the issue's "feature default `major`" is expressed as workflow config, not hardcoded in the executor.
 
 ## Out of Scope
