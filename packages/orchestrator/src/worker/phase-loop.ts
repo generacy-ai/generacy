@@ -18,7 +18,8 @@ import { postClarifications, hasPendingClarifications, integrateClarificationAns
 import { PENDING_ANSWER_LITERAL } from '@generacy-ai/workflow-engine';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
-import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
+import { EXCLUDED_PATH_PREFIXES, EXCLUDED_EXACT_PATHS, computePhaseScopedProductDiff, resolveBaseRef } from './product-diff.js';
+import type { PhaseTracker } from '../types/index.js';
 import { boundOutputTail } from './output-tail.js';
 import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
@@ -30,6 +31,25 @@ import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
+
+/**
+ * TTL for the persisted phase-start commit ref (#1107). 7 days — longer than
+ * the 24h dedup default — so the window survives long gate pauses / fixer
+ * timeouts. Expiry degrades to a re-captured (post-resume) window, never to a
+ * silent pass.
+ */
+const PHASE_START_REF_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Type-guard for a git commit SHA. Accepts full (40-hex) or short (7-40 hex)
+ * shapes — matches what `git rev-parse HEAD` and short-SHA callers produce.
+ * Load-bearing at both persisted-read and fresh-capture sites: an empty or
+ * malformed ref silently inverts the phase-scoped product-diff guard, so both
+ * paths must reject non-SHA values rather than proceed.
+ */
+function isValidCommitSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{7,40}$/i.test(value);
+}
 
 /** Narrow a `WorkflowPhase | string` union to WorkflowPhase. */
 function isWorkflowPhase(value: WorkflowPhase | string): value is WorkflowPhase {
@@ -69,6 +89,14 @@ export interface PhaseLoopDeps {
    * Injected by the worker-mode wiring in server.ts.
    */
   failureFingerprintTracker?: FailureFingerprintTracker;
+  /**
+   * #1107: Redis-backed phase tracker used by the implement-phase product-diff
+   * guard to persist the phase-start commit ref across increments. Optional —
+   * when absent, the guard falls back to a per-invocation `getCurrentCommitSha`
+   * capture (post-resume-only window). Injected by the worker-mode wiring in
+   * server.ts.
+   */
+  phaseTracker?: PhaseTracker;
 }
 
 /**
@@ -314,6 +342,55 @@ export class PhaseLoop {
           return baseMergeOutcome;
         }
         hasBaseMergedThisCycle = true;
+      }
+
+      // 2c. #1107: capture the phase-start commit ref for the phase-scoped
+      // product-diff guard. Must run AFTER the pre-phase base merge (so
+      // merged-in base files are never inside startRef..HEAD) and BEFORE the
+      // CLI spawn (so HEAD is still the pre-work commit). The ref is persisted
+      // once per phase (persist-once → spans all pre-restart increments, Q5);
+      // resumes reuse the first-entry ref. Only phases that require product
+      // changes need it. Left as `undefined` on any failure — the guard's
+      // try/catch then routes to the product-diff-error detection path (SC-005).
+      //
+      // Key includes the current branch name so a re-entry on a different
+      // spec-slug branch (e.g. after a duplicate-PR-on-re-entry recovery)
+      // captures a fresh ref instead of reusing a stale one that would span
+      // unrelated develop merges — silently fail-open, the exact hazard #1107
+      // set out to close. Falls back to a `no-branch` sentinel only when the
+      // context branch is unknown, still scoping distinctly from a branch-known
+      // key.
+      let phaseStartRef: string | undefined;
+      const phaseStartRefBranch = context.branch ?? 'no-branch';
+      const phaseStartRefKey = PHASES_REQUIRING_CHANGES.has(phase)
+        ? `phase-start-ref:${context.item.owner}:${context.item.repo}:${context.item.issueNumber}:${phaseStartRefBranch}:${phase}`
+        : undefined;
+      if (phaseStartRefKey !== undefined) {
+        try {
+          const rawExisting = await deps.phaseTracker?.getValueRaw(phaseStartRefKey);
+          // Reject empty / whitespace / non-SHA-shaped persisted values. An
+          // empty string would silently invert the guard: `git log <empty>..HEAD`
+          // parses as `HEAD..HEAD` → empty file list → a legitimate implement
+          // phase that wrote real code is reported as `no product-code changes`.
+          const existing = isValidCommitSha(rawExisting) ? rawExisting : null;
+          if (existing === null) {
+            const captured = await context.github.getCurrentCommitSha();
+            if (!isValidCommitSha(captured)) {
+              throw new Error(
+                `getCurrentCommitSha returned a non-SHA value: ${JSON.stringify(captured)}`,
+              );
+            }
+            phaseStartRef = captured;
+            await deps.phaseTracker?.setValueRaw(phaseStartRefKey, phaseStartRef, PHASE_START_REF_TTL_SECONDS);
+          } else {
+            phaseStartRef = existing;
+          }
+        } catch (err) {
+          this.logger.warn(
+            { phase, err: String(err) },
+            'phase-start-ref capture failed — guard will treat as detection failure',
+          );
+        }
       }
 
       // 3. Execute the phase
@@ -707,13 +784,19 @@ export class PhaseLoop {
       }
 
       // 5b. Fail phases that require product-code changes but produced none.
-      // Compares the branch's cumulative diff against its PR base ref (or the
-      // default branch when no PR yet) and rejects when every changed file lives
-      // under EXCLUDED_PATH_PREFIXES. See specs/820-*.
+      // #1107: measures the PHASE'S OWN diff (first-parent, no-merges, since a
+      // start ref captured after the pre-phase base merge) rather than the
+      // cumulative branch diff, so earlier-phase and base-merge-introduced
+      // files never satisfy the guard. Rejects when every changed file lives
+      // under EXCLUDED_PATH_PREFIXES or exactly matches EXCLUDED_EXACT_PATHS
+      // (the spec-kit update_agent targets). See specs/820-*, specs/1107-*.
       if (PHASES_REQUIRING_CHANGES.has(phase)) {
         let productFiles: string[];
         let changedFiles: string[];
-        let baseRef: string;
+        // Diagnostics-only (Decision 5): the pass/fail decision keys off the
+        // phase-scoped diff, not baseRef. Resolve best-effort so a base-ref
+        // lookup failure never turns into a false detection failure.
+        let baseRef = 'unknown';
         try {
           baseRef = await resolveBaseRef(
             context.github,
@@ -721,7 +804,20 @@ export class PhaseLoop {
             context.item.owner,
             context.item.repo,
           );
-          ({ productFiles, changedFiles } = await computeProductDiff(context.github, baseRef));
+        } catch (err) {
+          this.logger.warn(
+            { phase, err: String(err) },
+            'resolveBaseRef failed — continuing with phase-scoped guard (diagnostics only)',
+          );
+        }
+        try {
+          if (phaseStartRef === undefined) {
+            throw new Error('phase-start ref was not captured before CLI spawn');
+          }
+          ({ productFiles, changedFiles } = await computePhaseScopedProductDiff(
+            context.github,
+            phaseStartRef,
+          ));
         } catch (err) {
           this.logger.error(
             { phase, err: String(err) },
@@ -752,15 +848,26 @@ export class PhaseLoop {
         }
 
         if (productFiles.length === 0) {
+          // FR-004: include the phase-scoped changed files, the start ref used,
+          // the resolved base ref for context, and both exclusion sets.
           this.logger.error(
-            { phase, baseRef, changedFiles, excluded: EXCLUDED_PATH_PREFIXES },
-            'implement phase produced no product-code changes — all diff lives under excluded paths',
+            {
+              phase,
+              startRef: phaseStartRef,
+              baseRef,
+              changedFiles,
+              excludedPrefixes: EXCLUDED_PATH_PREFIXES,
+              excludedExactPaths: EXCLUDED_EXACT_PATHS,
+            },
+            'implement phase produced no product-code changes — all own-commit diff lives under excluded paths',
           );
           result.success = false;
           result.error = {
             message:
-              `Phase "${phase}" produced no product-code changes — all changed files are under excluded prefixes ` +
-              `[${EXCLUDED_PATH_PREFIXES.join(', ')}]. Implement must modify at least one non-excluded file.`,
+              `Phase "${phase}" produced no product-code changes — every file touched by the phase's own ` +
+              `commits (since ${phaseStartRef}) is under an excluded prefix [${EXCLUDED_PATH_PREFIXES.join(', ')}] ` +
+              `or is an excluded agent-context file [${EXCLUDED_EXACT_PATHS.join(', ')}]. ` +
+              `Own-commit files: [${changedFiles.join(', ')}]. Implement must modify at least one product file.`,
             output: '',
             phase,
           };
@@ -779,7 +886,15 @@ export class PhaseLoop {
             errorEvidence: evidence,
           });
           await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
+          // Failure: leave the start ref (TTL backstop) so a retry still spans
+          // the whole phase.
           return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
+
+        // Pass: clear the persisted start ref so the next distinct phase entry
+        // re-captures. TTL is the backstop if this clear is skipped.
+        if (phaseStartRefKey !== undefined) {
+          await deps.phaseTracker?.clearRaw(phaseStartRefKey);
         }
       }
 

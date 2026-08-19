@@ -413,6 +413,28 @@ export interface GitHubClient {
   getFilesChangedBetween(base: string, head: string): Promise<string[]>;
 
   /**
+   * Current HEAD commit SHA of the checkout workdir (#1107).
+   * Equivalent to `git rev-parse HEAD`, trimmed.
+   *
+   * @returns The 40-char commit SHA.
+   * @throws Error when the git command exits non-zero.
+   */
+  getCurrentCommitSha(): Promise<string>;
+
+  /**
+   * Files touched by the branch's OWN commits since `startRef` (#1107).
+   * Excludes merge commits and merged-in base-branch commits by using
+   * first-parent traversal: `git log --first-parent --no-merges --name-only
+   * --pretty=format: <startRef>..HEAD`.
+   *
+   * @param startRef The ref anchoring the window's lower bound.
+   * @returns Unique, non-empty, trimmed repo-relative paths; empty when no own
+   *   (non-merge, first-parent) commits exist since `startRef`.
+   * @throws Error when the git command exits non-zero (unreachable ref, ...).
+   */
+  getFilesChangedByOwnCommits(startRef: string): Promise<string[]>;
+
+  /**
    * List all branches in the repository
    */
   listBranches(owner: string, repo: string): Promise<string[]>;
