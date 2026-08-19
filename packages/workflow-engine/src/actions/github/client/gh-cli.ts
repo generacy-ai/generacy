@@ -23,8 +23,14 @@ import type {
   Review,
   ReviewSubmissionState,
   ReviewThread,
+  CreateReviewInput,
+  PullRequestFile,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
+import { writeFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Thrown by `executeGh()` when the gh CLI's stderr signals HTTP 401 or 403.
@@ -738,6 +744,181 @@ export class GhCliGitHubClient implements GitHubClient {
       reviews.push(review);
     }
     return reviews;
+  }
+
+  async createReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    input: CreateReviewInput,
+  ): Promise<Review> {
+    // The reviews endpoint accepts a nested `comments[]` array of objects,
+    // which `-f field=value` cannot express. The shared `executeCommand`
+    // wrapper ignores stdin (both the launcher and direct-spawn paths use
+    // `stdio: ['ignore', ...]`), so `--input -` is unavailable here. Write the
+    // JSON body to a temp file and pass `--input <file>` — same wire result.
+    const body = {
+      event: input.event,
+      body: input.body,
+      comments: (input.comments ?? []).map(c => ({
+        path: c.path,
+        line: c.line,
+        side: c.side ?? 'RIGHT',
+        body: c.body,
+      })),
+    };
+    const inputPath = join(tmpdir(), `generacy-review-${randomUUID()}.json`);
+    await writeFile(inputPath, JSON.stringify(body), 'utf8');
+    let result;
+    try {
+      result = await this.executeGh([
+        'api',
+        '--method', 'POST',
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+        '--input', inputPath,
+      ]);
+    } finally {
+      await unlink(inputPath).catch(() => {
+        /* best-effort cleanup */
+      });
+    }
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `Failed to create review on PR #${prNumber}: ${result.stderr}`,
+      );
+    }
+
+    const data = parseJSONSafe(result.stdout) as {
+      id: number;
+      user: { login: string } | null;
+      body: string | null;
+      state: string;
+      submitted_at: string;
+      author_association?: string;
+    } | null;
+
+    if (!data) {
+      throw new Error(
+        `Failed to parse created review response on PR #${prNumber}`,
+      );
+    }
+
+    const review: Review = {
+      id: data.id,
+      user: { login: data.user?.login ?? '' },
+      body: data.body ?? '',
+      state: data.state as ReviewSubmissionState,
+      submittedAt: data.submitted_at,
+    };
+    if (typeof data.author_association === 'string' && data.author_association.length > 0) {
+      review.authorAssociation = data.author_association;
+    }
+    return review;
+  }
+
+  async convertPullRequestToDraft(owner: string, repo: string, prNumber: number): Promise<void> {
+    // Step 1 — resolve the PR node id + current draft state. If it is already
+    // a draft, the conversion is a no-op (idempotent short-circuit).
+    const query =
+      'query($owner: String!, $repo: String!, $n: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $n) { id isDraft } } }';
+    const queryResult = await this.executeGh([
+      'api', 'graphql',
+      '-f', `query=${query}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `n=${prNumber}`,
+    ]);
+    if (queryResult.exitCode !== 0) {
+      throw new Error(
+        `convertPullRequestToDraft failed to resolve PR #${prNumber}: ${queryResult.stderr}`,
+      );
+    }
+    const queryParsed = parseJSONSafe(queryResult.stdout) as {
+      data?: { repository?: { pullRequest?: { id?: string; isDraft?: boolean } } };
+      errors?: Array<{ message?: string }>;
+    } | null;
+    if (queryParsed?.errors && queryParsed.errors.length > 0) {
+      const messages = queryParsed.errors.map(e => e.message ?? 'unknown').join('; ');
+      throw new Error(
+        `convertPullRequestToDraft returned GraphQL errors resolving PR #${prNumber}: ${messages}`,
+      );
+    }
+    const pr = queryParsed?.data?.repository?.pullRequest;
+    if (!pr?.id) {
+      throw new Error(
+        `convertPullRequestToDraft could not resolve node id for PR #${prNumber}`,
+      );
+    }
+    if (pr.isDraft === true) return;
+
+    // Step 2 — run the mutation, mirroring `resolveReviewThread`'s retry/auth
+    // handling: 3× backoff, rethrow GhAuthError, terminal on GraphQL errors[].
+    const mutation =
+      'mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { pullRequest { id isDraft } } }';
+    const backoffs = [1000, 2000, 4000];
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await this.executeGh([
+          'api', 'graphql',
+          '-f', `query=${mutation}`,
+          '-F', `id=${pr.id}`,
+        ]);
+        if (result.exitCode !== 0) {
+          lastError = new Error(
+            `convertPullRequestToDraft mutation failed for PR #${prNumber}: ${result.stderr}`,
+          );
+        } else {
+          const parsed = parseJSONSafe(result.stdout) as
+            | { errors?: Array<{ message?: string }> }
+            | null;
+          if (parsed?.errors && parsed.errors.length > 0) {
+            const messages = parsed.errors.map(e => e.message ?? 'unknown').join('; ');
+            throw new Error(
+              `convertPullRequestToDraft returned GraphQL errors for PR #${prNumber}: ${messages}`,
+            );
+          }
+          return;
+        }
+      } catch (err) {
+        if (err instanceof GhAuthError) throw err;
+        if (
+          err instanceof Error &&
+          err.message.startsWith('convertPullRequestToDraft returned GraphQL errors')
+        ) {
+          throw err;
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+      const backoff = backoffs[attempt];
+      if (backoff !== undefined) {
+        await new Promise(resolve => setTimeout(resolve, backoff));
+      }
+    }
+    throw lastError ?? new Error(`convertPullRequestToDraft failed for PR #${prNumber}`);
+  }
+
+  async listPullRequestFiles(owner: string, repo: string, prNumber: number): Promise<PullRequestFile[]> {
+    const result = await this.executeGh([
+      'api',
+      `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`,
+      '--paginate',
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list files for PR #${prNumber}: ${result.stderr}`);
+    }
+    const data = parseJSONSafe(result.stdout) as Array<{
+      filename: string;
+      status: string;
+      patch?: string;
+    }> | null;
+    if (!data) return [];
+    return data.map(f => {
+      const file: PullRequestFile = { filename: f.filename, status: f.status };
+      if (typeof f.patch === 'string') file.patch = f.patch;
+      return file;
+    });
   }
 
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {
