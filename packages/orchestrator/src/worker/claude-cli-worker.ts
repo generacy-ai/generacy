@@ -21,6 +21,8 @@ import { OutputCapture } from './output-capture.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
+import { ReviewExecutor } from './review-executor.js';
+import { readReviewArtifactSync } from './review-artifact.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { MergeConflictHandler } from './merge-conflict-handler.js';
@@ -666,6 +668,19 @@ export class ClaudeCliWorker {
           )
         : undefined;
 
+      // #1124: real review-phase executor. Spawns the CLI with an in-process
+      // charter prompt, reads the agent-written findings sidecar, recomputes the
+      // verdict engine-side, and persists the review artifact. The synchronous
+      // remediateTrigger reads that artifact's verdict to drive the review↔remediate
+      // seam in phase-loop. Inert when reviewPhaseEnabled is off (review is absent
+      // from the effective sequence).
+      const reviewExecutor = new ReviewExecutor({
+        agentLauncher: this.agentLauncher,
+        config: effectiveConfig,
+        settings: orchSettings,
+        logger: workerLogger,
+      });
+
       const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
@@ -675,6 +690,13 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
+        reviewExecutor,
+        settings: orchSettings,
+        remediateTrigger: (ctx) =>
+          readReviewArtifactSync(
+            ctx.checkoutPath,
+            `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
+          )?.verdict === 'changes-required',
         ...(validateFixHandler ? { validateFixHandler } : {}),
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
         ...(this.phaseTracker ? { phaseTracker: this.phaseTracker } : {}),

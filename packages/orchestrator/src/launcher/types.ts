@@ -105,6 +105,25 @@ export interface MergeConflictIntent {
 }
 
 /**
+ * Intent for an engine-driven review pass (#1124). The engine builds the review
+ * charter in-process and passes it as the prompt; routes through the same
+ * launcher plumbing as `merge-conflict` (Q4→B — no `/speckit:review` command).
+ */
+export interface ReviewIntent {
+  kind: 'review';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full charter prompt (built by ReviewExecutor via buildReviewCharter) */
+  prompt: string;
+  /** Resolved provider from `resolveAgentForPhase(..., 'implement')`. */
+  provider?: string;
+  /** Resolved model override, provider-interpreted. */
+  model?: string;
+  /** Resolved reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
+}
+
+/**
  * Intent for a single interactive conversation turn.
  */
 export interface ConversationTurnIntent {
@@ -142,6 +161,7 @@ export type LaunchIntent =
   | PrFeedbackIntent
   | ValidateFixIntent
   | MergeConflictIntent
+  | ReviewIntent
   | ConversationTurnIntent
   | InvokeIntent;
 
