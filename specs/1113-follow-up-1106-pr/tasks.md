@@ -19,7 +19,7 @@ expected wire value (`green`) rather than `undefined`. No production code change
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm the existing harness in
+- [X] T001 Confirm the existing harness in
   `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/smee-source.integration.test.ts`
   is baseline-green: run `pnpm --filter @generacy-ai/generacy test smee-source` and verify all
   existing cases pass before adding new ones. Note the reusable helpers (`startFakeSmee`/`fake`,
@@ -28,33 +28,33 @@ expected wire value (`green`) rather than `undefined`. No production code change
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Add a `describe('#1113 read-through cache path — casing drift across snapshotKey', …)`
+- [X] T002 [US1] Add a `describe('#1113 read-through cache path — casing drift across snapshotKey', …)`
   block (dedicated `it` blocks, mirroring the precedent at test line 209; do NOT fold into the
   existing lowercase `it.each` at 355–392 — Q2=A/FR-001) in
   `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/smee-source.integration.test.ts`.
   Leave the existing lowercase `it.each` and `completed:validate` test (424–462) unchanged (they
   are the control pinning `error`/`pending` mappings under homogeneous casing).
 
-- [ ] T003 [US1] Row 1 — **write-mixed × `pr-checks`**: build `prev: SnapshotMap`,
+- [X] T003 [US1] Row 1 — **write-mixed × `pr-checks`**: build `prev: SnapshotMap`,
   `prev.set(snapshotKey('O/R','pr',42), fakePrSnapshot('O/R',42,'success'))`, `setPrev(source, prev)`,
   drive `fake.writeFrame(checkRunFrame({ prNumber: 42, repoOwner: 'o', repoName: 'r' }))`,
   `waitFor(() => events.length >= 1)`, assert emitted `issue-transition` event has
   `event === 'pr-checks'` and `checks === 'green'` (not `undefined`).
 
-- [ ] T004 [US1] Row 2 (**SC-002 mutation-killer**) — **read-mixed × `pr-checks`**: build `prev`,
+- [X] T004 [US1] Row 2 (**SC-002 mutation-killer**) — **read-mixed × `pr-checks`**: build `prev`,
   `prev.set(snapshotKey('o/r','pr',42), fakePrSnapshot('o/r',42,'success'))`, `setPrev(source, prev)`,
   drive `fake.writeFrame(checkRunFrame({ prNumber: 42, repoOwner: 'O', repoName: 'R' }))`,
   `waitFor(...)`, assert `event === 'pr-checks'` and `checks === 'green'`. This row fails when
   `snapshotKey(ev.repo,'pr',ev.number)` at `smee-source.ts:375` is inlined as
   `` `${ev.repo}#pr#${ev.number}` ``.
 
-- [ ] T005 [US1] Row 3 — **write-mixed × `completed:validate` label-change**: build `prev`,
+- [X] T005 [US1] Row 3 — **write-mixed × `completed:validate` label-change**: build `prev`,
   `prev.set(snapshotKey('O/R','pr',42), fakePrSnapshot('O/R',42,'success'))`, `setPrev(source, prev)`,
   drive `fake.writeFrame(issueFrame('labeled', { number: 42, label: 'completed:validate',
   labels: ['completed:validate'], repoOwner: 'o', repoName: 'r' }))`, `waitFor(...)`, assert
   `event === 'label-change'`, `sourceLabel === 'completed:validate'`, `checks === 'green'`.
 
-- [ ] T006 [US1] Row 4 (**SC-002 mutation-killer**) — **read-mixed × `completed:validate`
+- [X] T006 [US1] Row 4 (**SC-002 mutation-killer**) — **read-mixed × `completed:validate`
   label-change**: build `prev`, `prev.set(snapshotKey('o/r','pr',42), fakePrSnapshot('o/r',42,'success'))`,
   `setPrev(source, prev)`, drive `fake.writeFrame(issueFrame('labeled', { number: 42,
   label: 'completed:validate', labels: ['completed:validate'], repoOwner: 'O', repoName: 'R' }))`,
@@ -63,15 +63,15 @@ expected wire value (`green`) rather than `undefined`. No production code change
 
 ## Phase 3: Verification
 
-- [ ] T007 [US1] SC-001 — run `pnpm --filter @generacy-ai/generacy test smee-source` and confirm
+- [X] T007 [US1] SC-001 — run `pnpm --filter @generacy-ai/generacy test smee-source` and confirm
   all four new rows plus the pre-existing cases are green against unmodified `smee-source.ts`.
 
-- [ ] T008 [US1] SC-002 — mutation verify: temporarily replace `snapshotKey(ev.repo, 'pr', ev.number)`
+- [X] T008 [US1] SC-002 — mutation verify: temporarily replace `snapshotKey(ev.repo, 'pr', ev.number)`
   at `packages/generacy/src/cli/commands/cockpit/doorbell/smee-source.ts:375` with an inlined
   `` `${ev.repo}#pr#${ev.number}` ``, re-run the suite, confirm rows 2 (T004) and 4 (T006) go **red**,
   then revert the mutation. Follow `specs/1113-follow-up-1106-pr/quickstart.md`.
 
-- [ ] T009 [US1] SC-003 — confirm `git diff --stat` shows only the `__tests__/` test file changed
+- [X] T009 [US1] SC-003 — confirm `git diff --stat` shows only the `__tests__/` test file changed
   (zero production lines, no `.changeset/*.md` added).
 
 ## Dependencies & Execution Order
