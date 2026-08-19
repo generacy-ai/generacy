@@ -27,6 +27,16 @@ Because the phase name is duplicated as a hand-maintained literal union or Zod e
 - `packages/workflow-engine/src/types/github.ts` — `CorePhase` (:190–193).
 - `packages/workflow-engine/src/actions/github/label-definitions.ts` — label vocabulary.
 
+## Clarifications
+
+### Session 2026-08-19
+
+- Q: How should the inert `review` phase behave in a live feature/bugfix run? → A: **Feature flag defaulting OFF** — `review` is present in the type/sequence but skipped at execution, guaranteeing zero observable change (labels/comments/journal untouched). (No-op-that-executes and suppress-side-effects rejected as observable diffs / fragile carve-outs.)
+- Q: What happens to the existing `waiting-for:implementation-review` gate on `implement`? → A: **Leave it unchanged on `implement`**; the new `review` phase ships with **no gate** of its own. Gate migration is a later epic issue.
+- Q: Which label families for `review` and `remediate`? → A: **All phase-progress families** (`phase:`, `completed:`, `failed:`, `failed:-repeated`) for both, parity with existing phases. **No** new `waiting-for:` gate labels.
+- Q: Is `remediate` reachable only structurally/in tests this issue? → A: **Yes** — the loop supports the off-sequence seam + return-to-`review`, but **no production trigger** fires it; it is dead in real runs and only reachable via the unit test.
+- Q: What is the SC-003 exhaustiveness-audit deliverable? → A: **A committed automated test** that enumerates the duplication sites and fails when one drifts (following the existing `label-protocol-audit.test.ts` / `phase-tracker-audit.test.ts` pattern).
+
 ## User Scenarios & Testing
 
 ### User Story 1 - New phases exist end-to-end without behavior change (Priority: P1)
@@ -85,9 +95,11 @@ As an operator configuring per-phase timeouts, agents (model/effort), and labels
 - **FR-003**: `WORKFLOW_PHASE_SEQUENCES` MUST insert `review` immediately after `implement` for `speckit-feature` and `speckit-bugfix`; `speckit-epic` MUST remain unchanged.
 - **FR-004**: `remediate` MUST NOT appear in any linear phase sequence.
 - **FR-005**: Per-phase timeout config and per-phase agent (model/effort) config MUST accept `review` and `remediate` keys without strict-schema errors.
-- **FR-006**: Label definitions MUST include entries for the new phases as needed by the phase→label machinery.
-- **FR-007**: The phase loop MUST support entering `remediate` off-sequence and backtracking to `review` afterward, reusing the existing `i--` backtrack + `startPhase` resume precedent.
-- **FR-008**: Stub execution wiring for `review` and `remediate` MUST be provided so the codebase compiles and existing workflows behave identically; the stub returns success and/or is feature-flagged off. Real executors are out of scope.
+- **FR-006**: Label definitions MUST include the full phase-progress families (`phase:`, `completed:`, `failed:`, `failed:-repeated`) for both `review` and `remediate`, at parity with existing phases. No new `waiting-for:` gate labels are added for the new phases.
+- **FR-007**: The phase loop MUST support entering `remediate` off-sequence and backtracking to `review` afterward, reusing the existing `i--` backtrack + `startPhase` resume precedent. In this issue the seam is reachable **only** via the unit test — no production code path fires it during a real feature/bugfix run.
+- **FR-008**: Stub execution wiring for `review` and `remediate` MUST be provided so the codebase compiles and existing workflows behave identically. `review` MUST be gated behind a feature flag defaulting **OFF** so it is skipped at execution and emits no labels/comments/journal entries in a live run (guaranteeing zero observable change). Real executors are out of scope.
+- **FR-010**: The existing `waiting-for:implementation-review` gate MUST remain on `implement`, unchanged; the new linear `review` phase ships with no gate of its own.
+- **FR-011**: SC-003's audit MUST be delivered as a committed automated test that enumerates the phase-literal duplication sites and fails when one drifts (following the existing `label-protocol-audit.test.ts` / `phase-tracker-audit.test.ts` pattern).
 - **FR-009**: Existing `speckit-feature`, `speckit-bugfix`, and `speckit-epic` runs MUST be behavior-identical after this change.
 
 ### Key Entities
@@ -107,7 +119,7 @@ As an operator configuring per-phase timeouts, agents (model/effort), and labels
 
 ## Assumptions
 
-- The stub `review`/`remediate` executors return success (or are feature-flagged off) so that a feature/bugfix run that now includes a linear `review` phase still completes with no observable difference.
+- The `review` phase is feature-flagged **OFF** by default and skipped at execution (per Clarifications Q1=A), so a feature/bugfix run that now includes a linear `review` phase still completes with no observable difference (no `phase:review`/`completed:review` labels, no stage comment, no journal entries).
 - The existing `i--` backtrack and `startPhase` resume mechanics in the phase loop are sufficient precedent for the off-sequence `remediate` seam; no new persistence layer is required.
 - New phase keys are optional in every config schema; absence falls back to existing defaults, so no config migration is needed for deployed clusters.
 
