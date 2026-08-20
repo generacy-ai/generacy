@@ -11,7 +11,7 @@ Issue: generacy-ai/generacy#1132
 - A: Add a fourth scenario — drive merge-conflict re-arm into a resolution-scoped review and assert convergence, alongside the three remediate entry points.
 - B: Defer — cover only the three remediate entry points (review-blocking, validate-failure, external-feedback); document/cross-reference #1131 in the loop-contract artifact but ship no merge-conflict scenario.
 
-**Answer**: *Pending*
+**Answer**: B) Defer — cover only the three remediate entry points; document/cross-reference #1131 in the loop-contract artifact but ship no merge-conflict scenario. Rationale: the issue body enumerates exactly three scenarios and FR-001–003/US1–3 exercise only the three remediate entry points; merge-conflict is separate git-surgery machinery whose re-arm target is a scoped review (owned and proven by #1131), and a cross-reference/pin matches the #1127 defer+pin precedent.
 
 ### Q2: Per-round verdict steering with the real review executor
 **Context**: US1 requires deterministic per-round review outcomes (2 blocking → 1 resolved/1 open → clean). Assumption §89 forbids test-only doubles for the P3 executors, so the **real** review executor runs and computes the verdict from a findings artifact. The harness must therefore steer the verdict through an external seam, not by faking the executor. This mirrors #1124's verdict-steering shim but must be pinned for P3.
@@ -21,7 +21,7 @@ Issue: generacy-ai/generacy#1132
 - B: Control the mocked CLI/agent output per round (the review executor parses the injected agent output into findings and recomputes the verdict).
 - C: Whichever seam #1124 shipped — bind at implement time against merged #1124; do not prescribe now.
 
-**Answer**: *Pending*
+**Answer**: A) Seed the findings-artifact sidecar per round (pre-write the sidecar the review executor reads; the engine still recomputes the verdict from it). Rationale: the shipped #1124 executor never parses agent stdout into findings — it reads the candidate sidecar the agent wrote and recomputes the verdict via `computeVerdict` — so option B's premise contradicts the actual seam; per-round steering is done by having the mocked launcher write that round's candidate findings, exactly as the real agent does.
 
 ### Q3: US3 assertion target — real monitor routing vs. standalone marker-match helper
 **Context**: In P2/#1127 (Q4=B), the engine-authored exclusion was asserted via a *standalone marker-match helper* because #1130 had not merged. Under the rebase-on-develop assumption for P3, #1130 (monitor exclusion + external-feedback→remediate routing) lands **first**, so the real `PrFeedbackMonitorService` exclusion is available. This determines what FR-003/SC-004 actually assert against.
@@ -30,7 +30,7 @@ Issue: generacy-ai/generacy#1132
 - A: Assert the real `PrFeedbackMonitorService` routing end-to-end (external re-enters `remediate`, engine threads excluded) — the integration point #1130 shipped.
 - B: Keep it a standalone marker-match helper assertion (do not drive the real monitor); rely on #1130's own tests for the routing.
 
-**Answer**: *Pending*
+**Answer**: A) Assert the real `PrFeedbackMonitorService` routing end-to-end (external feedback re-enters `remediate`; engine-authored threads excluded) — the integration point #1130 shipped. Rationale: the #1127 standalone marker-match helper was a stopgap explicitly because #1130 had not merged; under rebase-on-develop #1130 lands first and Assumption §89 forbids test-only doubles for the P3 executors, so #1132 must exercise the real monitor.
 
 ### Q4: Cap-variant human answer + counter-reset seam (US2/FR-002)
 **Context**: US2/FR-002/SC-003 require the harness to pause at `waiting-for:remediation-limit`, surface remaining open findings, then — on a human answer — reset the counter and converge. #1128 owns the cap gate + reset mechanism; the harness must simulate the "human answer" through an injected seam and assert the reset. It is unclear which signal constitutes the answer and how the reset is observed.
@@ -40,4 +40,4 @@ Issue: generacy-ai/generacy#1132
 - B: A clarification-style answer comment/payload injected through the human-answer seam; assert counter reset + resume.
 - C: Whichever resume mechanism #1128 shipped — bind at implement time against merged #1128; assert only the observable counter-reset + convergence, not the trigger shape.
 
-**Answer**: *Pending*
+**Answer**: C) Whichever resume mechanism #1128 shipped — bind at implement time against merged #1128; assert only the observable counter-reset + convergence, not the trigger shape. Rationale: #1128 is still open and owns both the counter and its reset, and the current gate is only a #1124 scaffold keyed on the review artifact round with no reset yet, so prescribing a specific trigger would bind to unmerged internals; remediation-limit is a label-driven phase gate, not a clarification-answer comment (rules out the comment option).

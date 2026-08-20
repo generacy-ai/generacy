@@ -92,6 +92,13 @@ Depends on: #1128 (remediate executor + counter + cap gate), #1129 (validate→r
 - Merge readiness (skipped≠passed), validate/CI parallelism, and the post-validate approval gate are P4 (#1133); this issue asserts the engine's phase/lifecycle/counter behavior, not repo CI merge-gating.
 - `maxRemediations` defaults (feature 3 / bugfix 2) and severity-gating policy are as shipped by #1128/#1124; the cap-variant scenario drives the counter to its configured limit rather than asserting a specific numeric default.
 
+### Clarifications (Batch 1 — 2026-08-20)
+
+- **Merge-conflict entry point (#1131) is deferred (Q1=B):** this suite ships exactly the three remediate-entry scenarios (review-blocking, validate-failure, external-human-feedback). #1131's merge-conflict re-arm → resolution-scoped review is cross-referenced/pinned in the loop-contract artifact (FR-007) but ships **no** dedicated scenario — mirroring the #1127 defer+pin precedent.
+- **Per-round verdict steering seeds the findings-artifact sidecar (Q2=A):** the harness drives each round's review verdict by having the mocked launcher pre-write that round's candidate findings sidecar (exactly as the real agent does); the real #1124 review executor still recomputes the verdict via `computeVerdict`. It does **not** parse agent stdout into findings, so no CLI/agent-output steering seam is used.
+- **US3 asserts the real monitor routing (Q3=A):** FR-003/SC-004 drive the real `PrFeedbackMonitorService` end-to-end — external feedback re-enters `remediate`, engine-authored/marker-carrying threads are excluded — rather than a standalone marker-match helper. This relies on #1130 having landed under the rebase-on-develop assumption; no test-only double stands in for the monitor.
+- **Cap-variant reset trigger binds at implement time (Q4=C):** the harness asserts only the observable counter-reset + convergence after the cap pause, not a specific human-answer trigger shape. `waiting-for:remediation-limit` is a label-driven phase gate (not a clarification-answer comment); the concrete resume/reset mechanism is whatever #1128 ships, bound at implement time against merged #1128.
+
 ## Out of Scope
 
 - Any change to the real `remediate` executor, remediation counter, `waiting-for:remediation-limit` gate, validate→remediate routing (#1129), external-feedback→remediate routing + engine-thread exclusion (#1130), or merge-conflict re-arm (#1131) — those are the P3 product issues; this integrates and documents them.
