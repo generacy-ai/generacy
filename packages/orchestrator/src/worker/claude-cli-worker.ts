@@ -21,6 +21,7 @@ import { OutputCapture } from './output-capture.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
+import { RemediateExecutor } from './remediate-executor.js';
 import { ReviewExecutor } from './review-executor.js';
 import { readReviewArtifactSync } from './review-artifact.js';
 import { PrManager } from './pr-manager.js';
@@ -695,6 +696,18 @@ export class ClaudeCliWorker {
         logger: workerLogger,
       });
 
+      // #1128: real remediate-phase executor. Reads the open blocking findings
+      // from the same review sidecar, builds an in-process remediation charter,
+      // spawns the CLI to make the code changes, and bumps remediationCount on
+      // every return path. Inert when reviewPhaseEnabled is off (remediate is
+      // off-sequence and only reachable via the review↔remediate seam).
+      const remediateExecutor = new RemediateExecutor({
+        agentLauncher: this.agentLauncher,
+        config: effectiveConfig,
+        settings: orchSettings,
+        logger: workerLogger,
+      });
+
       const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
@@ -705,6 +718,7 @@ export class ClaudeCliWorker {
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
         reviewExecutor,
+        remediateExecutor,
         settings: orchSettings,
         remediateTrigger: (ctx) =>
           readReviewArtifactSync(
