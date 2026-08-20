@@ -5,7 +5,7 @@ import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
-import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
+import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
@@ -46,9 +46,32 @@ import {
 import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { classifyDiff, isTestFile, type Classification } from './diff-classifier.js';
+import { runFailThenPass } from './fail-then-pass.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
+
+/**
+ * #1134 (US2): outcome of the speckit-bugfix targeted-validate classification.
+ * Carries the resolved effective command plus the raw inputs (`baseRef`,
+ * `changedFiles`, `classification`) so the US3 fail-then-pass check can reuse
+ * them without re-resolving the base ref or re-fetching the diff.
+ */
+interface TargetedValidateDecision {
+  /** The command that validate should actually run. */
+  effectiveCommand: string;
+  /** `origin/<base>` — the ref the diff was computed against. */
+  baseRef: string;
+  /** Bare base branch name (`origin/` stripped). */
+  base: string;
+  /** Changed-file paths against `baseRef`. */
+  changedFiles: string[];
+  /** The diff classification. */
+  classification: Classification;
+}
 
 /**
  * TTL for the persisted phase-start commit ref (#1107). 7 days — longer than
@@ -625,12 +648,36 @@ export class PhaseLoop {
             }
           }
 
-          // Validate phase — run test command
-          result = await cliSpawner.runValidatePhase(
-            context.checkoutPath,
-            config.validateCommand,
-            context.signal,
-          );
+          // Validate phase — run test command.
+          // #1134 (US2): for speckit-bugfix, classify the diff and narrow the
+          // built-in default validate command to a pnpm workspace-filter form.
+          // Every other workflow reaches the plain default unchanged (SC-005).
+          let effectiveValidateCommand = config.validateCommand;
+          let targetedValidate: TargetedValidateDecision | undefined;
+          if (context.item.workflowName === 'speckit-bugfix') {
+            targetedValidate = await this.resolveTargetedValidate(context, prManager, config);
+            effectiveValidateCommand = targetedValidate.effectiveCommand;
+          }
+
+          // #1134 (US3): opt-in fail-then-pass regression proof. Off by default;
+          // when enabled for speckit-bugfix, verify the changed test files fail
+          // on the base ref and pass on the branch before running validate.
+          let validateResult: PhaseResult | undefined;
+          if (
+            targetedValidate &&
+            resolveWorkflowOverrides(config, deps.settings ?? null, context.item.workflowName).review
+              .failThenPass
+          ) {
+            validateResult = await this.runFailThenPassCheck(context, targetedValidate);
+          }
+
+          result =
+            validateResult ??
+            (await cliSpawner.runValidatePhase(
+              context.checkoutPath,
+              effectiveValidateCommand,
+              context.signal,
+            ));
         } else {
           // Set up conversation logger for this CLI phase
           if (conversationLogger) {
@@ -1511,6 +1558,122 @@ export class PhaseLoop {
    */
   private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
     return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
+  }
+
+  /**
+   * #1134 (US2 / FR-009): classify the branch diff and compute the effective
+   * validate command for a speckit-bugfix run. Only the built-in default command
+   * is rewritten (Q1=B) — a custom `validateCommand` runs verbatim, but the
+   * classification is still computed and logged for observability. Emits exactly
+   * one `targeted-validate` log line per validate entry describing the decision.
+   */
+  private async resolveTargetedValidate(
+    context: WorkerContext,
+    prManager: PrManager,
+    config: WorkerConfig,
+  ): Promise<TargetedValidateDecision> {
+    const baseRef = await resolveBaseRef(
+      context.github,
+      prManager,
+      context.item.owner,
+      context.item.repo,
+    );
+    const base = baseRef.startsWith('origin/') ? baseRef.slice('origin/'.length) : baseRef;
+    const changedFiles = await context.github.getFilesChangedBetween(baseRef, 'HEAD');
+    const isWorkspace = existsSync(join(context.checkoutPath, 'pnpm-workspace.yaml'));
+    const classification = classifyDiff({ changedFiles, isWorkspace });
+    const isBuiltInDefault = config.validateCommand === DEFAULT_VALIDATE_COMMAND;
+
+    const effectiveCommand = this.computeEffectiveValidateCommand(
+      classification,
+      config.validateCommand,
+      base,
+      isBuiltInDefault,
+    );
+
+    this.logger.info(
+      {
+        event: 'targeted-validate',
+        classification: classification.kind,
+        isBuiltInDefault,
+        base,
+        effectiveCommand,
+      },
+      '#1134: targeted-validate decision',
+    );
+
+    return { effectiveCommand, baseRef, base, changedFiles, classification };
+  }
+
+  /**
+   * #1134 (US2): pure resolution of the effective validate command from the
+   * classification (see `data-model.md` resolution table). Custom commands run
+   * verbatim; only the built-in default is narrowed.
+   */
+  private computeEffectiveValidateCommand(
+    classification: Classification,
+    validateCommand: string,
+    base: string,
+    isBuiltInDefault: boolean,
+  ): string {
+    if (!isBuiltInDefault) {
+      return validateCommand;
+    }
+    const filter = `"...[origin/${base}]"`;
+    switch (classification.kind) {
+      case 'targeted':
+        return `pnpm --filter ${filter} build && pnpm --filter ${filter} test`;
+      case 'docs-only-skip-tests':
+        return `pnpm --filter ${filter} build`;
+      case 'test-only':
+        return `pnpm vitest run ${classification.testFiles.join(' ')}`;
+      case 'single-package-plain':
+      case 'full-fallback':
+        return validateCommand;
+    }
+  }
+
+  /**
+   * #1134 (US3 / FR-011): opt-in fail-then-pass regression proof. Computes the
+   * changed test-file set (diff ∩ test globs) and, when non-empty, verifies the
+   * files fail on the base ref and pass on the branch. Returns a failing
+   * `PhaseResult` (surfacing the evidence) when the proof does not hold, or
+   * `undefined` to let the normal validate run proceed.
+   */
+  private async runFailThenPassCheck(
+    context: WorkerContext,
+    targetedValidate: TargetedValidateDecision,
+  ): Promise<PhaseResult | undefined> {
+    const changedTestFiles = targetedValidate.changedFiles.filter(isTestFile);
+    const outcome = await runFailThenPass({
+      checkoutPath: context.checkoutPath,
+      baseRef: targetedValidate.baseRef,
+      changedTestFiles,
+      signal: context.signal,
+    });
+
+    if (outcome.kind === 'fail') {
+      this.logger.warn(
+        { event: 'fail-then-pass', reason: outcome.reason },
+        '#1134: fail-then-pass regression proof failed',
+      );
+      return {
+        phase: 'validate',
+        success: false,
+        exitCode: 1,
+        durationMs: 0,
+        output: [],
+        capturedStdout: outcome.evidence,
+        error: {
+          message: `fail-then-pass: ${outcome.reason}`,
+          output: outcome.evidence,
+          phase: 'validate',
+        },
+      };
+    }
+
+    // noop / pass → let the normal validate run proceed.
+    return undefined;
   }
 
   /**

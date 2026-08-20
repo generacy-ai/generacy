@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup / Foundations
 
-- [ ] T001 Export `DEFAULT_VALIDATE_COMMAND = 'pnpm test && pnpm build'` from
+- [X] T001 Export `DEFAULT_VALIDATE_COMMAND = 'pnpm test && pnpm build'` from
   `packages/orchestrator/src/worker/config.ts` and wire the `WorkerConfigSchema.validateCommand`
   `.default(...)` to reference the new constant (Decision 2 / Q1=B). This keeps the schema default
   and the built-in-default detector in sync by construction. No behavior change on its own.
@@ -19,7 +19,7 @@
 
 **Goal**: `profile: verification` interrogates the four bugfix questions; `standard` stays byte-identical.
 
-- [ ] T002 [US1] Extend the `verification` branch of `buildReviewCharter` in
+- [X] T002 [US1] Extend the `verification` branch of `buildReviewCharter` in
   `packages/orchestrator/src/worker/review-charter.ts` to render four clearly delineated,
   numbered/headed questions in place of the generic "needs verification" paragraph:
   (1) root cause vs symptom, (2) regression test present that fails without the fix,
@@ -27,7 +27,7 @@
   `contracts/verification-charter.md`). Isolate the change to the `if (profile === 'verification')`
   block — leave the `standard` branch, the "do NOT run tests/builds" section, the empty-diff
   finding, and the sidecar-write instructions untouched (FR-001/FR-002, #1124 invariants).
-- [ ] T003 [US1] Update `packages/orchestrator/src/worker/__tests__/review-charter.test.ts`
+- [X] T003 [US1] Update `packages/orchestrator/src/worker/__tests__/review-charter.test.ts`
   (SC-002): assert `profile: 'verification'` output contains all four questions (assert each);
   assert `profile: 'standard'` output is byte-identical to a captured pre-change snapshot; assert
   both profiles still contain the "do NOT run tests" and sidecar-write sections.
@@ -37,7 +37,7 @@
 **Goal**: For `speckit-bugfix`, classify the diff and rewrite the built-in default validate command
 to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decision.
 
-- [ ] T004 [P] [US2] Create pure, deterministic classifier
+- [X] T004 [P] [US2] Create pure, deterministic classifier
   `packages/orchestrator/src/worker/diff-classifier.ts` (FR-003, no I/O). Export the
   `Classification` discriminated union and `classifyDiff({ changedFiles, isWorkspace })` per
   `data-model.md` / `contracts/diff-classifier.md`. Ordered, first-match-wins precedence:
@@ -48,7 +48,7 @@ to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decisi
   `package-lock.json`, `yarn.lock`, `pnpm-workspace.yaml`, root-only `tsconfig*.json`
   (no `/` before filename), `.github/workflows/**`; docs = `**/*.md`, `docs/**`;
   test = `**/*.{test,spec}.{ts,tsx,js,jsx}`, `**/__tests__/**`. Never throws.
-- [ ] T005 [P] [US2] Create `packages/orchestrator/src/worker/__tests__/diff-classifier.test.ts`
+- [X] T005 [P] [US2] Create `packages/orchestrator/src/worker/__tests__/diff-classifier.test.ts`
   (SC-001 — every branch + every guard). Cover the 11-case matrix in
   `contracts/diff-classifier.md`: empty→full-fallback; lockfile(+src)→full-fallback;
   `pnpm-workspace.yaml`→full-fallback; root `tsconfig.json`→full-fallback while nested
@@ -56,7 +56,7 @@ to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decisi
   `isWorkspace:false`+src→single-package-plain; all-docs→docs-only-skip-tests;
   docs+src→targeted; all-test→test-only(with testFiles); test+src→targeted;
   plain src on workspace→targeted.
-- [ ] T006 [US2] Wire classification into the validate block of
+- [X] T006 [US2] Wire classification into the validate block of
   `packages/orchestrator/src/worker/phase-loop.ts` (FR-009 / `contracts/targeted-validate.md`),
   gated on `context.item.workflowName === 'speckit-bugfix'` (Q4=B) — every other workflow reaches
   the existing `runValidatePhase(config.validateCommand, ...)` call unchanged (SC-005). Steps:
@@ -71,7 +71,7 @@ to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decisi
   `single-package-plain`/`full-fallback`→plain default. Emit exactly one log line:
   `{ event: 'targeted-validate', classification: <kind>, isBuiltInDefault, base, effectiveCommand }`.
   Then `runValidatePhase(checkoutPath, effectiveCommand, signal)`.
-- [ ] T007 [US2] Create
+- [X] T007 [US2] Create
   `packages/orchestrator/src/worker/__tests__/phase-loop.targeted-validate.test.ts` (SC-003):
   bugfix + targeted + built-in default → filtered command + log emitted; bugfix + custom command
   → custom runs verbatim while classification is still logged; feature workflow → block skipped,
@@ -82,7 +82,7 @@ to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decisi
 
 **Goal**: Opt-in check that new/changed test files fail on base and pass on branch. Off by default.
 
-- [ ] T008 [P] [US3] Create `packages/orchestrator/src/worker/fail-then-pass.ts` (FR-011 /
+- [X] T008 [P] [US3] Create `packages/orchestrator/src/worker/fail-then-pass.ts` (FR-011 /
   `contracts/fail-then-pass.md`). Export `FailThenPassResult` and
   `runFailThenPass({ checkoutPath, baseRef, changedTestFiles, signal })`. Behavior:
   empty `changedTestFiles` → `{ kind: 'noop' }` (non-blocking, Q3=A);
@@ -93,11 +93,11 @@ to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decisi
   branch failed → `{ kind: 'fail', reason: 'branch-failed', evidence }`;
   base-fails AND branch-passes → `{ kind: 'pass' }`. Mirror the `base-merge.ts`
   `execFileAsync` git patterns (Decision 5); never mutate the branch checkout / its node_modules.
-- [ ] T009 [P] [US3] Create `packages/orchestrator/src/worker/__tests__/fail-then-pass.test.ts`
+- [X] T009 [P] [US3] Create `packages/orchestrator/src/worker/__tests__/fail-then-pass.test.ts`
   (SC-004): off → module not invoked (assert no worktree created); empty test set → `noop`;
   base-fails + branch-passes → `pass`; base-passes → `fail` reason `base-passed`;
   branch-fails → `fail` reason `branch-failed`; worktree cleaned up on the error path.
-- [ ] T010 [US3] Wire `failThenPass` into the validate block of
+- [X] T010 [US3] Wire `failThenPass` into the validate block of
   `packages/orchestrator/src/worker/phase-loop.ts` (depends on T006). Trigger only when
   `resolveWorkflowOverrides(...).review.failThenPass === true` AND
   `workflowName === 'speckit-bugfix'`. Compute `changedTestFiles` = the classifier's changed-file
@@ -111,7 +111,7 @@ to the pnpm `...[origin/<base>]` filter form, with safety guards; log the decisi
 **Goal**: Demonstrate bugfix review/remediate resolves provider/model/effort via existing keying.
 No new resolution code (Q5=A/FR-012).
 
-- [ ] T011 [US4] Add a harness/integration assertion (SC-003/US4) demonstrating a `speckit-bugfix`
+- [X] T011 [US4] Add a harness/integration assertion (SC-003/US4) demonstrating a `speckit-bugfix`
   review picking up a workflow-scoped agent override through the existing
   `resolveAgentForPhase(config, 'speckit-bugfix', 'review')` five-tier precedence
   (`config.ts:362`, delivered by #1095/#1122). Assert no new agent-resolution path is introduced —
@@ -120,7 +120,7 @@ No new resolution code (Q5=A/FR-012).
 
 ## Phase 6: Polish
 
-- [ ] T012 Add changeset `.changeset/1134-bugfix-profiles.md` — `@generacy-ai/orchestrator`
+- [X] T012 Add changeset `.changeset/1134-bugfix-profiles.md` — `@generacy-ai/orchestrator`
   **patch** (internal worker behavior: new `diff-classifier.ts` / `fail-then-pass.ts`,
   `review-charter.ts` verification branch, phase-loop wiring, `DEFAULT_VALIDATE_COMMAND` export;
   no `workflow-engine` label vocabulary added, no new public API). Newly-added file in the PR diff
