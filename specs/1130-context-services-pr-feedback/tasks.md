@@ -74,17 +74,17 @@
 
 **Depends on**: US2 (the shared path must be live before removing the divergent disposition).
 
-- [ ] T015 [US3] In `packages/orchestrator/src/worker/pr-feedback-handler.ts`: delete the `blocked:stuck-feedback-loop` apply-site (~611, `addBlockedStuckFeedbackLoopLabel`) and its constant (~31), and remove the divergent disposition/enqueue logic that competed with the shared loop — the handler no longer runs a fix CLI itself (FR-007/FR-008, Q5→B one live fix path). Exhaustion now lands on `waiting-for:remediation-limit` via the existing `on-remediation-limit` gate (FR-005).
-- [ ] T016 [US3] Remove the `blocked:stuck-feedback-loop` definition from `packages/workflow-engine/src/actions/github/label-definitions.ts` (FR-008). Migrate/remove every other consumer found in T002 (cockpit label maps/precedence, tests) in this same PR — do not leave a dangling reference.
-- [ ] T017 [US3] Tests: exceed the remediation cap on an external-feedback route and assert the disposition is `waiting-for:remediation-limit`, never `blocked:stuck-feedback-loop` (SC-005). Update/delete any test that asserted the old `blocked:stuck-feedback-loop` behavior to the new contract — do NOT weaken coverage; migrate it to the `remediation-limit` gate assertion.
-- [ ] T018 [US3] Verify a new trusted human review/comment after the cap resets the budget: the adapter re-runs (authorship-based trigger), clears the artifact, and the next seeded round derives `round = 1` (FR-006, plan D-2). Assert thread-resolution / gate-label removal alone do NOT reset it.
+- [X] T015 [US3] In `packages/orchestrator/src/worker/pr-feedback-handler.ts`: delete the `blocked:stuck-feedback-loop` apply-site (~611, `addBlockedStuckFeedbackLoopLabel`) and its constant (~31), and remove the divergent disposition/enqueue logic that competed with the shared loop — the handler no longer runs a fix CLI itself (FR-007/FR-008, Q5→B one live fix path). Exhaustion now lands on `waiting-for:remediation-limit` via the existing `on-remediation-limit` gate (FR-005).
+- [X] T016 [US3] Remove the `blocked:stuck-feedback-loop` definition from `packages/workflow-engine/src/actions/github/label-definitions.ts` (FR-008). Migrate/remove every other consumer found in T002 (cockpit label maps/precedence, tests) in this same PR — do not leave a dangling reference.
+- [X] T017 [US3] Tests: exceed the remediation cap on an external-feedback route and assert the disposition is `waiting-for:remediation-limit`, never `blocked:stuck-feedback-loop` (SC-005). Update/delete any test that asserted the old `blocked:stuck-feedback-loop` behavior to the new contract — do NOT weaken coverage; migrate it to the `remediation-limit` gate assertion.
+- [X] T018 [US3] Verify a new trusted human review/comment after the cap resets the budget: the adapter re-runs (authorship-based trigger), clears the artifact, and the next seeded round derives `round = 1` (FR-006, plan D-2). Assert thread-resolution / gate-label removal alone do NOT reset it.
 
 ---
 
 ## Phase 6: Polish & Release Gate
 
-- [ ] T019 [P] Add `.changeset/1130-pr-feedback-remediate-routing.md`: `@generacy-ai/orchestrator` **patch** (internal service/worker changes, no new public exports) + `@generacy-ai/workflow-engine` **minor** (removal of `blocked:stuck-feedback-loop` label vocabulary). Newly-added file (the changeset gate greps `--diff-filter=A`). Re-verify both bump levels against the final diff.
-- [ ] T020 Run the package test suites and confirm green: `pnpm --filter @generacy-ai/orchestrator test` and `pnpm --filter @generacy-ai/workflow-engine test`. Regression oracle (SC-006): the existing `pr-feedback-monitor-service` suites (untrusted-notice, `blocked:*` skip, adaptive interval) must remain green.
+- [X] T019 [P] Add `.changeset/1130-pr-feedback-remediate-routing.md`: `@generacy-ai/orchestrator` **patch** (internal service/worker changes, no new public exports) + `@generacy-ai/workflow-engine` **minor** (removal of `blocked:stuck-feedback-loop` label vocabulary). Newly-added file (the changeset gate greps `--diff-filter=A`). Re-verify both bump levels against the final diff.
+- [X] T020 Run the package test suites and confirm green: `pnpm --filter @generacy-ai/orchestrator test` and `pnpm --filter @generacy-ai/workflow-engine test`. Regression oracle (SC-006): the existing `pr-feedback-monitor-service` suites (untrusted-notice, `blocked:*` skip, adaptive interval) must remain green.
 
 ---
 

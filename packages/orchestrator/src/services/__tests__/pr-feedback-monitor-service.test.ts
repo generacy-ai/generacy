@@ -1980,10 +1980,10 @@ describe('PrFeedbackMonitorService', () => {
       ];
     }
 
-    it('SC-003 skip: blocked:stuck-feedback-loop present → no enqueue, no waiting-for label', async () => {
+    it('SC-003 skip: blocked:resolve-failed present → no enqueue, no waiting-for label', async () => {
       (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
       (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        'blocked:stuck-feedback-loop',
+        'blocked:resolve-failed',
       ]);
 
       const event = createPrReviewEvent();
@@ -2003,7 +2003,7 @@ describe('PrFeedbackMonitorService', () => {
       );
       expect(infoCall).toBeDefined();
       expect(infoCall![0]).toMatchObject({
-        blockedLabel: 'blocked:stuck-feedback-loop',
+        blockedLabel: 'blocked:resolve-failed',
         reason: 'blocked-label-present',
       });
     });
@@ -2055,7 +2055,7 @@ describe('PrFeedbackMonitorService', () => {
         },
       ]);
       (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        'blocked:stuck-feedback-loop',
+        'blocked:resolve-failed',
       ]);
 
       const event = createPrReviewEvent();
@@ -2073,7 +2073,7 @@ describe('PrFeedbackMonitorService', () => {
     it('idempotent-state hygiene: lastUnresolvedThreadCount is updated on skip', async () => {
       (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
       (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        'blocked:stuck-feedback-loop',
+        'blocked:resolve-failed',
       ]);
 
       const event = createPrReviewEvent();

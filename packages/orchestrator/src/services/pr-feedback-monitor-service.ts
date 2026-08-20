@@ -400,9 +400,10 @@ export class PrFeedbackMonitorService {
     this.lastZeroTrustedState.set(stateKey, false);
 
     // Case A tail (#883): before enqueue, check for any `blocked:*` label on
-    // the linked issue. The handler adds `blocked:stuck-feedback-loop` when
-    // its fix cycle can't advance; the operator removes the label to permit
-    // another attempt. Any `blocked:*` prefix is the contract — no allow-list.
+    // the linked issue. The handler can apply terminal `blocked:*` labels
+    // (e.g. `blocked:fixer-timeout-*`, `blocked:resolve-failed`) when a fix
+    // cycle can't advance; the operator removes the label to permit another
+    // attempt. Any `blocked:*` prefix is the contract — no allow-list.
     let issueLabels: string[];
     try {
       issueLabels = await client.getIssueLabels(owner, repo, issueNumber);

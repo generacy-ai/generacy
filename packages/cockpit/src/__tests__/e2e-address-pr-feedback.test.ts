@@ -116,25 +116,25 @@ describe('E2E fixture: address-pr-feedback loop (#926 SC-003, T012)', () => {
     expect(events[0]?.to).toBe('waiting-for:implementation-review');
   });
 
-  it('blocked-stuck disposition: `blocked:stuck-feedback-loop` outranks address-pr-feedback and produces the correct engage sequence', () => {
-    // Sanity for the interaction with the blocked-stuck disposition (#883).
-    // When the handler gives up and adds `blocked:stuck-feedback-loop`,
-    // the consumer sees a transition to the blocked state, not
-    // `address-pr-feedback`.
+  it('persist-trigger disposition (#1130): no-diff cycle keeps address-pr-feedback, emits no dead-end transition', () => {
+    // #1130 FR-007/FR-008: the `blocked:stuck-feedback-loop` dead-end is retired.
+    // When the legacy handler gives up on a no-diff / push-failed cycle it now
+    // simply persists the trigger — retains `waiting-for:address-pr-feedback`,
+    // applies no label — and the `finally` clears `agent:in-progress`. The
+    // consumer therefore stays at `address-pr-feedback`, with no second flip.
     const timeline: string[][] = [
       ['waiting-for:implementation-review', 'agent:paused'],
       ['waiting-for:implementation-review', 'agent:paused', 'waiting-for:address-pr-feedback', 'agent:in-progress'],
-      // Handler gives up: adds blocked-stuck; retains address-pr-feedback by
-      // design; `finally` clears `agent:in-progress`.
-      ['waiting-for:implementation-review', 'agent:paused', 'waiting-for:address-pr-feedback', 'blocked:stuck-feedback-loop'],
+      // Handler gives up: retains address-pr-feedback, adds no label;
+      // `finally` clears `agent:in-progress`.
+      ['waiting-for:implementation-review', 'agent:paused', 'waiting-for:address-pr-feedback'],
     ];
 
     const events = simulateEventStream(timeline);
 
-    // Engage: implementation-review → address-pr-feedback (index 6 → index 1).
-    // Blocked: address-pr-feedback → blocked:stuck-feedback-loop (index 1 → 0).
-    expect(events).toHaveLength(2);
+    // Only the engage flip fires: implementation-review → address-pr-feedback.
+    // Clearing agent:in-progress does not change sourceLabel, so no extra event.
+    expect(events).toHaveLength(1);
     expect(events[0]?.to).toBe('waiting-for:address-pr-feedback');
-    expect(events[1]?.to).toBe('blocked:stuck-feedback-loop');
   });
 });

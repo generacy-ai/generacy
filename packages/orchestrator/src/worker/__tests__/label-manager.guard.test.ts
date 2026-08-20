@@ -107,7 +107,7 @@ describe('LabelManager guard (#941 FR-003)', () => {
       expect(isHumanGateCompletion('waiting-for:implementation-review')).toBe(false);
       expect(isHumanGateCompletion('agent:paused')).toBe(false);
       expect(isHumanGateCompletion('failed:implement')).toBe(false);
-      expect(isHumanGateCompletion('blocked:stuck-feedback-loop')).toBe(false);
+      expect(isHumanGateCompletion('blocked:resolve-failed')).toBe(false);
     });
   });
 
@@ -188,7 +188,7 @@ describe('LabelManager guard (#941 FR-003)', () => {
       'agent:in-progress',
       'agent:error',
       'failed:implement',
-      'blocked:stuck-feedback-loop',
+      'blocked:resolve-failed',
     ];
 
     for (const label of cases) {

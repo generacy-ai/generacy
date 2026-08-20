@@ -202,8 +202,8 @@ describe('classifies provisioning failures (#916 FR-006)', () => {
     const lm = createLabelManager(github);
     await lm.onPhaseComplete('plan');
 
-    // (a) three error-level entries, one per blocked:stuck-* label, naming
-    // the actual cause via structured fields.
+    // (a) one error-level entry per blocked:stuck-* label, naming the actual
+    // cause via structured fields.
     const stuckErrorCalls = mockLogger.error.mock.calls.filter(
       ([fields, msg]) =>
         typeof msg === 'string' &&
@@ -212,7 +212,7 @@ describe('classifies provisioning failures (#916 FR-006)', () => {
         typeof (fields as Record<string, unknown>).cause === 'string' &&
         ((fields as Record<string, unknown>).cause as string).includes('description is too long'),
     );
-    expect(stuckErrorCalls).toHaveLength(3);
+    expect(stuckErrorCalls).toHaveLength(2);
 
     // (b) The lying "may already exist" line is never emitted.
     const misleadingWarn = mockLogger.warn.mock.calls.find(
@@ -234,7 +234,7 @@ describe('classifies provisioning failures (#916 FR-006)', () => {
     const lineage = (LabelManager as unknown as {
       provisioningFailures: Map<string, Map<string, unknown>>;
     }).provisioningFailures.get('test-owner/test-repo');
-    expect(lineage?.size).toBe(3);
+    expect(lineage?.size).toBe(2);
 
     // (f) A subsequent onPhaseComplete on the same manager re-runs the pass.
     github.listLabels.mockClear();

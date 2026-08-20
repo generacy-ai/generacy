@@ -1467,7 +1467,7 @@ describe('ClaudeCliWorker (integration)', () => {
 
       // Child logger should log the routing decision
       expect(childLogger.info).toHaveBeenCalledWith(
-        'Routing to PrFeedbackHandler for PR feedback addressing',
+        'Routing to PrFeedbackHandler for PR feedback addressing (review phase disabled)',
       );
 
       // Child logger should log completion

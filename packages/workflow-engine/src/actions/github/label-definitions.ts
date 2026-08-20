@@ -117,11 +117,6 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
 
   // Blocked labels
   {
-    name: 'blocked:stuck-feedback-loop',
-    color: 'D73A4A',
-    description: 'PR-feedback loop paused: last cycle could not advance the trigger. Remove to retry.',
-  },
-  {
     name: 'blocked:fixer-timeout',
     color: 'D73A4A',
     description: 'PR-feedback CLI timed out after partial commit — up to 2 auto-retries will follow (#1070).',

@@ -54,26 +54,26 @@ describe('LabelManager addLabels enrichment (#916 FR-008)', () => {
   it('same-process 404: enriches thrown error with provisioning cause', async () => {
     const github = makeGithub();
     github.listLabels.mockResolvedValue([]);
-    // Prime lineage: the ensure-pass classifies a 422 on blocked:stuck-feedback-loop.
+    // Prime lineage: the ensure-pass classifies a 422 on blocked:resolve-failed.
     github.createLabel.mockImplementation(async (_owner, _repo, name: string) => {
-      if (name === 'blocked:stuck-feedback-loop') {
+      if (name === 'blocked:resolve-failed') {
         throw new Error(
-          'Failed to create label blocked:stuck-feedback-loop: HTTP 422: Validation Failed\ndescription is too long (maximum is 100 characters)',
+          'Failed to create label blocked:resolve-failed: HTTP 422: Validation Failed\ndescription is too long (maximum is 100 characters)',
         );
       }
     });
-    // The subsequent apply request for [blocked:stuck-feedback-loop, agent:paused]
+    // The subsequent apply request for [blocked:resolve-failed, agent:paused]
     // 404s because the label was never actually created.
     github.addLabels.mockRejectedValue(new Error('HTTP 404: Not Found'));
 
     const lm = createLabelManager(github);
 
     // onGateHit's applyLabels call ends up requesting [gateLabel, 'agent:paused'].
-    // Using 'blocked:stuck-feedback-loop' as the gateLabel targets the primed
+    // Using 'blocked:resolve-failed' as the gateLabel targets the primed
     // lineage entry so the enrichment loop matches on it.
     let caught: unknown;
     try {
-      await lm.onGateHit('plan', 'blocked:stuck-feedback-loop');
+      await lm.onGateHit('plan', 'blocked:resolve-failed');
     } catch (err) {
       caught = err;
     }
@@ -81,7 +81,7 @@ describe('LabelManager addLabels enrichment (#916 FR-008)', () => {
     const term = caught as TerminalLabelOpError;
     // The enriched message is spliced into the thrown Error's message, which
     // becomes retryWithBackoff's `ghStderr` field on the terminal error.
-    expect(term.ghStderr).toContain('label "blocked:stuck-feedback-loop"');
+    expect(term.ghStderr).toContain('label "blocked:resolve-failed"');
     expect(term.ghStderr).toContain('description is too long');
     expect(term.ghStderr).toContain('HTTP 422');
     // The raw 404 line remains present after the enrichment prefix.
@@ -100,7 +100,7 @@ describe('LabelManager addLabels enrichment (#916 FR-008)', () => {
 
     let caught: unknown;
     try {
-      await lm.onGateHit('plan', 'blocked:stuck-feedback-loop');
+      await lm.onGateHit('plan', 'blocked:resolve-failed');
     } catch (err) {
       caught = err;
     }
@@ -108,7 +108,7 @@ describe('LabelManager addLabels enrichment (#916 FR-008)', () => {
     const term = caught as TerminalLabelOpError;
     // Raw 404 shows, no enrichment prefix.
     expect(term.ghStderr).toContain('HTTP 404');
-    expect(term.ghStderr).not.toContain('label "blocked:stuck-feedback-loop":');
+    expect(term.ghStderr).not.toContain('label "blocked:resolve-failed":');
     expect(term.ghStderr).not.toContain('description is too long');
   });
 });

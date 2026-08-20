@@ -1,20 +1,26 @@
 /**
- * #1073 regression tests: PR-feedback handler MUST NOT apply
- * `blocked:stuck-feedback-loop` to a cycle in which the fixer CLI committed
- * and pushed its own work (working tree clean, exit 0). Detected by comparing
- * branch HEAD SHA across the CLI invocation via `getHeadSha()`.
+ * #1073 regression tests: PR-feedback handler distinguishes a cycle in which
+ * the fixer CLI committed and pushed its own work (working tree clean, exit 0)
+ * from a genuine no-diff cycle. Detected by comparing branch HEAD SHA across
+ * the CLI invocation via `getHeadSha()`.
+ *
+ * #1130 update: the `blocked:stuck-feedback-loop` dead-end is retired
+ * (FR-007/FR-008). The no-diff / push-failed cycle now persists the trigger
+ * (retains `waiting-for:address-pr-feedback`) and applies NO dead-end label;
+ * exhaustion is owned by the shared review/remediate loop's
+ * `on-remediation-limit` gate. These tests assert the label is never applied.
  *
  * Test cases mirror the spec's FR/SC matrix:
  *   T-SC-001 (FR-009 / SC-001): CLI-self-commit → zero blocked-label calls +
  *                               reply/resolve loop runs.
- *   T-SC-002 (FR-010 / SC-002): genuine no-diff → `blocked:stuck-feedback-loop`.
+ *   T-SC-002 (FR-010 / SC-002): genuine no-diff → persist trigger, no label.
  *   T-SC-003 (SC-003):          exactly one `disposition: 'cli-self-committed'`
  *                               info line with `preFixSha` + `postFixSha`.
  *   T-SC-004 (SC-004):          historically-contradictory log pair unreachable.
  *   T-US4-B (FR-013):           head advanced + zero resolves →
  *                               `blocked:resolve-failed`.
- *   T-US4-B-inverse:            head unchanged + zero resolves →
- *                               `blocked:stuck-feedback-loop` (guard against
+ *   T-US4-B-inverse:            head unchanged + zero resolves → persist
+ *                               trigger, no label (guard against
  *                               over-retargeting).
  *   T-Q4-caveat (FR-008a):      long-form SHAs in the CLI-self-commit payload.
  *
@@ -254,16 +260,18 @@ describe('PrFeedbackHandler CLI-self-commit detection (#1073)', () => {
   // -------------------------------------------------------------------------
   // T-SC-002 (FR-010 / SC-002)
   // -------------------------------------------------------------------------
-  it('T-SC-002: genuine no-diff cycle → blocked:stuck-feedback-loop', async () => {
+  it('T-SC-002: genuine no-diff cycle → persist trigger, no dead-end label (#1130)', async () => {
     getHeadShaSpy
       .mockResolvedValueOnce('sha-A') // preFixSha
       .mockResolvedValueOnce('sha-A'); // postCliSha unchanged
 
     await handler.handle(createQueueItem(), '/tmp/workspace/o/r');
 
-    expect(labelAdded('blocked:stuck-feedback-loop')).toBe(true);
+    // #1130 FR-007/FR-008: the `blocked:stuck-feedback-loop` dead-end is
+    // retired — the no-diff cycle persists the trigger and applies no label.
+    expect(labelAdded('blocked:stuck-feedback-loop')).toBe(false);
     expect(labelAdded('blocked:resolve-failed')).toBe(false);
-    // Reply/resolve did NOT run — cycle went to blocked-stuck disposition.
+    // Reply/resolve did NOT run — cycle went to the persist-trigger disposition.
     expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
     expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
   });
@@ -348,7 +356,7 @@ describe('PrFeedbackHandler CLI-self-commit detection (#1073)', () => {
   // -------------------------------------------------------------------------
   // T-US4-B-inverse (FR-013 complement)
   // -------------------------------------------------------------------------
-  it('T-US4-B-inverse: head unchanged + zero resolves → blocked:stuck-feedback-loop', async () => {
+  it('T-US4-B-inverse: head unchanged + zero resolves → persist trigger, no dead-end label (#1130)', async () => {
     getHeadShaSpy
       .mockResolvedValueOnce('sha-A')
       .mockResolvedValueOnce('sha-A');
@@ -358,8 +366,10 @@ describe('PrFeedbackHandler CLI-self-commit detection (#1073)', () => {
     await handler.handle(createQueueItem(), '/tmp/workspace/o/r');
 
     // Head unchanged + hasChanges:false → the B1/B2/B3 branch fires first
-    // (no-diff disposition), so blocked:stuck-feedback-loop lands.
-    expect(labelAdded('blocked:stuck-feedback-loop')).toBe(true);
+    // (no-diff disposition). #1130 FR-007/FR-008: no dead-end label; the
+    // resolve-failed retarget is NOT reached because the no-diff branch
+    // short-circuits and persists the trigger.
+    expect(labelAdded('blocked:stuck-feedback-loop')).toBe(false);
     expect(labelAdded('blocked:resolve-failed')).toBe(false);
   });
 

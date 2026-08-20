@@ -264,7 +264,7 @@ describe('PrFeedbackHandler.ensureImplementationReviewGate (#941 FR-002)', () =>
     mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([createMockThread(1, false)]);
     const { handle } = createMockProcess(0, 20);
     spawnFn.mockReturnValue(handle);
-    // No diff → Disposition B (blocked-stuck-feedback-loop)
+    // No diff → Disposition B (persist trigger, no dead-end label #1130)
     mockGitHub.getStatus = vi.fn().mockResolvedValue({
       has_changes: false,
       staged: [],
