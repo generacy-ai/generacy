@@ -661,26 +661,15 @@ export class ClaudeCliWorker {
       const phaseSequence = getPhaseSequence(item.workflowName, effectiveConfig.reviewPhaseEnabled);
       const phaseLoop = new PhaseLoop(workerLogger);
 
-      // #892: construct ValidateFixHandler only when PhaseTracker is available.
-      // The handler's dedupe surface requires it; without Redis the fix-cycle
-      // degrades to "same as today" (base-advance re-runs still occur).
-      const jobEmitter = this.jobEventEmitter;
-      const validateFixEmit = jobEmitter
-        ? (channel: string, payload: unknown): void => {
-            // Payload shape is always an object literal at the call site; cast
-            // it into the record shape the JobEventEmitter expects.
-            jobEmitter(channel, payload as Record<string, unknown>);
-          }
-        : undefined;
-      const validateFixHandler = this.phaseTracker
-        ? new ValidateFixHandler(
-            effectiveConfig,
-            this.agentLauncher,
-            this.phaseTracker,
-            workerLogger,
-            validateFixEmit,
-          )
-        : undefined;
+      // #1129: thin remediate adapter for validate-origin remediations. The
+      // phase loop invokes it at the remediate seam (never a base-advance
+      // catch); escalation + dedupe are the loop's job now, so the handler no
+      // longer needs PhaseTracker or an event emitter.
+      const validateFixHandler = new ValidateFixHandler(
+        effectiveConfig,
+        this.agentLauncher,
+        workerLogger,
+      );
 
       // #1124: real review-phase executor. Spawns the CLI with an in-process
       // charter prompt, reads the agent-written findings sidecar, recomputes the
@@ -711,7 +700,7 @@ export class ClaudeCliWorker {
             ctx.checkoutPath,
             `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
           )?.verdict === 'changes-required',
-        ...(validateFixHandler ? { validateFixHandler } : {}),
+        validateFixHandler,
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
         ...(this.phaseTracker ? { phaseTracker: this.phaseTracker } : {}),
         reviewPoster,

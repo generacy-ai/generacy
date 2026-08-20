@@ -1,7 +1,7 @@
 import { executeCommand, wrapUntrustedData } from '@generacy-ai/workflow-engine';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { ValidateFixIntent } from '@generacy-ai/generacy-plugin-claude-code';
-import type { QueueItem, PhaseTracker } from '../types/index.js';
+import type { QueueItem } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { resolveAgentForPhase } from './config.js';
@@ -10,20 +10,14 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 import { warnIfEffortDropped } from './effort-mechanism-check.js';
 import { hashValidationEvidence } from './evidence-hash.js';
 
-/** Label added when the fix cycle cannot advance (#883-style termination). */
-const BLOCKED_STUCK_VALIDATE_FIX_LABEL = 'blocked:stuck-validate-fix';
-const AGENT_ERROR_LABEL = 'agent:error';
-const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
-const FAILED_VALIDATE_LABEL = 'failed:validate';
-const PHASE_VALIDATE_LABEL = 'phase:validate';
-
 /**
- * Evidence handed to the handler from PhaseLoop's validate `catch` block.
+ * Evidence handed to the adapter from PhaseLoop's routed validate-failure
+ * branch.
  */
 export interface ValidateFailureEvidence {
   stdout: string;
   stderr: string;
-  exitCode: number;
+  exitCode: number | null;
 }
 
 /**
@@ -36,36 +30,35 @@ export interface ValidateFixContext {
 }
 
 /**
- * Optional relay event emitter. Fire-and-forget; must never throw.
- * Consumer: cluster.validate-fix channel on the cloud side (out of scope).
- */
-export type ValidateFixEventEmitter = (channel: string, payload: unknown) => void;
-
-/**
- * Bounded validate-fix cycle (#892).
+ * Thin remediate adapter (#1129).
  *
- * Invoked ONLY from PhaseLoop's validate `catch` block, gated by
- * `WorkerContext.resumeReason === 'base-advance'` (D7 ordering invariant).
- * First-time reds still route through `LabelManager.onError('validate')`.
+ * Interim `remediate` behavior for validate-origin remediations while
+ * `remediate` is still a stub. Invoked from PhaseLoop's remediate seam when a
+ * `pendingValidateRemediation` is set (never from a base-advance `catch`).
  *
- * Contract: exactly one autonomous attempt per distinct evidence hash. Same
- * hash → escalation via `blocked:stuck-validate-fix`. No-diff after spawn →
- * escalation. Sibling-owned file overlap post-commit → revert + escalation.
+ * Reduced surface (FR-005): the one-attempt-per-evidence-hash cap, the
+ * `resumeReason === 'base-advance'` coupling, and ownership of `failed:*`
+ * escalation labels are all gone — the phase loop owns escalation now. On any
+ * failure the adapter throws; the phase loop logs and continues (the
+ * subsequent delta-scoped review + validate re-run, or the fingerprint
+ * backstop, is the terminal safety net).
  *
- * See specs/892-found-during-cockpit-v1/contracts/validate-fix-handler.md.
+ * Preserved (FR-010): the fix prompt built from validate evidence, the commit,
+ * the sibling-owned-file enumeration, and the revert-on-overlap guard.
+ *
+ * See specs/1129-context-worker-validate-fix/contracts/thin-adapter-contract.md.
  */
 export class ValidateFixHandler {
   constructor(
     private readonly config: WorkerConfig,
     private readonly agentLauncher: AgentLauncher,
-    private readonly phaseTracker: PhaseTracker,
     private readonly logger: Logger,
-    private readonly emitEvent?: ValidateFixEventEmitter,
   ) {}
 
   /**
-   * Run one bounded fix attempt against the given failing evidence.
-   * Never throws — all failures land as `emit` + label side effects.
+   * Run one fix attempt against the given failing evidence. On any failure —
+   * including a sibling-owned-file overlap — this throws; the phase loop's
+   * remediate-seam wrapper (T007) logs and continues.
    */
   async handle(
     item: QueueItem,
@@ -78,56 +71,27 @@ export class ValidateFixHandler {
     const { owner, repo, issueNumber } = item;
     const { prNumber, baseBranch } = ctx;
 
-    // 1. Hash evidence.
-    let hash: string;
-    let extract;
-    try {
-      const result = hashValidationEvidence(evidence.stdout);
-      hash = result.hash;
-      extract = result.extract;
-    } catch (err) {
-      this.logger.error(
-        { err: String(err), owner, repo, issueNumber, prNumber },
-        'ValidateFixHandler: hashValidationEvidence threw — escalating (safe default)',
-      );
-      await this.escalate(github, owner, repo, issueNumber, {
-        status: 'escalated', reason: 'hash-error',
-        evidenceHash: 'unknown', prNumber, owner, repo, issueNumber,
-      });
-      return;
-    }
-
-    const dupKey = `validate-fix:${hash}`;
+    // Compute the evidence hash + structured extract. The hash is metadata for
+    // the intent + commit message; the extract enriches the fix prompt. It is
+    // no longer a dedupe gate (FR-005).
+    const { hash, extract } = hashValidationEvidence(evidence.stdout);
 
     this.logger.info(
       { owner, repo, issueNumber, prNumber, evidenceHash: hash, failureCount: extract.failures.length },
-      'ValidateFixHandler: entering fix cycle',
+      'ValidateFixHandler: entering fix attempt',
     );
 
-    // 2. Dedupe check.
-    if (await this.phaseTracker.isDuplicate(owner, repo, issueNumber, dupKey)) {
-      await this.escalate(github, owner, repo, issueNumber, {
-        status: 'escalated', reason: 'duplicate-evidence-hash',
-        evidenceHash: hash, prNumber, owner, repo, issueNumber,
-      });
-      return;
-    }
-
-    // 3. Mark processed BEFORE spawn. If the spawn crashes mid-flight, the
-    //    key remaining prevents a duplicate attempt on cluster restart.
-    await this.phaseTracker.markProcessed(owner, repo, issueNumber, dupKey);
-
-    // 4. Sibling-owned file collection (best-effort).
+    // Sibling-owned file collection (best-effort).
     const siblingFiles = await this.collectSiblingOwnedFiles(
       github, owner, repo, baseBranch, prNumber,
     );
 
-    // 5. Build prompt.
+    // Build prompt.
     const prompt = this.buildFixPrompt(evidence, extract, siblingFiles, hash, prNumber);
 
-    // 6. Spawn.
+    // Spawn.
     // #1095: bind to `implement` phase for `{ provider, model, effort }` — same
-    // rule pr-feedback-handler.ts:860 uses (fixer paths revise the code the
+    // rule pr-feedback-handler.ts uses (fixer paths revise the code the
     // implement phase produced). `workflowName === 'unknown'` naturally degrades
     // through `agents.default` tiers to the container CLI ambient default.
     const { provider, model, effort } = resolveAgentForPhase(this.config, workflowName, 'implement');
@@ -151,75 +115,47 @@ export class ValidateFixHandler {
       context: { handler: 'validate-fix', owner, repo, issueNumber, prNumber },
     });
 
-    let exitCode: number | null;
-    try {
-      const handle = await this.agentLauncher.launch({
-        intent,
-        cwd: checkoutPath,
-        env: {},
-        credentials: buildLaunchCredentials(this.config.credentialRole),
-        provider,
-      });
-      // Drain streams so the child doesn't stall on back-pressure.
-      handle.process.stdout?.on('data', () => undefined);
-      handle.process.stderr?.on('data', () => undefined);
-      exitCode = await handle.process.exitPromise;
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), owner, repo, issueNumber, prNumber, evidenceHash: hash },
-        'ValidateFixHandler: launcher.launch threw',
-      );
-      await this.applyStuckLabel(github, owner, repo, issueNumber);
-      this.safeEmit('cluster.validate-fix', {
-        status: 'blocked', reason: 'launch-error',
-        evidenceHash: hash, owner, repo, issueNumber, prNumber,
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
+    const handle = await this.agentLauncher.launch({
+      intent,
+      cwd: checkoutPath,
+      env: {},
+      credentials: buildLaunchCredentials(this.config.credentialRole),
+      provider,
+    });
+    // Drain streams so the child doesn't stall on back-pressure.
+    handle.process.stdout?.on('data', () => undefined);
+    handle.process.stderr?.on('data', () => undefined);
+    const exitCode = await handle.process.exitPromise;
 
     this.logger.info(
       { owner, repo, issueNumber, prNumber, evidenceHash: hash, exitCode },
       'ValidateFixHandler: agent exit',
     );
 
-    // 7. commit → sibling-overlap check → push.
+    // commit → sibling-overlap guard → push.
     const commitMessage = `validate-fix: ${hash.slice(0, 12)}`;
-    let committed;
-    try {
-      committed = await this.commitChanges(github, checkoutPath, commitMessage);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), owner, repo, issueNumber, prNumber, evidenceHash: hash },
-        'ValidateFixHandler: commit failed',
-      );
-      await this.applyStuckLabel(github, owner, repo, issueNumber);
-      this.safeEmit('cluster.validate-fix', {
-        status: 'blocked', reason: 'commit-error',
-        evidenceHash: hash, owner, repo, issueNumber, prNumber,
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
+    const committed = await this.commitChanges(github, checkoutPath, commitMessage);
 
     if (!committed.hasChanges) {
-      // #883 termination discipline — no-diff.
-      await this.applyStuckLabel(github, owner, repo, issueNumber);
-      this.safeEmit('cluster.validate-fix', {
-        status: 'blocked', reason: 'no-diff',
-        evidenceHash: hash, owner, repo, issueNumber, prNumber,
-        timestamp: new Date().toISOString(),
-      });
+      // No diff — nothing to push. The subsequent review + validate re-run (or
+      // the fingerprint backstop on repeated-identical failure) is the safety
+      // net; the adapter is best-effort.
+      this.logger.info(
+        { owner, repo, issueNumber, prNumber, evidenceHash: hash },
+        'ValidateFixHandler: no changes to commit',
+      );
       return;
     }
 
-    // Post-hoc sibling-overlap check on the just-committed change set.
+    // Post-hoc sibling-overlap guard on the just-committed change set. If the
+    // fix touched a file owned by a sibling PR, revert the commit and throw —
+    // never push a sibling-overlapping change.
     if (siblingFiles.length > 0 && committed.committedFiles.length > 0) {
       const overlap = committed.committedFiles.filter((f) => siblingFiles.includes(f));
       if (overlap.length > 0) {
         this.logger.warn(
           { owner, repo, issueNumber, prNumber, overlap, evidenceHash: hash },
-          'ValidateFixHandler: sibling-file overlap — reverting commit and escalating',
+          'ValidateFixHandler: sibling-file overlap — reverting commit',
         );
         try {
           await this.revertLocalCommit(checkoutPath);
@@ -229,99 +165,14 @@ export class ValidateFixHandler {
             'ValidateFixHandler: revertLocalCommit failed — continuing',
           );
         }
-        await this.applyStuckLabel(github, owner, repo, issueNumber);
-        this.safeEmit('cluster.validate-fix', {
-          status: 'blocked', reason: 'sibling-file-overlap',
-          evidenceHash: hash, overlappingFiles: overlap,
-          owner, repo, issueNumber, prNumber,
-          timestamp: new Date().toISOString(),
-        });
-        return;
+        throw new Error(
+          `validate-fix produced a sibling-owned-file overlap (${overlap.join(', ')}); reverted, not pushed`,
+        );
       }
     }
 
     // Push.
-    try {
-      await this.pushChanges(github);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), owner, repo, issueNumber, prNumber, evidenceHash: hash },
-        'ValidateFixHandler: push failed',
-      );
-      await this.applyStuckLabel(github, owner, repo, issueNumber);
-      this.safeEmit('cluster.validate-fix', {
-        status: 'blocked', reason: 'push-error',
-        evidenceHash: hash, owner, repo, issueNumber, prNumber,
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
-
-    this.safeEmit('cluster.validate-fix', {
-      status: 'attempted',
-      evidenceHash: hash,
-      owner, repo, issueNumber, prNumber,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  /**
-   * Escalation gate — same red already spent our one attempt (or hash errored).
-   * Adds `blocked:stuck-validate-fix` + `agent:error`, removes in-progress
-   * labels, emits event. Best-effort throughout.
-   */
-  private async escalate(
-    github: GitHubClient,
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    payload: Record<string, unknown>,
-  ): Promise<void> {
-    try {
-      await github.addLabels(owner, repo, issueNumber, [
-        BLOCKED_STUCK_VALIDATE_FIX_LABEL,
-        AGENT_ERROR_LABEL,
-      ]);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), owner, repo, issueNumber },
-        'ValidateFixHandler: addLabels (escalation) failed — non-fatal',
-      );
-    }
-    try {
-      await github.removeLabels(owner, repo, issueNumber, [
-        PHASE_VALIDATE_LABEL,
-        AGENT_IN_PROGRESS_LABEL,
-      ]);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), owner, repo, issueNumber },
-        'ValidateFixHandler: removeLabels (escalation) failed — non-fatal',
-      );
-    }
-    this.safeEmit('cluster.validate-fix', {
-      ...payload,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  private async applyStuckLabel(
-    github: GitHubClient,
-    owner: string,
-    repo: string,
-    issueNumber: number,
-  ): Promise<void> {
-    try {
-      await github.addLabels(owner, repo, issueNumber, [BLOCKED_STUCK_VALIDATE_FIX_LABEL]);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), owner, repo, issueNumber },
-        'ValidateFixHandler: addLabels (stuck) failed — non-fatal',
-      );
-    }
-    // The failed:validate label re-applies via LabelManager.onError('validate')
-    // on the caller's path — we don't touch it here.
-    void FAILED_VALIDATE_LABEL;
+    await this.pushChanges(github);
   }
 
   /**
@@ -386,7 +237,7 @@ export class ValidateFixHandler {
       `PR #${prNumber} validate stdout (exit ${evidence.exitCode})`,
     );
 
-    return `You are running an autonomous fix attempt for a persistently-failing validate check on PR #${prNumber}.
+    return `You are running an autonomous fix attempt for a failing validate check on PR #${prNumber}.
 
 The failing validate command produced the following output:
 
@@ -400,7 +251,7 @@ ${siblingBlock}
 1. Read the validate output above and address every failure it reports.
 2. Do NOT create any file that appears in the "Do not create" list — those files belong to sibling PRs and will merge cleanly through their own branches.
 3. Focus on this PR's own scope — do not touch unrelated code.
-4. Your changes will be automatically committed and pushed on this branch. You have exactly one attempt.
+4. Your changes will be automatically committed and pushed on this branch.
 
 Proceed with the fix.`;
   }
@@ -455,18 +306,6 @@ Proceed with the fix.`;
     );
     if (result.exitCode !== 0) {
       throw new Error(`git reset --hard HEAD~1 failed: ${result.stderr.trim()}`);
-    }
-  }
-
-  private safeEmit(channel: string, payload: unknown): void {
-    if (!this.emitEvent) return;
-    try {
-      this.emitEvent(channel, payload);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), channel },
-        'ValidateFixHandler: emitEvent threw — swallowed',
-      );
     }
   }
 }

@@ -10,7 +10,7 @@
 
 ## Phase 1: Thin adapter reduction (independent file)
 
-- [ ] T001 [US3] Reduce `packages/orchestrator/src/worker/validate-fix-handler.ts` to a thin
+- [X] T001 [US3] Reduce `packages/orchestrator/src/worker/validate-fix-handler.ts` to a thin
       remediate adapter (FR-005 / contracts/thin-adapter-contract.md). Keep the `handle(item,
       checkoutPath, { prNumber, baseBranch }, evidence, github, workflowName)` signature unchanged.
       **Preserve** (FR-010): evidence→fix prompt, commit, sibling-owned-file enumeration (open PRs
@@ -24,12 +24,12 @@
 ## Phase 2: Validate-failure routing in phase-loop.ts (sequential — same file)
 <!-- Phase boundary: T001 may proceed in parallel; T002–T007 all edit phase-loop.ts and must run in order -->
 
-- [ ] T002 [US1] In `packages/orchestrator/src/worker/phase-loop.ts`, add the block-local one-shot
+- [X] T002 [US1] In `packages/orchestrator/src/worker/phase-loop.ts`, add the block-local one-shot
       control `pendingValidateRemediation` (Entity 3, data-model.md) to `executeLoop`: type
       `undefined | { evidence: ValidateEvidence; prNumber: number; baseBranch: string }`, initialized
       `undefined` at loop start. Not persisted, not on `WorkerContext`.
 
-- [ ] T003 [US1] In `phase-loop.ts`, replace the legacy validate-fix block (old `phase-loop.ts:843-887`,
+- [X] T003 [US1] In `phase-loop.ts`, replace the legacy validate-fix block (old `phase-loop.ts:843-887`,
       the `resumeReason === 'base-advance'` #892 path) with the routed validate-failure branch guarded
       on `phase === 'validate' && result.success === false && reviewPhaseEnabled === true`
       (contracts/validate-remediation-routing.md Step 1 + Decision 6). Build `evidence` from the
@@ -38,7 +38,7 @@
       from this branch — the handler is invoked only at the remediate seam (T006), giving structural
       mutual exclusion (FR-008 / SC-003). Remove the `base-advance` precondition (FR-004).
 
-- [ ] T004 [US2] In the routed branch (`phase-loop.ts`), implement fingerprint-first escalation
+- [X] T004 [US2] In the routed branch (`phase-loop.ts`), implement fingerprint-first escalation
       (research.md Decision 5, contracts Step 1, FR-006 / FR-009): compute `fingerprint =
       computeFailureFingerprint({ phase: 'validate', evidence })` and `occurrence =
       countPriorOccurrences(owner, repo, issue, fingerprint) + 1`; call `postFailureAlert({ stage,
@@ -49,7 +49,7 @@
       gateHit: false }` (terminal). Add the defensive fallback: if `prNumber` is absent, fall back to
       the pre-existing escalation rather than routing (contracts Step 3).
 
-- [ ] T005 [US1] In `phase-loop.ts`, implement the synthesize-and-backtrack path (contracts Steps 2–3,
+- [X] T005 [US1] In `phase-loop.ts`, implement the synthesize-and-backtrack path (contracts Steps 2–3,
       research.md Decisions 1–3, data-model.md Entity 1). Read prior artifact via
       `readReviewArtifact(checkoutPath, workflowId)`; compute `round = (prior?.round ?? 0) + 1`;
       append one synthesized `critical`/`open` finding (`file: <validateCommand>`, `title: 'validate
@@ -58,7 +58,7 @@
       `pendingValidateRemediation = { evidence, prNumber, baseBranch }` (`baseBranch` `'origin/'`-stripped),
       then `i = sequence.indexOf('review') - 1; continue;`.
 
-- [ ] T006 [US1] In `phase-loop.ts`, gate the `review` re-entry and dispatch the remediate seam on
+- [X] T006 [US1] In `phase-loop.ts`, gate the `review` re-entry and dispatch the remediate seam on
       `pendingValidateRemediation` (contracts Steps 4–6, research.md Decisions 2 & 4). On the `review`
       re-entry while set: skip `runReviewConvergence(...)` and `reviewExecutor.execute(...)`, set
       `result = runStubPhase('review')` (synthetic success, leaving the synthesized artifact intact for
@@ -71,7 +71,7 @@
       one base-merge per cycle across the backtrack (FR-007 / research.md Decision 7 — no code change
       expected, assert in T009).
 
-- [ ] T007 [US3] In `phase-loop.ts`, wrap the remediate-seam adapter call (T006) so an adapter throw is
+- [X] T007 [US3] In `phase-loop.ts`, wrap the remediate-seam adapter call (T006) so an adapter throw is
       logged and the loop continues (contracts/thin-adapter-contract.md "Behavior on adapter failure"):
       the subsequent delta-scoped `review` re-run + `validate` re-run, or a repeated-identical failure →
       fingerprint backstop, provides the terminal safety net. The adapter is best-effort interim
