@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://generacy.ai/contracts/1124/review-artifact.schema.json",
+  "title": "ReviewArtifact",
+  "description": "Engine-written findings sidecar for the review phase (#1124, FR-006). Path: <checkout>/.generacy/review-findings-<sanitizedWorkflowId>.json. verdict is engine-computed (FR-007); any agent-claimed verdict is ignored and overwritten.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "verdict", "round", "lastReviewedCommitSha"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/reviewFinding" }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["clean", "changes-required"],
+      "description": "changes-required iff >=1 open finding with severity >= blockingSeverity; else clean."
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Current review pass. Increments per review re-entry on the same issue/branch (FR-009)."
+    },
+    "lastReviewedCommitSha": {
+      "type": "string",
+      "minLength": 1,
+      "description": "HEAD SHA of the checkout at the time this round reviewed the diff."
+    }
+  },
+  "definitions": {
+    "reviewFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "file", "title", "detail", "round", "status"],
+      "properties": {
+        "severity": { "type": "string", "enum": ["critical", "major", "minor"] },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "detail": { "type": "string", "minLength": 1 },
+        "round": { "type": "integer", "minimum": 0 },
+        "status": { "type": "string", "enum": ["open", "resolved"] }
+      }
+    }
+  }
+}

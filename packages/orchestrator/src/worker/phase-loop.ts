@@ -3,8 +3,11 @@ import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
-import { resolvePhaseTimeoutMs, resolveAgentForPhase } from './config.js';
+import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
+import type { ReviewExecutor } from './review-executor.js';
+import { readReviewArtifactSync } from './review-artifact.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -120,6 +123,19 @@ export interface PhaseLoopDeps {
    * → production-inert until #1124 lands the real executor + reader.
    */
   readFindingsArtifact?: (context: WorkerContext, round: number) => Promise<FindingsArtifact | null>;
+  /**
+   * #1124: Real review-phase executor. When injected, the `review` branch runs
+   * it (spawns the CLI with an in-process charter, writes a findings sidecar,
+   * and recomputes the verdict engine-side). Absent → the loop falls back to the
+   * #1121 inert stub.
+   */
+  reviewExecutor?: ReviewExecutor;
+  /**
+   * #1124: Resolved orchestrator settings, threaded so the review gate can read
+   * per-workflow `maxRemediations`. Optional — the `on-remediation-limit` gate
+   * falls back to the built-in per-workflow default when absent.
+   */
+  settings?: OrchestratorSettings | null;
 }
 
 /**
@@ -490,10 +506,17 @@ export class PhaseLoop {
       // 3. Execute the phase
       let result: PhaseResult;
       try {
-        if (phase === 'review' || phase === 'remediate') {
-          // #1121: inert stub executor. Real executors, prompts, and verdict/
-          // finding logic land in later epic issues. Returns a synthetic success
-          // without spawning the CLI so the loop advances normally.
+        if (phase === 'review') {
+          // #1124: real review executor when injected — spawns the CLI with an
+          // in-process charter, has the agent write a findings sidecar, and
+          // recomputes the verdict engine-side. Falls back to the #1121 inert
+          // stub when no executor is wired (feature-flag-off / non-worker paths).
+          result = deps.reviewExecutor
+            ? await deps.reviewExecutor.execute(context)
+            : this.runStubPhase(phase);
+        } else if (phase === 'remediate') {
+          // #1121: inert stub executor. Real remediate logic lands in a later
+          // epic issue. Returns a synthetic success without spawning the CLI.
           result = this.runStubPhase(phase);
         } else if (phase === 'validate') {
           // 3a. Pre-phase base-merge for the validate cycle (#864, #914) —
@@ -1073,6 +1096,32 @@ export class PhaseLoop {
             this.logger.info(
               { phase, gateLabel: gate.gateLabel },
               'Gate condition "on-sibling-review" satisfied — all siblings approved (or none linked)',
+            );
+          }
+        } else if (gate.condition === 'on-remediation-limit') {
+          // #1124 FR-011: cap the review↔remediate loop. Because `remediate` is
+          // still a stub, an unchanged diff would re-produce `changes-required`
+          // forever; when the persisted review round reaches `maxRemediations`
+          // AND the verdict is still `changes-required`, pause for the operator
+          // instead of looping. The verdict check is load-bearing: a `clean`
+          // review that happens to land on the cap round is NOT exhaustion —
+          // the remediate seam would correctly proceed to `validate`, so this
+          // gate must not pre-empt it. Runs BEFORE the seam below.
+          const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+          const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
+          const { maxRemediations } = resolveWorkflowOverrides(
+            config,
+            deps.settings,
+            context.item.workflowName,
+          );
+          gateActive =
+            artifact !== null &&
+            artifact.round >= maxRemediations &&
+            artifact.verdict === 'changes-required';
+          if (gateActive) {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, round: artifact?.round, maxRemediations },
+              'Gate condition "on-remediation-limit" active — remediation cap reached',
             );
           }
         }

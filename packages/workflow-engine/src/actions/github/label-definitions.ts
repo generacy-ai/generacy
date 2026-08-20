@@ -43,6 +43,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:epic-approval', color: 'FBCA04', description: 'Epic rollup PR awaiting approval' },
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
   { name: 'waiting-for:merge-conflicts', color: 'FBCA04', description: 'Base-merge conflict. See stage comment for the manual remedy.' },
+  { name: 'waiting-for:remediation-limit', color: 'FBCA04', description: 'Review↔remediate cap reached; awaiting operator' },
 
   // Completed labels
   { name: 'completed:spec-review', color: '0E8A16', description: 'Spec review completed' },
