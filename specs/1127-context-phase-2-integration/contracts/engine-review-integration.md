@@ -27,11 +27,11 @@ The `review` phase's structured output (engine-internal sidecar, pause-context p
 
 | Field | Type | Notes |
 |---|---|---|
-| `findings[].severity` | `'critical' \| 'major' \| 'minor'` | matches `blockingSeverity` (`config.ts:13`) |
+| `findings[].severity` | `'blocking' \| 'advisory'` | the finding's **own** severity (`review-findings-artifact.ts`). Distinct from the `blockingSeverity` *threshold* (`'critical' \| 'major' \| 'minor'`, `config.ts:13`) against which the verdict is computed — do not conflate |
 | `findings[].file` / `.line` | `string` / `number` | inline-thread anchor |
 | `findings[].body` | `string` | posted as an inline `COMMENT` thread |
 | `round` | `number` | delta-scoped re-review round counter |
-| `verdict` | overall clean vs changes-required | "clean" ⇒ all findings at/below resolved `blockingSeverity` |
+| `verdict` | overall clean vs changes-required | "clean" ⇒ no `open` finding at/above the resolved `blockingSeverity` threshold |
 
 **Blocking rule**: verdict is "changes-required" iff any finding is at/above the resolved `review.blockingSeverity` (`resolveWorkflowOverrides`, `config.ts`). This is the shape P3 remediate (#1128) consumes.
 
