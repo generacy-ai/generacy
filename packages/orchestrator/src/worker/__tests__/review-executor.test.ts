@@ -7,6 +7,8 @@
 // SC-004: the persisted verdict is RECOMPUTED by the engine from the findings,
 // ignoring any agent-claimed verdict in the candidate file (FR-007).
 import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -231,5 +233,79 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
     const persisted = await readReviewArtifact(checkoutPath, workflowId);
     expect(persisted!.round).toBe(2);
     expect(persisted!.verdict).toBe('clean');
+  });
+
+  describe('#1131 resolution-scoped diff window', () => {
+    const execFileAsync = promisify(execFile);
+
+    async function initRepoWithCommits(dir: string, n: number): Promise<string[]> {
+      await execFileAsync('git', ['init', '-q'], { cwd: dir });
+      await execFileAsync('git', ['config', 'user.email', 't@t.com'], { cwd: dir });
+      await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+      const shas: string[] = [];
+      for (let i = 0; i < n; i++) {
+        await writeFile(path.join(dir, `f${i}.txt`), `content ${i}`, 'utf-8');
+        await execFileAsync('git', ['add', '.'], { cwd: dir });
+        await execFileAsync('git', ['commit', '-q', '-m', `c${i}`], { cwd: dir });
+        const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: dir });
+        shas.push(stdout.trim());
+      }
+      return shas;
+    }
+
+    function makeScopedContext(
+      github: GitHubClient,
+      reviewScope: { baseSha: string; headSha: string },
+    ): WorkerContext {
+      return { ...makeContext(github), reviewScope } as WorkerContext;
+    }
+
+    it('FR-011/SC-004: empty window (base===head) short-circuits — no spawn, no artifact, success', async () => {
+      const [sha] = await initRepoWithCommits(checkoutPath, 1);
+      const { launcher, launch } = makeLauncher({ findings: [] });
+      const github = {
+        getCurrentCommitSha: vi.fn().mockResolvedValue('deadbeef'),
+      } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(
+        makeScopedContext(github, { baseSha: sha!, headSha: sha! }),
+      );
+
+      expect(result.phase).toBe('review');
+      expect(result.success).toBe(true);
+      // No CLI spawn during an empty resolution window.
+      expect(launch).not.toHaveBeenCalled();
+      // No findings artifact — so no "empty diff = blocking finding" is emitted.
+      expect(await readReviewArtifact(checkoutPath, workflowId)).toBeNull();
+    });
+
+    it('SC-002: non-empty window passes the exact baseSha..headSha range to the charter and spawns', async () => {
+      const [sha0, sha1] = await initRepoWithCommits(checkoutPath, 2);
+      const { launcher, launch } = makeLauncher({ findings: [] });
+      const github = {
+        getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
+      } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      await executor.execute(makeScopedContext(github, { baseSha: sha0!, headSha: sha1! }));
+
+      expect(launch).toHaveBeenCalledTimes(1);
+      const prompt = launch.mock.calls[0]![0].intent.prompt as string;
+      expect(prompt).toContain(`${sha0}..${sha1}`);
+      expect(prompt.toLowerCase()).toContain('merge-conflict');
+    });
   });
 });

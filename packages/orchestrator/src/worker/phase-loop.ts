@@ -7,7 +7,8 @@ import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
-import { readReviewArtifactSync } from './review-artifact.js';
+import type { RemediateExecutor } from './remediate-executor.js';
+import { readReviewArtifactSync, resetRemediationCount } from './review-artifact.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -142,6 +143,13 @@ export interface PhaseLoopDeps {
    * #1121 inert stub.
    */
   reviewExecutor?: ReviewExecutorLike;
+  /**
+   * #1128: Real remediate-phase executor. When injected, the off-sequence
+   * `remediate` seam runs it (spawns the CLI with the remediation charter and
+   * bumps `remediationCount`). Absent → the seam falls back to the #1121 inert
+   * stub.
+   */
+  remediateExecutor?: RemediateExecutor;
   /**
    * #1124: Resolved orchestrator settings, threaded so the review gate can read
    * per-workflow `maxRemediations`. Optional — the `on-remediation-limit` gate
@@ -1120,14 +1128,14 @@ export class PhaseLoop {
             );
           }
         } else if (gate.condition === 'on-remediation-limit') {
-          // #1124 FR-011: cap the review↔remediate loop. Because `remediate` is
-          // still a stub, an unchanged diff would re-produce `changes-required`
-          // forever; when the persisted review round reaches `maxRemediations`
+          // #1128 FR-007/FR-008: cap the review↔remediate loop on the explicit
+          // `remediationCount` (bumped once per remediate execution), NOT the
+          // monotonic review `round`. When the count reaches `maxRemediations`
           // AND the verdict is still `changes-required`, pause for the operator
-          // instead of looping. The verdict check is load-bearing: a `clean`
-          // review that happens to land on the cap round is NOT exhaustion —
-          // the remediate seam would correctly proceed to `validate`, so this
-          // gate must not pre-empt it. Runs BEFORE the seam below.
+          // instead of looping. The verdict check is load-bearing (Q5=A): a
+          // `clean` review that happens to land on the cap round is NOT
+          // exhaustion — the remediate seam would correctly proceed to
+          // `validate`, so this gate must not pre-empt it. Runs BEFORE the seam.
           const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
           const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
           const { maxRemediations } = resolveWorkflowOverrides(
@@ -1137,13 +1145,53 @@ export class PhaseLoop {
           );
           gateActive =
             artifact !== null &&
-            artifact.round >= maxRemediations &&
+            artifact.remediationCount >= maxRemediations &&
             artifact.verdict === 'changes-required';
           if (gateActive) {
             this.logger.info(
-              { phase, gateLabel: gate.gateLabel, round: artifact?.round, maxRemediations },
+              {
+                phase,
+                gateLabel: gate.gateLabel,
+                remediationCount: artifact?.remediationCount,
+                maxRemediations,
+              },
               'Gate condition "on-remediation-limit" active — remediation cap reached',
             );
+            // #1128 FR-008: post the gate body listing the open findings the
+            // operator must triage, plus how to resume with a fresh budget.
+            // Best-effort — a comment failure must not fail the pause (SC-005:
+            // no blocked:* label is ever applied on this path).
+            try {
+              const openFindings = (artifact?.findings ?? []).filter(
+                (f) => f.status === 'open',
+              );
+              const findingLines = openFindings.map((f) => {
+                const location = f.line !== undefined ? `${f.file}:${f.line}` : f.file;
+                return `- ${location} — ${f.title}`;
+              });
+              const body = [
+                '## Remediation limit reached',
+                '',
+                `The review↔remediate loop hit its cap of ${maxRemediations} remediation attempts and the latest review still requires changes. The following findings remain open:`,
+                '',
+                ...(findingLines.length > 0
+                  ? findingLines
+                  : ['- _(No open findings were recorded.)_']),
+                '',
+                'Add `completed:remediation-limit` to resume with a fresh remediation budget.',
+              ].join('\n');
+              await context.github.addIssueComment(
+                context.item.owner,
+                context.item.repo,
+                context.item.issueNumber,
+                body,
+              );
+            } catch (error) {
+              this.logger.warn(
+                { error: String(error), phase, gateLabel: gate.gateLabel },
+                'Failed to post remediation-limit gate body — continuing to pause',
+              );
+            }
           }
         }
 
@@ -1165,6 +1213,25 @@ export class PhaseLoop {
             { phase, gateLabel: gate.gateLabel, completedLabel },
             'Gate already satisfied — skipping pause',
           );
+          // #1128 FR-009/FR-010: the remediation-limit gate is special — resuming
+          // it must reset the counter to 0 AND remove the operator label so the
+          // gate re-arms for a fresh budget. GATE_MAPPING['remediation-limit']
+          // stays { phase: 'review', resumeFrom: 'review' } unchanged. Every
+          // other gate keeps today's plain skip-and-continue.
+          if (completedLabel === 'completed:remediation-limit') {
+            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+            await resetRemediationCount(context.checkoutPath, workflowId);
+            await context.github.removeLabels(
+              context.item.owner,
+              context.item.repo,
+              context.item.issueNumber,
+              ['completed:remediation-limit'],
+            );
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, workflowId },
+              'Remediation-limit gate resumed — counter reset and gate re-armed',
+            );
+          }
           continue;
         }
 
@@ -1274,7 +1341,27 @@ export class PhaseLoop {
         // ready (never demotes a human-marked-ready PR).
         await prManager.convertToDraftIfEngineMarkedReady(context.linkedPRs);
         await labelManager.onPhaseStart('remediate');
-        const remediateResult = this.runStubPhase('remediate');
+        // #1128: real remediation executor (defaults undefined → stub, keeping
+        // the seam production-inert until wired). The executor makes the code
+        // changes; verification happens on the next review round.
+        const remediateResult = deps.remediateExecutor
+          ? await deps.remediateExecutor.execute(context)
+          : this.runStubPhase('remediate');
+        // #1128 FR-003: commit + push the remediation changes (and whatever
+        // partial work a timed-out CLI left behind) before re-reviewing.
+        const remediateCommitOutcome = await prManager.commitPushAndEnsurePr('remediate');
+        // #1051: a refused push MUST abort the loop — never open a duplicate PR
+        // or advance on a phantom no-op.
+        if (remediateCommitOutcome.pushRefused) {
+          this.logger.warn(
+            { phase: 'remediate', refusal: remediateCommitOutcome.pushRefused },
+            'Phase loop aborted: pre-push guard refused remediate cycle — see prior push-refused log',
+          );
+          return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+        }
+        if (remediateCommitOutcome.prUrl) {
+          context.prUrl = remediateCommitOutcome.prUrl;
+        }
         await labelManager.onPhaseComplete('remediate');
         results.push(remediateResult);
         outputCapture.clear();

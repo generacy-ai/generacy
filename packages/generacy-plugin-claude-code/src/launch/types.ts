@@ -114,6 +114,25 @@ export interface ReviewIntent {
 }
 
 /**
+ * Intent for an engine-driven remediation pass (#1128). Mirrors `ReviewIntent`:
+ * the engine builds the remediation charter in-process and passes it as the
+ * prompt; routes through the same launcher plumbing as `review`.
+ */
+export interface RemediateIntent {
+  kind: 'remediate';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full charter prompt (built by RemediateExecutor via buildRemediateCharter) */
+  prompt: string;
+  /** Provider breadcrumb (dispatch reads LaunchRequest.provider). */
+  provider?: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
+}
+
+/**
  * Intent for a single interactive conversation turn via PTY-wrapped Claude CLI.
  */
 export interface ConversationTurnIntent {
@@ -152,5 +171,6 @@ export type ClaudeCodeIntent =
   | ValidateFixIntent
   | MergeConflictIntent
   | ReviewIntent
+  | RemediateIntent
   | ConversationTurnIntent
   | InvokeIntent;

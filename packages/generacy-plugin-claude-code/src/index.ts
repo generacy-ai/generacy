@@ -98,6 +98,7 @@ export type {
   ValidateFixIntent,
   MergeConflictIntent,
   ReviewIntent,
+  RemediateIntent,
   ConversationTurnIntent,
   InvokeIntent,
 } from './launch/types.js';

@@ -13,6 +13,8 @@
  * `pr-feedback-handler.ts`), NOT `cli-spawner.spawnPhase` — the spawner
  * type-excludes `review` by construction.
  */
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { ReviewIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
@@ -34,6 +36,8 @@ import {
   writeReviewArtifact,
 } from './review-artifact.js';
 import type { Logger, PhaseResult, WorkerContext } from './types.js';
+
+const execFileAsync = promisify(execFile);
 
 export interface ReviewExecutorDeps {
   agentLauncher: AgentLauncher;
@@ -76,13 +80,43 @@ export class ReviewExecutor implements ReviewExecutorLike {
     const { review } = resolveWorkflowOverrides(this.config, this.settings, workflowName);
     const { profile, blockingSeverity } = review;
 
+    // #1131: resolution-scoped review. When a merge-conflict re-arm supplied a
+    // `reviewScope`, the review is scoped to just the resolution diff
+    // (`baseSha..headSha`). An empty window means the resolution introduced no
+    // changes over the pre-merge tip — nothing to review, so short-circuit to a
+    // synthetic success (FR-011, SC-004) and let the loop advance to `validate`.
+    // Absent scope ⇒ whole-PR review, byte-identical to pre-#1131 (FR-010).
+    const { reviewScope } = context;
+    if (reviewScope) {
+      const isEmpty = await this.isEmptyWindow(checkoutPath, reviewScope);
+      if (isEmpty) {
+        this.logger.info(
+          { baseSha: reviewScope.baseSha, headSha: reviewScope.headSha, workflowId },
+          'Resolution-scoped review window is empty — skipping review, advancing to validate',
+        );
+        return {
+          phase: 'review',
+          success: true,
+          exitCode: 0,
+          durationMs: Date.now() - startedAt,
+          output: [],
+        };
+      }
+    }
+
     // 2. Determine the review round from any prior engine-written artifact.
     const priorRound = await readReviewArtifact(checkoutPath, workflowId);
     const round = (priorRound?.round ?? 0) + 1;
 
     // 3. Build the in-process charter naming the agent's sidecar write target.
     const sidecarRelPath = getReviewArtifactRelPath(workflowId);
-    const charter = buildReviewCharter({ profile, sidecarRelPath, blockingSeverity, round });
+    const charter = buildReviewCharter({
+      profile,
+      sidecarRelPath,
+      blockingSeverity,
+      round,
+      ...(reviewScope ? { diffWindow: reviewScope } : {}),
+    });
 
     // 4. Resolve the agent for this review — reuse the `implement` agent so the
     //    same model that wrote the code reviews it (mirrors pr-feedback, #814).
@@ -203,12 +237,16 @@ export class ReviewExecutor implements ReviewExecutorLike {
     // 9. Stamp the commit reviewed.
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 
-    // 10. Persist the engine-authoritative artifact atomically.
+    // 10. Persist the engine-authoritative artifact atomically. Carry forward
+    //     #1128's `remediationCount` — the review executor rewrites the artifact
+    //     each round, and dropping the field here would silently reset the
+    //     review↔remediate cap on every re-review pass.
     await writeReviewArtifact(checkoutPath, workflowId, {
       findings,
       verdict,
       round,
       lastReviewedCommitSha,
+      remediationCount: priorRound?.remediationCount ?? 0,
     });
 
     this.logger.info(
@@ -225,5 +263,31 @@ export class ReviewExecutor implements ReviewExecutorLike {
       durationMs: Date.now() - startedAt,
       output: outputCapture.getOutput(),
     };
+  }
+
+  /**
+   * #1131 (FR-011): true when the resolution diff window has no file changes.
+   * Runs `git diff --name-only <baseSha>..<headSha>` in the checkout. On any git
+   * failure we conservatively treat the window as non-empty (review runs) rather
+   * than silently skipping a review we couldn't prove was empty.
+   */
+  private async isEmptyWindow(
+    checkoutPath: string,
+    scope: { baseSha: string; headSha: string },
+  ): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['diff', '--name-only', `${scope.baseSha}..${scope.headSha}`],
+        { cwd: checkoutPath },
+      );
+      return stdout.trim() === '';
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), baseSha: scope.baseSha, headSha: scope.headSha },
+        'Could not compute resolution diff window — proceeding with review',
+      );
+      return false;
+    }
   }
 }

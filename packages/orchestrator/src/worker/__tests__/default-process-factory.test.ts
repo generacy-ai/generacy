@@ -12,6 +12,9 @@ const { mockSpawn } = vi.hoisted(() => ({
 
 vi.mock('node:child_process', () => ({
   spawn: mockSpawn,
+  // review-executor.ts (pulled in transitively via claude-cli-worker) does
+  // `promisify(execFile)` at module scope; the mock must export it.
+  execFile: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------

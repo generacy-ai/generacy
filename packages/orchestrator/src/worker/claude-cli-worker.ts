@@ -7,7 +7,7 @@ import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSett
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem, PhaseTracker, PrFeedbackMetadata } from '../types/index.js';
-import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
+import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter, WorkflowPhase } from './types.js';
 import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -21,6 +21,7 @@ import { OutputCapture } from './output-capture.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
+import { RemediateExecutor } from './remediate-executor.js';
 import { ReviewExecutor } from './review-executor.js';
 import { SeedAwareReviewExecutor } from './seed-aware-review-executor.js';
 import { readReviewArtifactSync, clearReviewArtifact } from './review-artifact.js';
@@ -32,7 +33,7 @@ import { ReviewPoster } from './review-poster.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { MergeConflictHandler } from './merge-conflict-handler.js';
 import { readPauseContext, clearPauseContext } from './pause-context.js';
-import type { HandlerOutcome } from './handler-outcome.js';
+import type { HandlerOutcome, ReviewScope } from './handler-outcome.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { createAgentLauncher } from '../launcher/launcher-setup.js';
@@ -403,6 +404,10 @@ export class ClaudeCliWorker {
             metadata: {
               startPhase: outcome.startPhase,
               resumeReason: 'merge-conflict-resolved',
+              // #1131: transport the resolution scope to the review executor via
+              // the queue item (the pause-context sidecar is cleared just below).
+              // `undefined` for the whole-branch fallback / flag-OFF re-arm.
+              reviewScope: outcome.reviewScope,
             },
           };
 
@@ -629,14 +634,35 @@ export class ClaudeCliWorker {
       // #892: surface resume identity so PhaseLoop's validate `catch` can gate
       // the ValidateFixHandler on the base-advance path.
       const md = (item.metadata ?? {}) as Record<string, unknown>;
-      const resumeReason = md['resumeReason'] === 'base-advance' ? 'base-advance' as const : undefined;
+      const rawResumeReason = md['resumeReason'];
+      const resumeReason =
+        rawResumeReason === 'base-advance'
+          ? ('base-advance' as const)
+          : rawResumeReason === 'merge-conflict-resolved'
+            ? ('merge-conflict-resolved' as const)
+            : undefined;
       const baseSha = typeof md['baseSha'] === 'string' ? (md['baseSha'] as string) : undefined;
+
+      // #1131: explicit start-phase override on the merge-conflict resume path.
+      // Labels do NOT reliably resolve to `review` after a resolution (a conflict
+      // during `validate`, after `review` already ran, carries `completed:review`
+      // and would resolve straight back to `validate`). So when the re-arm was a
+      // scoped-`review` re-arm, honor its `startPhase` directly, bypassing the
+      // label-derived result. Any other resumeReason/startPhase → label-derived.
+      const effectiveStartPhase: WorkflowPhase =
+        resumeReason === 'merge-conflict-resolved' && md['startPhase'] === 'review'
+          ? 'review'
+          : startPhase;
+      const reviewScope =
+        resumeReason === 'merge-conflict-resolved'
+          ? (md['reviewScope'] as ReviewScope | undefined)
+          : undefined;
 
       const context: WorkerContext = {
         workerId,
         jobId,
         item,
-        startPhase,
+        startPhase: effectiveStartPhase,
         github,
         logger: workerLogger,
         signal: abortController.signal,
@@ -647,6 +673,7 @@ export class ClaudeCliWorker {
         siblingWorkdirs,
         ...(resumeReason ? { resumeReason } : {}),
         ...(baseSha ? { baseSha } : {}),
+        ...(reviewScope ? { reviewScope } : {}),
       };
 
       // Helper to build job event base payload
@@ -816,6 +843,18 @@ export class ClaudeCliWorker {
         ? new SeedAwareReviewExecutor({ delegate: realReviewExecutor, logger: workerLogger })
         : realReviewExecutor;
 
+      // #1128: real remediate-phase executor. Reads the open blocking findings
+      // from the same review sidecar, builds an in-process remediation charter,
+      // spawns the CLI to make the code changes, and bumps remediationCount on
+      // every return path. Inert when reviewPhaseEnabled is off (remediate is
+      // off-sequence and only reachable via the review↔remediate seam).
+      const remediateExecutor = new RemediateExecutor({
+        agentLauncher: this.agentLauncher,
+        config: effectiveConfig,
+        settings: orchSettings,
+        logger: workerLogger,
+      });
+
       const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
@@ -826,6 +865,7 @@ export class ClaudeCliWorker {
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
         reviewExecutor,
+        remediateExecutor,
         settings: orchSettings,
         remediateTrigger: (ctx) =>
           readReviewArtifactSync(

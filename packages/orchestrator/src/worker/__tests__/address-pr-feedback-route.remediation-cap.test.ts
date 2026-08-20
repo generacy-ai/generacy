@@ -28,6 +28,7 @@ import type { ReviewExecutor } from '../review-executor.js';
 import { SeedAwareReviewExecutor } from '../seed-aware-review-executor.js';
 import { writeExternalFeedbackSeed } from '../external-feedback-seed.js';
 import {
+  bumpRemediationCount,
   clearReviewArtifact,
   readReviewArtifactSync,
   writeReviewArtifact,
@@ -155,6 +156,9 @@ function makeChangesRequiredDelegate(checkoutPath: string): {
       verdict: 'changes-required',
       round,
       lastReviewedCommitSha: `sha${round}`,
+      // Mirror the real ReviewExecutor (#1128): a review write preserves the
+      // remediation budget rather than resetting it (review-executor.ts).
+      remediationCount: prior?.remediationCount ?? 0,
     });
     return makeSuccessResult('review');
   });
@@ -205,6 +209,16 @@ describe('#1130 external-feedback route — remediation cap & budget reset', () 
     deps.reviewExecutor = new SeedAwareReviewExecutor({ delegate, logger: mockLogger });
     deps.remediateTrigger = (ctx) =>
       readReviewArtifactSync(ctx.checkoutPath, WORKFLOW_ID)?.verdict === 'changes-required';
+    // #1128: the cap is driven by `remediationCount`, bumped once per remediate
+    // execution — mirror the real RemediateExecutor here (a stubbed remediate
+    // never fixes the diff, so the loop keeps climbing until the count hits the
+    // cap). Without a bumping executor the rc-based gate could never fire.
+    deps.remediateExecutor = {
+      execute: vi.fn(async (): Promise<PhaseResult> => {
+        await bumpRemediationCount(checkoutPath, WORKFLOW_ID);
+        return makeSuccessResult('remediate');
+      }),
+    } as any;
     const settings: OrchestratorSettings = {
       workflows: { 'speckit-feature': { maxRemediations: 2 } },
     };
@@ -217,8 +231,9 @@ describe('#1130 external-feedback route — remediation cap & budget reset', () 
     expect(result.completed).toBe(false);
     expect(result.gateHit).toBe(true);
 
-    // review(seed, r1) → remediate → review(delegate, r2) → gate fires (r2 >= 2).
-    expect(phaseStartOrder(deps)).toEqual(['review', 'remediate', 'review']);
+    // #1128 rc-based cap (maxRemediations=2): review(seed, rc=0) → remediate(rc→1)
+    // → review(rc=1) → remediate(rc→2) → review(rc=2) → gate fires (rc >= 2).
+    expect(phaseStartOrder(deps)).toEqual(['review', 'remediate', 'review', 'remediate', 'review']);
 
     // The disposition is the remediation-limit gate — and ONLY that.
     expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('review', 'waiting-for:remediation-limit');
@@ -230,7 +245,9 @@ describe('#1130 external-feedback route — remediation cap & budget reset', () 
     // remediation-limit gate is this path's bounded stop (FR-007/FR-008).
     expect(gateLabels).not.toContain('blocked:stuck-feedback-loop');
 
-    expect(readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!.round).toBe(2);
+    const finalArtifact = readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!;
+    expect(finalArtifact.remediationCount).toBe(2);
+    expect(finalArtifact.round).toBe(3);
   });
 
   it('T018/FR-006: a fresh seed after clearReviewArtifact derives round = 1 (budget reset)', async () => {

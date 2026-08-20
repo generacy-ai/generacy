@@ -89,6 +89,11 @@ export class SeedAwareReviewExecutor implements ReviewExecutorLike {
       verdict,
       round,
       lastReviewedCommitSha,
+      // #1128 composition: preserve the remediation budget across the seed
+      // synthesis, mirroring the real ReviewExecutor's write. A surviving prior
+      // artifact keeps climbing (D-2: thread-resolution / gate-removal alone must
+      // NOT reset the budget); a cleared artifact (prior === null) starts fresh at 0.
+      remediationCount: prior?.remediationCount ?? 0,
     });
 
     // Consume-once: delete the seed before the loop can re-enter `review`, so
