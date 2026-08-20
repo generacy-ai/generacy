@@ -158,7 +158,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review' | 'on-merge-conflict';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review' | 'on-merge-conflict' | 'on-remediation-limit';
 }
 
 /**

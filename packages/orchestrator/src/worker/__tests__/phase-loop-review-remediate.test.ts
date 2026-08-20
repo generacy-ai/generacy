@@ -72,6 +72,10 @@ function createMockDeps(): PhaseLoopDeps {
     prManager: {
       commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
       getPrNumber: vi.fn().mockReturnValue(undefined),
+      // #1125: remediate entry converts the PR back to draft (no-op unless the
+      // engine marked it ready). Stubbed here so the #1121 seam test still runs.
+      convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
+      markReadyForReview: vi.fn().mockResolvedValue(undefined),
     } as any,
   };
 }

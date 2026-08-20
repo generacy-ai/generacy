@@ -3,8 +3,11 @@ import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
-import { resolvePhaseTimeoutMs, resolveAgentForPhase } from './config.js';
+import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
+import type { ReviewExecutor } from './review-executor.js';
+import { readReviewArtifactSync } from './review-artifact.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -12,6 +15,8 @@ import type { CliSpawner } from './cli-spawner.js';
 import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import type { ReviewPoster } from './review-poster.js';
+import type { FindingsArtifact } from './review-findings-artifact.js';
 import type { ValidateFixHandler } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
@@ -24,7 +29,19 @@ import { boundOutputTail } from './output-tail.js';
 import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
-import { writePauseContext } from './pause-context.js';
+import { writePauseContext, readPauseContext } from './pause-context.js';
+import {
+  determineReviewMode,
+  computeReviewDelta,
+  composeVerificationInput,
+  buildVerificationPrompt,
+  advanceArtifact,
+  normalizeArtifact,
+  // Aliased to avoid a name collision with #1125's `FindingsArtifact`
+  // (from ./review-findings-artifact.js) — the two are distinct seams
+  // (#1127 bridges them). This is the #1126 convergence artifact shape.
+  type FindingsArtifact as ConvergenceFindingsArtifact,
+} from './review/index.js';
 import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
@@ -105,6 +122,32 @@ export interface PhaseLoopDeps {
    * fire-once-then-false predicate to exercise the seam.
    */
   remediateTrigger?: (context: WorkerContext) => boolean;
+  /**
+   * #1125: posts one COMMENT review per round + resolves threads on re-review.
+   * Constructed by the worker wiring (claude-cli-worker) from the PR
+   * owner/repo/number. Absent in most unit tests — the review side-effect block
+   * only runs when BOTH `reviewPoster` and `readFindingsArtifact` are present.
+   */
+  reviewPoster?: ReviewPoster;
+  /**
+   * #1125: injectable seam to read the review executor's findings artifact for
+   * a given round. Defaults undefined → the review side-effect block never runs
+   * → production-inert until #1124 lands the real executor + reader.
+   */
+  readFindingsArtifact?: (context: WorkerContext, round: number) => Promise<FindingsArtifact | null>;
+  /**
+   * #1124: Real review-phase executor. When injected, the `review` branch runs
+   * it (spawns the CLI with an in-process charter, writes a findings sidecar,
+   * and recomputes the verdict engine-side). Absent → the loop falls back to the
+   * #1121 inert stub.
+   */
+  reviewExecutor?: ReviewExecutor;
+  /**
+   * #1124: Resolved orchestrator settings, threaded so the review gate can read
+   * per-workflow `maxRemediations`. Optional — the `on-remediation-limit` gate
+   * falls back to the built-in per-workflow default when absent.
+   */
+  settings?: OrchestratorSettings | null;
 }
 
 /**
@@ -245,6 +288,11 @@ export class PhaseLoop {
     let currentProvider: string | undefined;
     let currentModel: string | undefined;
     let implementRetryCount = 0;
+
+    // #1125: current review round. Starts at 1; incremented on each
+    // remediate→review backtrack so re-review rounds (≥ 2) resolve prior
+    // threads and dedupe by the round body marker.
+    let reviewRound = 1;
 
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
@@ -470,10 +518,26 @@ export class PhaseLoop {
       // 3. Execute the phase
       let result: PhaseResult;
       try {
-        if (phase === 'review' || phase === 'remediate') {
-          // #1121: inert stub executor. Real executors, prompts, and verdict/
-          // finding logic land in later epic issues. Returns a synthetic success
-          // without spawning the CLI so the loop advances normally.
+        if (phase === 'review') {
+          // #1126: delta-scoped verification-pass convergence, run FIRST as
+          // best-effort scaffolding. The reviewer's findings do not yet flow
+          // into it (the ReviewArtifact→FindingsArtifact bridge is deferred to
+          // #1127), so no addressed ids / new findings are consumed here — this
+          // wiring loads, advances, and persists the findings artifact
+          // (incrementing the round + advancing lastReviewedSha) and builds the
+          // verification prompt. Best-effort: any failure degrades to a fresh
+          // full review (FR-009 posture), never blocks the phase.
+          await this.runReviewConvergence(context, config, deps);
+          // #1124: real review executor when injected — spawns the CLI with an
+          // in-process charter, has the agent write a findings sidecar, and
+          // recomputes the verdict engine-side. Falls back to the #1121 inert
+          // stub when no executor is wired (feature-flag-off / non-worker paths).
+          result = deps.reviewExecutor
+            ? await deps.reviewExecutor.execute(context)
+            : this.runStubPhase(phase);
+        } else if (phase === 'remediate') {
+          // #1121: inert stub executor. Real remediate logic lands in a later
+          // epic issue. Returns a synthetic success without spawning the CLI.
           result = this.runStubPhase(phase);
         } else if (phase === 'validate') {
           // 3a. Pre-phase base-merge for the validate cycle (#864, #914) —
@@ -1055,6 +1119,32 @@ export class PhaseLoop {
               'Gate condition "on-sibling-review" satisfied — all siblings approved (or none linked)',
             );
           }
+        } else if (gate.condition === 'on-remediation-limit') {
+          // #1124 FR-011: cap the review↔remediate loop. Because `remediate` is
+          // still a stub, an unchanged diff would re-produce `changes-required`
+          // forever; when the persisted review round reaches `maxRemediations`
+          // AND the verdict is still `changes-required`, pause for the operator
+          // instead of looping. The verdict check is load-bearing: a `clean`
+          // review that happens to land on the cap round is NOT exhaustion —
+          // the remediate seam would correctly proceed to `validate`, so this
+          // gate must not pre-empt it. Runs BEFORE the seam below.
+          const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+          const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
+          const { maxRemediations } = resolveWorkflowOverrides(
+            config,
+            deps.settings,
+            context.item.workflowName,
+          );
+          gateActive =
+            artifact !== null &&
+            artifact.round >= maxRemediations &&
+            artifact.verdict === 'changes-required';
+          if (gateActive) {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, round: artifact?.round, maxRemediations },
+              'Gate condition "on-remediation-limit" active — remediation cap reached',
+            );
+          }
         }
 
         if (!gateActive) continue;
@@ -1151,16 +1241,44 @@ export class PhaseLoop {
       // Clear output buffer for next phase
       outputCapture.clear();
 
+      // #1125: review side effects. Only runs when the injectable seam is wired
+      // (production-inert until #1124). Reads the findings artifact for this
+      // round, posts one COMMENT review, resolves prior threads on re-review,
+      // and marks the PR ready when the verdict is clean (before validate by
+      // linear order). All best-effort — the poster/PR calls never throw.
+      if (
+        phase === 'review'
+        && result.success
+        && deps.readFindingsArtifact
+        && deps.reviewPoster
+      ) {
+        const artifact = await deps.readFindingsArtifact(context, reviewRound);
+        if (artifact) {
+          await deps.reviewPoster.postRound(artifact, reviewRound);
+          if (reviewRound >= 2) {
+            await deps.reviewPoster.resolveResolvedThreads(artifact);
+          }
+          if (artifact.verdict === 'clean') {
+            await prManager.markReadyForReview(context.linkedPRs);
+          }
+        }
+      }
+
       // #1121: off-sequence `remediate` seam. After `review` completes
       // successfully, an injected trigger may drive a `remediate` pass that then
       // re-enters `review`. Defaults undefined → dead in production (FR-007/D-5).
       if (phase === 'review' && result.success && deps.remediateTrigger?.(context)) {
         this.logger.info('review complete — remediateTrigger fired; running off-sequence remediate');
+        // #1125 FR-006: if the engine previously marked this PR ready, convert
+        // it back to draft before remediating. No-op unless the engine holds it
+        // ready (never demotes a human-marked-ready PR).
+        await prManager.convertToDraftIfEngineMarkedReady(context.linkedPRs);
         await labelManager.onPhaseStart('remediate');
         const remediateResult = this.runStubPhase('remediate');
         await labelManager.onPhaseComplete('remediate');
         results.push(remediateResult);
         outputCapture.clear();
+        reviewRound++; // #1125: next review pass is a re-review round
         i--; // Re-enter the review phase
         continue;
       }
@@ -1182,6 +1300,96 @@ export class PhaseLoop {
    */
   private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
     return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
+  }
+
+  /**
+   * #1126 (T015): run the delta-scoped verification-pass convergence for the
+   * `review` phase and persist the advanced findings artifact.
+   *
+   * Pipeline: load artifact (PhaseTracker) → `determineReviewMode` →
+   * `computeReviewDelta` (reading merge-conflict resolution SHAs from the
+   * pause-context sidecar) → `composeVerificationInput` →
+   * `buildVerificationPrompt` (scaffolding for the #1124 executor) →
+   * `advanceArtifact` → persist.
+   *
+   * The reviewer is still a #1121 stub, so `reviewerAddressed` and
+   * `reviewerNewFindings` are empty; the round still increments and
+   * `lastReviewedSha` advances so a subsequent re-review is scoped to the delta.
+   *
+   * Best-effort by construction: PhaseTracker degrades to null/no-op when Redis
+   * is down, and any thrown fault is swallowed with a warn — the review phase
+   * proceeds as a fresh full review (FR-009 posture), never blocked.
+   */
+  private async runReviewConvergence(
+    context: WorkerContext,
+    config: WorkerConfig,
+    deps: PhaseLoopDeps,
+  ): Promise<void> {
+    const { owner, repo, issueNumber, workflowName } = context.item;
+    const branch = context.branch ?? 'no-branch';
+    // Mirrors the phase-start-ref key shape (#1107) + 7-day TTL.
+    const key = `review-findings:${owner}:${repo}:${issueNumber}:${branch}`;
+    try {
+      let storedArtifact: ConvergenceFindingsArtifact | null = null;
+      const rawArtifact = await deps.phaseTracker?.getValueRaw(key);
+      if (rawArtifact != null) {
+        try {
+          storedArtifact = JSON.parse(rawArtifact) as ConvergenceFindingsArtifact;
+        } catch {
+          // Corrupt persisted value ⇒ treat as absent (fresh full review).
+          storedArtifact = null;
+        }
+      }
+      const artifact = normalizeArtifact(storedArtifact);
+      const mode = determineReviewMode(storedArtifact);
+
+      // FR-007: merge-conflict resolution SHAs (read-side only; #1131 writes).
+      const workflowId = `${owner}/${repo}#${issueNumber}`;
+      const pauseContext = await readPauseContext(context.checkoutPath, workflowId);
+
+      const prBaseRef = await resolveBaseRef(context.github, deps.prManager, owner, repo);
+
+      const delta = await computeReviewDelta({
+        github: context.github,
+        artifact,
+        pauseContext: pauseContext ?? undefined,
+        prBaseRef,
+      });
+
+      const verificationInput = composeVerificationInput(delta, artifact);
+      // #1124 scaffolding: the prompt is built (and validated by SC-006 tests)
+      // but not yet fed to a live reviewer — the executor is still a stub.
+      buildVerificationPrompt({
+        round: verificationInput.round,
+        openFindings: verificationInput.openFindings,
+        charter: mode.kind === 'verification' ? 'verification' : 'standard',
+      });
+
+      // Consumes ResolvedWorkflowConfig.review.blockingSeverity. No settings
+      // tier here (phase loop holds only WorkerConfig) ⇒ resolves to the
+      // built-in default; this feature consumes but does not own the default.
+      const blockingSeverity = resolveWorkflowOverrides(config, null, workflowName)
+        .review.blockingSeverity;
+
+      const { artifact: nextArtifact } = advanceArtifact({
+        artifact,
+        delta,
+        reviewerAddressed: [],
+        reviewerNewFindings: [],
+        blockingSeverity,
+      });
+
+      await deps.phaseTracker?.setValueRaw(
+        key,
+        JSON.stringify(nextArtifact),
+        PHASE_START_REF_TTL_SECONDS,
+      );
+    } catch (err) {
+      this.logger.warn(
+        { owner, repo, issueNumber, err: String(err) },
+        'review convergence failed — degrading to a fresh full review (FR-009)',
+      );
+    }
   }
 
   /**

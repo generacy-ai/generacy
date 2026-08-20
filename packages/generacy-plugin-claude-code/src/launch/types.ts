@@ -95,6 +95,25 @@ export interface ValidateFixIntent {
 }
 
 /**
+ * Intent for an engine-driven review pass (#1124). Routes through the same
+ * launcher plumbing as `merge-conflict`. The engine builds the review charter
+ * in-process and passes it as the prompt.
+ */
+export interface ReviewIntent {
+  kind: 'review';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full charter prompt (built by ReviewExecutor via buildReviewCharter) */
+  prompt: string;
+  /** Provider breadcrumb (dispatch reads LaunchRequest.provider). */
+  provider?: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
+  /** Optional reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
+}
+
+/**
  * Intent for a single interactive conversation turn via PTY-wrapped Claude CLI.
  */
 export interface ConversationTurnIntent {
@@ -132,5 +151,6 @@ export type ClaudeCodeIntent =
   | PrFeedbackIntent
   | ValidateFixIntent
   | MergeConflictIntent
+  | ReviewIntent
   | ConversationTurnIntent
   | InvokeIntent;

@@ -97,6 +97,7 @@ export type {
   PrFeedbackIntent,
   ValidateFixIntent,
   MergeConflictIntent,
+  ReviewIntent,
   ConversationTurnIntent,
   InvokeIntent,
 } from './launch/types.js';

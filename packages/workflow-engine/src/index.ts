@@ -260,4 +260,14 @@ export {
 
 // Comment types (re-exported so consumers filtering via isTrustedCommentAuthor
 // don't need to import from the deep types barrel)
-export type { Comment, Review, ReviewSubmissionState, ReviewThread, SkippedCommentInfo } from './types/github.js';
+export type {
+  Comment,
+  CreateReviewComment,
+  CreateReviewInput,
+  PullRequestFile,
+  Review,
+  ReviewEvent,
+  ReviewSubmissionState,
+  ReviewThread,
+  SkippedCommentInfo,
+} from './types/github.js';

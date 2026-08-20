@@ -168,6 +168,44 @@ export interface ReviewThread {
   comments: Comment[];
 }
 
+/**
+ * GitHub PR review event, as accepted by
+ * `POST /repos/{owner}/{repo}/pulls/{n}/reviews`. #1125 always submits
+ * `COMMENT` — `REQUEST_CHANGES` on the author's own PR is a 422.
+ */
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
+/**
+ * An inline review comment in a `createReview` submission. Every entry MUST
+ * anchor to a diffable line — a non-diffable `line` 422s the whole review.
+ */
+export interface CreateReviewComment {
+  path: string;
+  line: number;
+  side?: 'RIGHT' | 'LEFT'; // default RIGHT
+  body: string;
+}
+
+/**
+ * Body of a `createReview` call: one atomic review submission with an event,
+ * a top-level body, and optional inline comments.
+ */
+export interface CreateReviewInput {
+  event: ReviewEvent;
+  body: string;
+  comments?: CreateReviewComment[];
+}
+
+/**
+ * A file entry from `GET /repos/{owner}/{repo}/pulls/{n}/files`. `patch` is
+ * absent for binary/too-large files (those contribute no diffable lines).
+ */
+export interface PullRequestFile {
+  filename: string;
+  status: string; // added | modified | removed | renamed ...
+  patch?: string; // unified-diff hunks
+}
+
 // =============================================================================
 // Workflow Entities
 // =============================================================================

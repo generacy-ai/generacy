@@ -31,6 +31,15 @@ export class PrManager {
   private prUrl: string | undefined;
   private prNumber: number | undefined;
 
+  /**
+   * #1125 FR-006: true iff the engine currently holds this PR ready-for-review
+   * (set by `markReadyForReview`, cleared by `convertToDraftIfEngineMarkedReady`
+   * on a successful convert). Gates the draft conversion so the engine never
+   * demotes a PR a human marked ready. In-memory — a worker restart resets it to
+   * false, which is safe over-conservatism (we simply won't convert to draft).
+   */
+  private markedReadyByEngine = false;
+
   constructor(
     private readonly github: GitHubClient,
     private readonly owner: string,
@@ -429,6 +438,10 @@ export class PrManager {
 
     try {
       await this.github.markPRReady(this.owner, this.repo, this.prNumber);
+      // #1125 FR-006: record that the engine holds this PR ready so a later
+      // remediate entry can convert it back to draft (and never touch a PR a
+      // human marked ready).
+      this.markedReadyByEngine = true;
       this.logger.info(
         { prNumber: this.prNumber, prUrl: this.prUrl },
         'Marked PR as ready for review',
@@ -443,6 +456,64 @@ export class PrManager {
 
     // Flip sibling PRs to ready-for-review (idempotent, best-effort)
     await this.markSiblingsReadyForReview(linkedPRs);
+  }
+
+  /**
+   * #1125 FR-006: convert the PR (and each linked sibling) back to draft when
+   * the engine is entering a remediate round — but ONLY if the engine itself
+   * marked it ready. A no-op when `markedReadyByEngine` is false, so a PR a
+   * human marked ready is never demoted.
+   *
+   * Best-effort per PR: `convertPullRequestToDraft` is idempotent (short-circuits
+   * when already draft) and every failure warns without throwing. Clears the
+   * flag on a successful primary convert so a subsequent remediate entry is a
+   * no-op until the engine marks ready again (FR-008).
+   */
+  async convertToDraftIfEngineMarkedReady(linkedPRs?: LinkedPR[]): Promise<void> {
+    if (!this.markedReadyByEngine) {
+      this.logger.debug('Engine did not mark this PR ready — skipping convert-to-draft');
+      return;
+    }
+    if (!this.prNumber) {
+      this.logger.debug('No PR number available — skipping convert-to-draft');
+      return;
+    }
+
+    try {
+      await this.github.convertPullRequestToDraft(this.owner, this.repo, this.prNumber);
+      this.markedReadyByEngine = false;
+      this.logger.info(
+        { prNumber: this.prNumber, prUrl: this.prUrl },
+        'Converted PR back to draft for remediation',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { prNumber: this.prNumber, error: String(error) },
+        'Failed to convert PR to draft (non-fatal)',
+      );
+    }
+
+    // Convert linked siblings too (idempotent, best-effort).
+    if (!linkedPRs || linkedPRs.length === 0) return;
+    for (const pr of linkedPRs) {
+      const parsed = parsePRUrl(pr.url);
+      if (!parsed) {
+        this.logger.warn({ url: pr.url }, 'Could not parse linked PR URL — skipping convert-to-draft');
+        continue;
+      }
+      try {
+        await this.github.convertPullRequestToDraft(parsed.owner, parsed.repo, parsed.number);
+        this.logger.info(
+          { repo: `${parsed.owner}/${parsed.repo}`, number: parsed.number },
+          'Converted sibling PR back to draft for remediation',
+        );
+      } catch (error) {
+        this.logger.warn(
+          { repo: `${parsed.owner}/${parsed.repo}`, number: parsed.number, error: String(error) },
+          'Failed to convert sibling PR to draft (non-fatal)',
+        );
+      }
+    }
   }
 
   /**

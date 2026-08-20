@@ -69,6 +69,9 @@ function createMockDeps(): PhaseLoopDeps {
     prManager: {
       commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
       getPrNumber: vi.fn().mockReturnValue(undefined),
+      // #1125: remediate entry calls this to convert the PR back to draft.
+      convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
+      markReadyForReview: vi.fn().mockResolvedValue(undefined),
     } as any,
   };
 }
