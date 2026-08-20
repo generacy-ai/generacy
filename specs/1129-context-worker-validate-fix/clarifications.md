@@ -20,7 +20,13 @@ seam, so the routing mechanism must be defined.
 - C: Add a `WorkerContext` flag (e.g. `pendingValidateRemediation`) that
   `remediateTrigger` also honors, and backtrack to `review`.
 
-**Answer**: *Pending*
+**Answer**: B — Have the validate failure synthesize a `changes-required` review
+findings artifact from the validate evidence, then backtrack `i` to `review` so the
+existing `remediateTrigger`/seam picks it up naturally. Reuses the single existing
+remediate seam and the artifact-round counter/gate that #1128 owns ("one loop, one
+counter, one code path"); an inline driver would be invisible to the artifact-round
+gate, and a `WorkerContext` flag cannot survive the gate pause/resume the persisted
+counter requires.
 
 ### Q2: Interim autonomous fixing while `remediate` is a stub
 **Context**: The real `remediate` executor is deferred to later epic issues; today
@@ -38,7 +44,11 @@ fixing in the interim?
   remediate behavior for validate evidence, preserving real autonomous fixing
   until the epic's real executor lands.
 
-**Answer**: *Pending*
+**Answer**: B — Reduce `validate-fix-handler` to a thin adapter that serves as the
+interim remediate behavior for validate evidence. `remediate` is still
+`runStubPhase` and the real executor lands in a later issue, so fully retiring now
+would strand every validate red at the human cap gate; the thin adapter keeps a
+single path and carries the sibling-overlap guard (Q5) for free.
 
 ### Q3: Shared remediation counter and `on-remediation-limit` gate for validate
 **Context**: The `on-remediation-limit` gate (`phase-loop.ts:1122`) reads the review
@@ -53,7 +63,12 @@ the `on-remediation-limit` gate against the shared `maxRemediations` budget?
   without touching the review artifact; extend the gate to also consider a
   validate-pending signal.
 
-**Answer**: *Pending*
+**Answer**: A — Validate failures write/advance the same review findings artifact
+(bump `round`, set `verdict: 'changes-required'`) so the existing gate works
+unchanged. The `on-remediation-limit` gate reads the persisted artifact round
+against the shared `maxRemediations`, so advancing that same artifact makes a
+validate remediation count against the shared FR-002 budget with zero change to the
+gate #1128 owns.
 
 ### Q4: Label semantics on the new path
 **Context**: Today a validate failure escalates via `failed:validate` (`onError`).
@@ -69,7 +84,12 @@ marks budget exhaustion?
 - B: Keep `failed:validate` as the terminal escalation when the loop ends without a
   green validate, alongside the fingerprint backstop.
 
-**Answer**: *Pending*
+**Answer**: A — `failed:validate` is no longer applied for a routed validate red;
+budget exhaustion pauses with `waiting-for:remediation-limit`;
+`failed:validate-repeated` (fingerprint, `REPEAT_FAILURE_THRESHOLD = 2`) is the sole
+terminal failure label. The design removes first-red escalation and forbids a
+terminal label that silently strands the loop; exhaustion is a resumable gate, not a
+failure label.
 
 ### Q5: Sibling-owned-file overlap protection
 **Context**: `validate-fix-handler` performs a sibling-owned-file overlap check —
@@ -84,4 +104,8 @@ validate failures route through remediate?
 - B: Drop it — accept the generic remediate behavior; sibling-overlap protection is
   not required for the routed validate path.
 
-**Answer**: *Pending*
+**Answer**: A — Preserve it — the validate remediation prompt/commit must retain the
+sibling-owned-file avoidance and revert-on-overlap guard. Parallel epic siblings
+share one base branch and can recreate each other's files (a live hazard — siblings
+#1128/#1130/#1131/#1132 all edit `phase-loop.ts` against develop); under the thin
+adapter the guard is preserved for free.
