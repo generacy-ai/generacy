@@ -31,35 +31,36 @@
  */
 
 import { vi } from 'vitest';
-import { PhaseLoop } from '../../phase-loop.js';
 import type { PhaseLoopDeps } from '../../phase-loop.js';
 import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../../types.js';
-import { getPhaseSequence } from '../../types.js';
 import { DEFAULT_VALIDATE_COMMAND, type WorkerConfig } from '../../config.js';
-import { ReviewPoster, matchEngineAuthoredReviewMarker } from '../../review-poster.js';
+import { ReviewPoster } from '../../review-poster.js';
 import type { FindingsArtifact, ReviewVerdict } from '../../review-findings-artifact.js';
 import type { CiRun } from '@generacy-ai/workflow-engine';
 import type { GitHubClient, CreateReviewInput, Review } from '@generacy-ai/workflow-engine';
 import type { OrchestratorSettings } from '@generacy-ai/config';
-import {
-  FIXTURE_ROOT,
-  loadFixtureGraph,
-  affectedSet,
-  fullWorkspaceCount,
-  type FixtureGraph,
-} from './bugfix-fixture-graph.js';
+import { FIXTURE_ROOT, affectedSet, type FixtureGraph } from './bugfix-fixture-graph.js';
 
-// Re-export the fixture-graph surface so scenario files import from one place.
+// Re-export the shared surface with `export … from` (a direct, live re-export)
+// rather than re-exporting locally-imported bindings. Under the vitest/esbuild
+// transform, re-exporting an *imported binding* (`export { PhaseLoop }` after
+// `import { PhaseLoop }`) snapshots to `undefined` whenever this barrel sits on a
+// circular-init edge — observed for `PhaseLoop`, `getPhaseSequence`, and even the
+// cycle-free fixture-graph helpers, all of which resolved fine when imported
+// directly from source but came back `undefined` through the barrel (yielding
+// `PhaseLoop is not a constructor` in the scenario files). `export … from`
+// compiles to a live re-export and is immune to that init-ordering hazard, so the
+// scenario files can import the whole surface from one place.
+export { PhaseLoop } from '../../phase-loop.js';
+export { getPhaseSequence } from '../../types.js';
+export { DEFAULT_VALIDATE_COMMAND } from '../../config.js';
+export { ReviewPoster, matchEngineAuthoredReviewMarker } from '../../review-poster.js';
 export {
   FIXTURE_ROOT,
   loadFixtureGraph,
   affectedSet,
   fullWorkspaceCount,
-  matchEngineAuthoredReviewMarker,
-  DEFAULT_VALIDATE_COMMAND,
-  PhaseLoop,
-  getPhaseSequence,
-};
+} from './bugfix-fixture-graph.js';
 export type { FixtureGraph, PhaseLoopDeps, WorkerContext, WorkerConfig, WorkflowPhase };
 export type { FindingsArtifact, ReviewVerdict, CiRun, CreateReviewInput, Review, GitHubClient };
 
