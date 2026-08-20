@@ -1458,6 +1458,24 @@ export class PhaseLoop {
           gateLabel: gate.gateLabel,
         });
 
+        // #1133 FR-006 fix: the CI-merge gate is a POST-completion approval gate
+        // — `validate` genuinely finished (tests passed, PR marked ready, CI
+        // green) before it pauses. Grant `completed:validate` now, at the pause,
+        // so (a) cockpit's TERMINAL_COMPLETED_LABELS surface treats the PR as
+        // merge-eligible while it waits for approval and (b) the approve→resume
+        // terminal no-op at loop entry — which keys on both `completed:validate`
+        // AND `completed:implementation-review` — actually fires, so `validate`
+        // does not re-run (re-test / re-mark-ready / re-wait-CI). This is the one
+        // gate where `completed:<phase>` is granted at pause; every other gate
+        // keeps the #958 FR-008 ordering (granted only after all gates skip)
+        // because their phase has NOT completed. Order matters: onPhaseComplete
+        // removes `phase:validate` + adds `completed:validate`, then onGateHit
+        // adds the pause pair — end state is completed:validate +
+        // waiting-for:implementation-review + agent:paused.
+        if (gate.condition === 'on-ci-green') {
+          await labelManager.onPhaseComplete(phase);
+        }
+
         await labelManager.onGateHit(phase, gate.gateLabel);
 
         // #958 FR-009 — safety-net posting moved to step 5c so it runs on any

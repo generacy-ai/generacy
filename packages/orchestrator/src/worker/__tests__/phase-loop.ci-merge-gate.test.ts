@@ -230,6 +230,10 @@ describe('#1133 — CI-aware merge gate (phase-loop)', () => {
     expect(deps.labelManager.onGateHit).not.toHaveBeenCalledWith('validate', 'waiting-for:ci');
     // The PR was flipped ready-for-review so repo CI (ready_for_review-triggered) runs.
     expect(deps.prManager.markReadyForReview).toHaveBeenCalled();
+    // The pause grants completed:validate (this is a post-completion gate), so the
+    // approve→resume terminal no-op (SC-003) sees the label state the pause really
+    // leaves and cockpit treats the PR as merge-eligible while it waits.
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('validate');
   });
 
   it('SC-003: a continue re-entry at validate with completed:validate + completed:implementation-review is a merge-eligible terminal no-op', async () => {

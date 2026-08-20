@@ -63,8 +63,14 @@ describe('GhCliGitHubClient.getCiRunsForSha', () => {
     expect(mockExecuteCommand).toHaveBeenCalledTimes(1);
     const [cmd, args] = mockExecuteCommand.mock.calls[0]!;
     expect(cmd).toBe('gh');
+    // The primary readout is paginated + per_page=100 so a head SHA with >30
+    // checks is fully enumerated (no false green from an invisible page-2 run).
     expect(args).toEqual(
-      expect.arrayContaining(['api', 'repos/o/r/commits/sha123/check-runs']),
+      expect.arrayContaining([
+        'api',
+        '--paginate',
+        'repos/o/r/commits/sha123/check-runs?per_page=100',
+      ]),
     );
   });
 
@@ -93,6 +99,7 @@ describe('GhCliGitHubClient.getCiRunsForSha', () => {
     expect(fallbackArgs).toEqual(
       expect.arrayContaining([
         'api',
+        '--paginate',
         'repos/o/r/actions/runs?branch=feature&per_page=100',
       ]),
     );

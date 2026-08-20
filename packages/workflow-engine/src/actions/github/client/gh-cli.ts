@@ -1668,6 +1668,13 @@ export class GhCliGitHubClient implements GitHubClient {
    * `gh api repos/{o}/{r}/actions/runs?branch={branch}` filtered client-side to
    * the head SHA → source `actions-runs`.
    *
+   * Both paths are paginated (`--paginate` + `per_page=100`): the check-runs
+   * endpoint caps at 30 results per page by default (same trap #1043 fixed for
+   * `listBranches`). Without pagination a head SHA with >30 checks would expose
+   * only page 1 to `aggregateCiVerdict`, so a failing or still-pending run past
+   * page 1 would be invisible and could yield a false `green` — the exact
+   * skipped≠passed safety hole this feature closes.
+   *
    * Both paths normalize to `CiRun[]` consumable by `aggregateCiVerdict`
    * unchanged (SC-004). Empty result → `{ runs: [], source }`. Non-zero exit on
    * BOTH paths → throw with stderr (mirrors `getRefHeadSha`).
@@ -1682,7 +1689,8 @@ export class GhCliGitHubClient implements GitHubClient {
     try {
       const primary = await this.executeGh([
         'api',
-        `repos/${owner}/${repo}/commits/${headSha}/check-runs`,
+        '--paginate',
+        `repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=100`,
         '--jq', '.check_runs[] | {status, conclusion}',
       ]);
       if (primary.exitCode === 0) {
@@ -1700,6 +1708,7 @@ export class GhCliGitHubClient implements GitHubClient {
 
     const fallback = await this.executeGh([
       'api',
+      '--paginate',
       `repos/${owner}/${repo}/actions/runs?branch=${branch}&per_page=100`,
       '--jq', '.workflow_runs[] | {head_sha, status, conclusion}',
     ]);
