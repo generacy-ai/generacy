@@ -6,7 +6,9 @@
  * readiness + #1134 targeted validate / diff classification / fail-then-pass)
  * against `PhaseLoop.executeLoop`. It ships NO product behavior (#1135 FR-010):
  * every scenario consumes real production seams and mocks/injects only the
- * external boundaries (GitHub, the CLI spawner, the fail-then-pass worktree run).
+ * external boundaries (GitHub, the CLI spawner, and — for the fail-then-pass
+ * regression proof — the git/pnpm `execFile` spawns + fs overlay, so the REAL
+ * `runFailThenPass` regression logic still runs against a controllable seam).
  *
  * Design notes (confirmed bind points):
  *   - `checkoutPath` defaults to the checked-in `bugfix-monorepo` fixture so
@@ -23,9 +25,9 @@
  *     back to `getDefaultBranch()` → `origin/develop` (base `develop`), which is
  *     the ref the targeted `--filter "...[origin/develop]"` form encodes.
  *
- * The fail-then-pass module is mocked in each TEST file (hoisting), referencing
- * the shared `failThenPass` controller exported here. See `installFailThenPassMock`
- * usage note below.
+ * The `node:child_process` / `node:fs/promises` boundaries are mocked in each
+ * TEST file (hoisting), delegating to the shared `failThenPass` validate-seam
+ * controller exported here. See the T010 controller comment for the wiring.
  */
 
 import { vi } from 'vitest';
@@ -36,7 +38,6 @@ import { getPhaseSequence } from '../../types.js';
 import { DEFAULT_VALIDATE_COMMAND, type WorkerConfig } from '../../config.js';
 import { ReviewPoster, matchEngineAuthoredReviewMarker } from '../../review-poster.js';
 import type { FindingsArtifact, ReviewVerdict } from '../../review-findings-artifact.js';
-import type { FailThenPassInput, FailThenPassResult } from '../../fail-then-pass.js';
 import type { CiRun } from '@generacy-ai/workflow-engine';
 import type { GitHubClient, CreateReviewInput, Review } from '@generacy-ai/workflow-engine';
 import type { OrchestratorSettings } from '@generacy-ai/config';
@@ -91,6 +92,12 @@ export interface SuiteRun {
   suite: string;
   kind: 'test' | 'build';
   ref: 'branch' | 'base';
+  /**
+   * Pass/fail verdict for fail-then-pass regression runs (base + branch). Left
+   * undefined for the count-only targeted-validate expansion, which measures
+   * suite-execution count, not verdicts.
+   */
+  outcome?: 'pass' | 'fail';
 }
 
 export class SuiteLedger {
@@ -172,44 +179,132 @@ export function expandBranchValidate(
 }
 
 // ---------------------------------------------------------------------------
-// T010 — fail-then-pass mock controller.
+// T010 — fail-then-pass VALIDATE-SEAM controller (clarifications Q3=A).
 //
-// `runFailThenPass` runs a real git worktree + pnpm install + vitest, which is
-// far too heavy (and non-deterministic) for an integration scenario. It is the
-// external boundary we mock. Each TEST file installs the mock (hoisted) via:
+// The real `runFailThenPass` (#1134) runs a git worktree + pnpm install + vitest.
+// Rather than stub the whole function with a canned outcome — which would prove
+// only issuance and outcome-routing, never the base-fail/branch-pass regression
+// semantics — the scenarios exercise the REAL logic and mock only its external
+// boundary: the `execFile` spawns and the fs overlay.
 //
-//   vi.mock('../fail-then-pass.js', async (orig) => ({
+// The vitest run is the "validate seam": it is keyed on (command, ref) where
+// `ref` is derived from the spawn cwd (`base` = the detached worktree captured
+// from `git worktree add`; `branch` = anything else, i.e. the branch checkout),
+// and it returns the injected pass/fail for that ref. Seeding fail@base +
+// pass@branch drives the real logic to `{ kind: 'pass' }`; seeding pass@base
+// drives it to `{ kind: 'fail', reason: 'base-passed' }` — a genuine regression
+// proof, not a stubbed verdict. If the product code regressed to accept a test
+// that PASSES on the base ref, the pass@base scenario would complete and fail.
+//
+// Each TEST file installs the two mocks (hoisted, imports are hoist-safe in
+// vi.mock factories) delegating to THIS controller:
+//
+//   vi.mock('node:child_process', async (orig) => ({
 //     ...(await orig()),
-//     runFailThenPass: (input) => failThenPass.run(input),
+//     execFile: (...a) => failThenPass.execFile(...a),
+//   }));
+//   vi.mock('node:fs/promises', async (orig) => ({
+//     ...(await orig()),
+//     mkdtemp: failThenPass.mkdtemp,
+//     mkdir: failThenPass.mkdir,
+//     copyFile: failThenPass.copyFile,
 //   }));
 //
-// referencing THIS imported controller (imports are hoist-safe in vi.mock
-// factories). The scenario then sets `failThenPass.outcome` before running.
+// The scenario sets `failThenPass.outcomes` (per-ref verdicts) before running.
 // ---------------------------------------------------------------------------
 
-export const failThenPass = {
-  /** Outcome the mocked `runFailThenPass` returns. */
-  outcome: { kind: 'noop' } as FailThenPassResult,
-  /** When set, base+branch regression runs are recorded here. */
-  ledger: undefined as SuiteLedger | undefined,
-  /** Spy the mock delegates to; scenarios assert `failThenPass.spy` call count. */
-  spy: vi.fn<(input: FailThenPassInput) => void>(),
+export interface FailThenPassSeamOutcomes {
+  base: 'pass' | 'fail';
+  branch: 'pass' | 'fail';
+}
 
-  run(input: FailThenPassInput): FailThenPassResult {
-    failThenPass.spy(input);
-    if (failThenPass.ledger) {
-      for (const file of input.changedTestFiles) {
-        failThenPass.ledger.record({ suite: file, kind: 'test', ref: 'base' });
-        failThenPass.ledger.record({ suite: file, kind: 'test', ref: 'branch' });
-      }
+export interface CapturedVitestRun {
+  ref: 'base' | 'branch';
+  files: string[];
+  outcome: 'pass' | 'fail';
+}
+
+type ExecFileCallback = (err: unknown, res?: { stdout: string; stderr: string }) => void;
+
+export const failThenPass = {
+  /**
+   * Injected per-ref verdicts for the validate seam. Default is the passing
+   * regression shape: the changed test FAILS on the base ref (reproduces the
+   * bug) and PASSES on the branch (the fix resolves it).
+   */
+  outcomes: { base: 'fail', branch: 'pass' } as FailThenPassSeamOutcomes,
+  /** When set, base+branch regression runs are recorded here with their verdict. */
+  ledger: undefined as SuiteLedger | undefined,
+  /** Every vitest run the seam served, in call order (issuance assertions). */
+  vitestRuns: [] as CapturedVitestRun[],
+  /** Detached-worktree path captured from `git worktree add`; identifies base runs. */
+  worktreePath: undefined as string | undefined,
+
+  /**
+   * `execFile` handler installed by `vi.mock('node:child_process')`. Routes the
+   * git worktree add/remove + pnpm install to benign success, and dispatches the
+   * `pnpm vitest run <files>` spawn through the (command, ref)-keyed seam.
+   */
+  execFile(cmd: string, args: string[], optsOrCb: unknown, maybeCb?: unknown): void {
+    const opts = (typeof optsOrCb === 'function' ? {} : optsOrCb) as { cwd?: string };
+    const cb = (typeof optsOrCb === 'function' ? optsOrCb : maybeCb) as ExecFileCallback;
+
+    // git worktree add --detach <worktreePath> <baseRef>
+    if (cmd === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+      failThenPass.worktreePath = args[3];
+      return cb(null, { stdout: '', stderr: '' });
     }
-    return failThenPass.outcome;
+    // git worktree remove --force <worktreePath>
+    if (cmd === 'git' && args[0] === 'worktree' && args[1] === 'remove') {
+      return cb(null, { stdout: '', stderr: '' });
+    }
+    // pnpm install ... (base env preparation)
+    if (cmd === 'pnpm' && args[0] === 'install') {
+      return cb(null, { stdout: 'installed', stderr: '' });
+    }
+    // pnpm vitest run <files...> — THE VALIDATE SEAM, keyed on (command, ref).
+    if (cmd === 'pnpm' && args[0] === 'vitest' && args[1] === 'run') {
+      const files = args.slice(2);
+      const ref: 'base' | 'branch' =
+        opts.cwd !== undefined && opts.cwd === failThenPass.worktreePath ? 'base' : 'branch';
+      const outcome = failThenPass.outcomes[ref];
+      failThenPass.vitestRuns.push({ ref, files, outcome });
+      if (failThenPass.ledger) {
+        for (const file of files) {
+          failThenPass.ledger.record({ suite: file, kind: 'test', ref, outcome });
+        }
+      }
+      if (outcome === 'pass') {
+        return cb(null, { stdout: `${ref} green`, stderr: '' });
+      }
+      const err = new Error('vitest failed') as Error & { stdout?: string; stderr?: string };
+      err.stdout = `${ref} red`;
+      err.stderr = '';
+      return cb(err);
+    }
+    // Anything else: benign success.
+    return cb(null, { stdout: '', stderr: '' });
+  },
+
+  // fs/promises overrides so the overlay + temp-dir setup never touch the disk.
+  mkdtemp: (prefix: string): Promise<string> => Promise.resolve(`${prefix}XXXX`),
+  mkdir: (): Promise<undefined> => Promise.resolve(undefined),
+  copyFile: (): Promise<undefined> => Promise.resolve(undefined),
+
+  /** Base-ref vitest runs the seam served (with verdicts). */
+  baseRuns(): CapturedVitestRun[] {
+    return failThenPass.vitestRuns.filter((r) => r.ref === 'base');
+  },
+  /** Branch vitest runs the seam served (with verdicts). */
+  branchRuns(): CapturedVitestRun[] {
+    return failThenPass.vitestRuns.filter((r) => r.ref === 'branch');
   },
 
   reset(): void {
-    failThenPass.outcome = { kind: 'noop' };
+    failThenPass.outcomes = { base: 'fail', branch: 'pass' };
     failThenPass.ledger = undefined;
-    failThenPass.spy.mockClear();
+    failThenPass.vitestRuns = [];
+    failThenPass.worktreePath = undefined;
   },
 };
 
