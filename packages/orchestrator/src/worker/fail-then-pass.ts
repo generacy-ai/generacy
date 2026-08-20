@@ -7,17 +7,36 @@
  * (proving the fix resolves it). Either direction not holding is a finding.
  *
  * The base-ref run happens in a detached git worktree so the branch checkout and
- * its `node_modules` are never mutated (worktree isolation). The worktree is
- * always cleaned up in a `finally`, even on error.
+ * its `node_modules` are never mutated (worktree isolation). Because a worktree is
+ * a bare source checkout with no `node_modules` (gitignored, never part of a
+ * worktree), two setup steps make the base run non-vacuous:
+ *   1. Dependencies are installed against the BASE lockfile so `pnpm vitest run`
+ *      can actually execute. Without this the base run always exits non-zero for
+ *      infrastructure reasons and the whole proof degenerates to "does the branch
+ *      pass" (see #1150 review).
+ *   2. The branch's version of each changed test file is overlaid onto the base
+ *      checkout. A new test is absent at the base ref, and a modified test carries
+ *      its OLD assertions there — either way the base SOURCE must be exercised by
+ *      the BRANCH's test to prove it reproduces the bug (new test + old code =
+ *      fail). This is the explicit handling of the "test file absent at base" case.
+ *
+ * The worktree is always cleaned up in a `finally`, even on error.
  */
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Wall-clock backstop for the base-ref `pnpm install`. The branch already
+ * installed, so the pnpm store is warm and this is mostly hardlink/symlink work;
+ * the timeout only guards against a cold store having to hit the network.
+ */
+const BASE_INSTALL_TIMEOUT_MS = 5 * 60_000;
 
 export interface FailThenPassInput {
   /** The branch checkout root. */
@@ -32,6 +51,7 @@ export interface FailThenPassInput {
 
 export type FailThenPassResult =
   | { kind: 'noop' }
+  | { kind: 'skip'; reason: string }
   | { kind: 'pass' }
   | { kind: 'fail'; reason: 'base-passed' | 'branch-failed'; evidence: string };
 
@@ -65,8 +85,52 @@ async function runTests(
 }
 
 /**
+ * Install dependencies in the base worktree against the base lockfile. Uses the
+ * warm pnpm store from the branch install (`--prefer-offline`) and pins to the
+ * committed base lockfile (`--frozen-lockfile`) for a deterministic base env.
+ * Never throws — a failed install is reported so the caller can skip the proof
+ * (non-blocking) rather than mistake an install failure for a base test failure.
+ */
+async function installDeps(
+  cwd: string,
+  signal: AbortSignal,
+): Promise<{ ok: boolean; output: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      'pnpm',
+      ['install', '--frozen-lockfile', '--prefer-offline'],
+      { cwd, signal, timeout: BASE_INSTALL_TIMEOUT_MS },
+    );
+    return { ok: true, output: `${stdout}\n${stderr}`.trim() };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    const output = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim() || (e.message ?? String(err));
+    return { ok: false, output };
+  }
+}
+
+/**
+ * Overlay the branch's version of each changed test file onto the base worktree,
+ * creating parent directories as needed. This is what makes a newly-added test
+ * file (absent at the base ref) runnable against the base source.
+ */
+async function overlayTestFiles(
+  fromRoot: string,
+  toRoot: string,
+  files: string[],
+): Promise<void> {
+  for (const file of files) {
+    const dest = join(toRoot, file);
+    await mkdir(dirname(dest), { recursive: true });
+    await copyFile(join(fromRoot, file), dest);
+  }
+}
+
+/**
  * Verify the changed test files fail on the base ref and pass on the branch.
- * Empty `changedTestFiles` is a non-blocking `noop`.
+ * Empty `changedTestFiles` is a non-blocking `noop`. A base env that cannot be
+ * prepared (dependency install fails) is a non-blocking `skip` — it is never
+ * reported as a base test failure.
  */
 export async function runFailThenPass(input: FailThenPassInput): Promise<FailThenPassResult> {
   const { checkoutPath, baseRef, changedTestFiles, signal } = input;
@@ -83,9 +147,21 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
       cwd: checkoutPath,
       signal,
     });
+
+    const install = await installDeps(worktreePath, signal);
+    if (!install.ok) {
+      return {
+        kind: 'skip',
+        reason:
+          `fail-then-pass skipped: could not install dependencies at the base ref ` +
+          `\`${baseRef}\`, so the regression proof could not run.\n\n${install.output}`,
+      };
+    }
+
+    await overlayTestFiles(checkoutPath, worktreePath, changedTestFiles);
     baseOutcome = await runTests(worktreePath, changedTestFiles, signal);
   } finally {
-    // Always remove the worktree, even if the base run threw.
+    // Always remove the worktree, even if the base setup/run threw.
     await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
       cwd: checkoutPath,
       signal,
@@ -99,8 +175,8 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
       kind: 'fail',
       reason: 'base-passed',
       evidence:
-        `The changed test file(s) PASSED on the base ref \`${baseRef}\`, so they do not ` +
-        `reproduce the bug. Add a test that fails without the fix.\n\n${baseOutcome.output}`,
+        `The changed test file(s) PASSED against the base ref \`${baseRef}\` source, so ` +
+        `they do not reproduce the bug. Add a test that fails without the fix.\n\n${baseOutcome.output}`,
     };
   }
 

@@ -167,7 +167,7 @@ describe('PhaseLoop targeted-validate (#1134 T007)', () => {
     });
   });
 
-  it('bugfix + custom validate command → runs verbatim while classification still logged', async () => {
+  it('bugfix + custom validate command (cluster tier) → runs verbatim while classification still logged', async () => {
     const { logger, info } = makeLogger();
     phaseLoop = new PhaseLoop(logger);
     const runValidatePhase = vi.fn().mockResolvedValue(makeSuccessResult('validate'));
@@ -193,6 +193,65 @@ describe('PhaseLoop targeted-validate (#1134 T007)', () => {
       isBuiltInDefault: false,
       effectiveCommand: 'make check',
     });
+  });
+
+  it('bugfix + per-workflow custom validate command (settings.workflows) → runs verbatim, not rewritten (#1150 finding 3)', async () => {
+    const { logger, info } = makeLogger();
+    phaseLoop = new PhaseLoop(logger);
+    const runValidatePhase = vi.fn().mockResolvedValue(makeSuccessResult('validate'));
+    const deps = createDeps(runValidatePhase);
+    // Cluster default is left untouched; the operator sets a per-workflow override.
+    deps.settings = {
+      workflows: {
+        'speckit-bugfix': { validateCommand: 'make check' },
+      },
+    } as any;
+    const context = createContext(
+      workspaceDir,
+      'speckit-bugfix',
+      ['packages/a/src/x.ts'],
+      logger,
+    );
+
+    // config.validateCommand stays the built-in default — the fix must resolve the
+    // per-workflow tier instead of comparing the raw cluster default.
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['validate']);
+
+    expect(runValidatePhase).toHaveBeenCalledWith(workspaceDir, 'make check', context.signal);
+    const event = targetedValidateEvent(info);
+    expect(event).toMatchObject({
+      classification: 'targeted',
+      isBuiltInDefault: false,
+      effectiveCommand: 'make check',
+    });
+  });
+
+  it('bugfix + diff resolution throws → falls back to plain resolved command, no hard fail (#1150 finding 1)', async () => {
+    const { logger } = makeLogger();
+    phaseLoop = new PhaseLoop(logger);
+    const runValidatePhase = vi.fn().mockResolvedValue(makeSuccessResult('validate'));
+    const deps = createDeps(runValidatePhase);
+    const context = createContext(
+      workspaceDir,
+      'speckit-bugfix',
+      ['packages/a/src/x.ts'],
+      logger,
+    );
+    // Simulate `git diff base...HEAD` throwing (e.g. origin/<base> not fetched).
+    (context.github.getFilesChangedBetween as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('fatal: bad revision origin/develop...HEAD'),
+    );
+
+    const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['validate']);
+
+    // Falls back to the plain resolved command (the built-in default) and does not
+    // hard-fail the validate phase.
+    expect(runValidatePhase).toHaveBeenCalledWith(
+      workspaceDir,
+      DEFAULT_VALIDATE_COMMAND,
+      context.signal,
+    );
+    expect(result.completed).toBe(true);
   });
 
   it('feature workflow → block skipped, plain default runs, no targeted-validate log (SC-005)', async () => {

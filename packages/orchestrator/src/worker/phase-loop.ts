@@ -655,7 +655,12 @@ export class PhaseLoop {
           let effectiveValidateCommand = config.validateCommand;
           let targetedValidate: TargetedValidateDecision | undefined;
           if (context.item.workflowName === 'speckit-bugfix') {
-            targetedValidate = await this.resolveTargetedValidate(context, prManager, config);
+            targetedValidate = await this.resolveTargetedValidate(
+              context,
+              prManager,
+              config,
+              deps.settings ?? null,
+            );
             effectiveValidateCommand = targetedValidate.effectiveCommand;
           }
 
@@ -1566,27 +1571,64 @@ export class PhaseLoop {
    * is rewritten (Q1=B) — a custom `validateCommand` runs verbatim, but the
    * classification is still computed and logged for observability. Emits exactly
    * one `targeted-validate` log line per validate entry describing the decision.
+   *
+   * Built-in-default detection compares against the RESOLVED per-workflow
+   * validate command (workflow → repo → cluster), not the raw
+   * `config.validateCommand`, so an operator who sets
+   * `settings.workflows['speckit-bugfix'].validateCommand` while leaving the
+   * cluster default untouched still gets their custom command run verbatim (Q1=B).
+   *
+   * Diff resolution (`resolveBaseRef` network call + `getFilesChangedBetween`
+   * `git diff base...HEAD`, which throws on a non-zero exit — e.g. `origin/<base>`
+   * not fetched locally) is wrapped in try/catch: any failure falls back to the
+   * plain resolved command so speckit-bugfix validate stays byte-identical to its
+   * pre-#1134 behavior when the diff can't be computed (FR-013).
    */
   private async resolveTargetedValidate(
     context: WorkerContext,
     prManager: PrManager,
     config: WorkerConfig,
+    settings: OrchestratorSettings | null | undefined,
   ): Promise<TargetedValidateDecision> {
-    const baseRef = await resolveBaseRef(
-      context.github,
-      prManager,
-      context.item.owner,
-      context.item.repo,
-    );
-    const base = baseRef.startsWith('origin/') ? baseRef.slice('origin/'.length) : baseRef;
-    const changedFiles = await context.github.getFilesChangedBetween(baseRef, 'HEAD');
-    const isWorkspace = existsSync(join(context.checkoutPath, 'pnpm-workspace.yaml'));
-    const classification = classifyDiff({ changedFiles, isWorkspace });
-    const isBuiltInDefault = config.validateCommand === DEFAULT_VALIDATE_COMMAND;
+    const resolvedValidateCommand = resolveWorkflowOverrides(
+      config,
+      settings,
+      context.item.workflowName,
+    ).validateCommand;
+    const isBuiltInDefault = resolvedValidateCommand === DEFAULT_VALIDATE_COMMAND;
+
+    let baseRef: string;
+    let base: string;
+    let changedFiles: string[];
+    let classification: Classification;
+    try {
+      baseRef = await resolveBaseRef(
+        context.github,
+        prManager,
+        context.item.owner,
+        context.item.repo,
+      );
+      base = baseRef.startsWith('origin/') ? baseRef.slice('origin/'.length) : baseRef;
+      changedFiles = await context.github.getFilesChangedBetween(baseRef, 'HEAD');
+      const isWorkspace = existsSync(join(context.checkoutPath, 'pnpm-workspace.yaml'));
+      classification = classifyDiff({ changedFiles, isWorkspace });
+    } catch (error) {
+      this.logger.warn(
+        { event: 'targeted-validate', error: String(error) },
+        '#1134: targeted-validate diff resolution failed — falling back to plain validate command',
+      );
+      return {
+        effectiveCommand: resolvedValidateCommand,
+        baseRef: '',
+        base: '',
+        changedFiles: [],
+        classification: { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+      };
+    }
 
     const effectiveCommand = this.computeEffectiveValidateCommand(
       classification,
-      config.validateCommand,
+      resolvedValidateCommand,
       base,
       isBuiltInDefault,
     );
@@ -1670,6 +1712,16 @@ export class PhaseLoop {
           phase: 'validate',
         },
       };
+    }
+
+    if (outcome.kind === 'skip') {
+      // Base env couldn't be prepared (e.g. dependency install failed). Do not
+      // block validate on an infrastructure failure — proceed to normal validate.
+      this.logger.warn(
+        { event: 'fail-then-pass', outcome: 'skip', reason: outcome.reason },
+        '#1134: fail-then-pass regression proof skipped',
+      );
+      return undefined;
     }
 
     // noop / pass → let the normal validate run proceed.
