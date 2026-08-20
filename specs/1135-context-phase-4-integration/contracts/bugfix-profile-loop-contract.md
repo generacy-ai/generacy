@@ -25,7 +25,7 @@ Classification runs **before** validate and selects the validate command.
 |---|---|---|
 | **Ordinary source change** (packages) | targeted: `pnpm --filter "...[origin/<base>]" build && … test` | affected set (changed + dependents) — **strictly fewer** than full-workspace |
 | **Root-level config** (lockfile / base `tsconfig` / workspace file / CI workflow) | **fall back to the full command** | = full-workspace count |
-| **Docs-only** | **skip tests** | test count = **0** |
+| **Docs-only** | build-only targeted form: `pnpm --filter "...[origin/<base>]" build` (**test half dropped**) | test count = **0** (builds still run for the docs affected closure) |
 | **Single-package repo** (pinned, not scenario-tested here) | plain command — `--filter` syntax is meaningless on one package | full/plain — unit-tested by #1134 |
 
 **Pinned by #1135**: US2 exercises the root-config fallback and docs-only skip end-to-end, each asserting its suite-execution count. The single-package guard ships **no integration scenario** here (unit-tested by #1134, mirrors #1132's defer+pin) — cross-referenced above.
@@ -44,11 +44,12 @@ Classification runs **before** validate and selects the validate command.
 | Rule | Value |
 |---|---|
 | Parallelism | targeted validate runs in parallel with CI; asserted as engine sequencing/readiness, **not** wall-clock concurrency |
-| CI injection | CI status injected via the **merge-readiness dependency seam** (no real GitHub Actions) |
-| `skipped` / `neutral` CI | treated as **NOT passed** |
-| Final gate | `implementation-review` is raised **iff** validate is green **AND** CI is a passing state |
+| CI injection | CI status injected via the **merge-readiness dependency seam** (`context.ciRuns` → `aggregateCiVerdict`); no real GitHub Actions |
+| `skipped` / `neutral` CI | dropped from the aggregate → effective verdict `pending` (treated as **NOT passed**) |
+| Pending → pause | a `pending` verdict at validate-green drives `waitForCiGreen`; on timeout the loop pauses on `waiting-for:ci` + `agent:paused` (resumable), returning `{ completed: false, gateHit: true, lastPhase: 'validate' }` |
+| Final gate | the `on-ci-green` `implementation-review` gate raises **iff** validate is green **AND** the aggregate verdict is `green`; a `pending`/`not-passed` verdict never raises it |
 
-**Pinned by #1135**: US1 asserts the green-both-pass positive; dedicated `skipped` and `neutral` scenarios each assert the final gate is **NOT** raised.
+**Pinned by #1135**: US1 asserts the green-both-pass positive (final gate raised). Dedicated `skipped`-only and `neutral`-only scenarios each assert the final `implementation-review` gate is **NOT** raised — the loop instead pauses on `waiting-for:ci` — while the targeted validate still ran its affected-set suite count.
 
 ## 5. `failThenPass` (authored by #1134)
 
