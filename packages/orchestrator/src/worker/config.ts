@@ -15,6 +15,15 @@ export const DEFAULT_REVIEW = {
 } as const;
 
 /**
+ * Built-in default validate command (#1134 Decision 2 / Q1=B). The schema
+ * `.default(...)` references this constant so the built-in-default detector in
+ * the targeted-validate wiring (`config.validateCommand === DEFAULT_VALIDATE_COMMAND`)
+ * stays in sync with the schema by construction. Only the built-in default is
+ * rewritten to the pnpm filter form; operator-set custom commands run verbatim.
+ */
+export const DEFAULT_VALIDATE_COMMAND = 'pnpm test && pnpm build';
+
+/**
  * Built-in per-workflow `maxRemediations` default: `speckit-bugfix` → 2,
  * `speckit-feature` and every other workflow name → 3 (Q3).
  */
@@ -139,7 +148,7 @@ export const WorkerConfigSchema = z.object({
   /** Grace period for shutdown in milliseconds */
   shutdownGracePeriodMs: z.number().int().min(1000).default(5000),
   /** Command to run during the validate phase */
-  validateCommand: z.string().default('pnpm test && pnpm build'),
+  validateCommand: z.string().default(DEFAULT_VALIDATE_COMMAND),
   /** Command to run before validation to install dependencies (empty string to skip) */
   preValidateCommand: z
     .string()
