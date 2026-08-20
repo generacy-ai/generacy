@@ -29,7 +29,19 @@ import { boundOutputTail } from './output-tail.js';
 import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
-import { writePauseContext } from './pause-context.js';
+import { writePauseContext, readPauseContext } from './pause-context.js';
+import {
+  determineReviewMode,
+  computeReviewDelta,
+  composeVerificationInput,
+  buildVerificationPrompt,
+  advanceArtifact,
+  normalizeArtifact,
+  // Aliased to avoid a name collision with #1125's `FindingsArtifact`
+  // (from ./review-findings-artifact.js) — the two are distinct seams
+  // (#1127 bridges them). This is the #1126 convergence artifact shape.
+  type FindingsArtifact as ConvergenceFindingsArtifact,
+} from './review/index.js';
 import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
@@ -507,6 +519,15 @@ export class PhaseLoop {
       let result: PhaseResult;
       try {
         if (phase === 'review') {
+          // #1126: delta-scoped verification-pass convergence, run FIRST as
+          // best-effort scaffolding. The reviewer's findings do not yet flow
+          // into it (the ReviewArtifact→FindingsArtifact bridge is deferred to
+          // #1127), so no addressed ids / new findings are consumed here — this
+          // wiring loads, advances, and persists the findings artifact
+          // (incrementing the round + advancing lastReviewedSha) and builds the
+          // verification prompt. Best-effort: any failure degrades to a fresh
+          // full review (FR-009 posture), never blocks the phase.
+          await this.runReviewConvergence(context, config, deps);
           // #1124: real review executor when injected — spawns the CLI with an
           // in-process charter, has the agent write a findings sidecar, and
           // recomputes the verdict engine-side. Falls back to the #1121 inert
@@ -1279,6 +1300,96 @@ export class PhaseLoop {
    */
   private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
     return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
+  }
+
+  /**
+   * #1126 (T015): run the delta-scoped verification-pass convergence for the
+   * `review` phase and persist the advanced findings artifact.
+   *
+   * Pipeline: load artifact (PhaseTracker) → `determineReviewMode` →
+   * `computeReviewDelta` (reading merge-conflict resolution SHAs from the
+   * pause-context sidecar) → `composeVerificationInput` →
+   * `buildVerificationPrompt` (scaffolding for the #1124 executor) →
+   * `advanceArtifact` → persist.
+   *
+   * The reviewer is still a #1121 stub, so `reviewerAddressed` and
+   * `reviewerNewFindings` are empty; the round still increments and
+   * `lastReviewedSha` advances so a subsequent re-review is scoped to the delta.
+   *
+   * Best-effort by construction: PhaseTracker degrades to null/no-op when Redis
+   * is down, and any thrown fault is swallowed with a warn — the review phase
+   * proceeds as a fresh full review (FR-009 posture), never blocked.
+   */
+  private async runReviewConvergence(
+    context: WorkerContext,
+    config: WorkerConfig,
+    deps: PhaseLoopDeps,
+  ): Promise<void> {
+    const { owner, repo, issueNumber, workflowName } = context.item;
+    const branch = context.branch ?? 'no-branch';
+    // Mirrors the phase-start-ref key shape (#1107) + 7-day TTL.
+    const key = `review-findings:${owner}:${repo}:${issueNumber}:${branch}`;
+    try {
+      let storedArtifact: ConvergenceFindingsArtifact | null = null;
+      const rawArtifact = await deps.phaseTracker?.getValueRaw(key);
+      if (rawArtifact != null) {
+        try {
+          storedArtifact = JSON.parse(rawArtifact) as ConvergenceFindingsArtifact;
+        } catch {
+          // Corrupt persisted value ⇒ treat as absent (fresh full review).
+          storedArtifact = null;
+        }
+      }
+      const artifact = normalizeArtifact(storedArtifact);
+      const mode = determineReviewMode(storedArtifact);
+
+      // FR-007: merge-conflict resolution SHAs (read-side only; #1131 writes).
+      const workflowId = `${owner}/${repo}#${issueNumber}`;
+      const pauseContext = await readPauseContext(context.checkoutPath, workflowId);
+
+      const prBaseRef = await resolveBaseRef(context.github, deps.prManager, owner, repo);
+
+      const delta = await computeReviewDelta({
+        github: context.github,
+        artifact,
+        pauseContext: pauseContext ?? undefined,
+        prBaseRef,
+      });
+
+      const verificationInput = composeVerificationInput(delta, artifact);
+      // #1124 scaffolding: the prompt is built (and validated by SC-006 tests)
+      // but not yet fed to a live reviewer — the executor is still a stub.
+      buildVerificationPrompt({
+        round: verificationInput.round,
+        openFindings: verificationInput.openFindings,
+        charter: mode.kind === 'verification' ? 'verification' : 'standard',
+      });
+
+      // Consumes ResolvedWorkflowConfig.review.blockingSeverity. No settings
+      // tier here (phase loop holds only WorkerConfig) ⇒ resolves to the
+      // built-in default; this feature consumes but does not own the default.
+      const blockingSeverity = resolveWorkflowOverrides(config, null, workflowName)
+        .review.blockingSeverity;
+
+      const { artifact: nextArtifact } = advanceArtifact({
+        artifact,
+        delta,
+        reviewerAddressed: [],
+        reviewerNewFindings: [],
+        blockingSeverity,
+      });
+
+      await deps.phaseTracker?.setValueRaw(
+        key,
+        JSON.stringify(nextArtifact),
+        PHASE_START_REF_TTL_SECONDS,
+      );
+    } catch (err) {
+      this.logger.warn(
+        { owner, repo, issueNumber, err: String(err) },
+        'review convergence failed — degrading to a fresh full review (FR-009)',
+      );
+    }
   }
 
   /**
