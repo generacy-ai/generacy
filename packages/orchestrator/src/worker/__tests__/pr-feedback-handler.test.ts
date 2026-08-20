@@ -335,8 +335,8 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
-  describe('handle - no changes to commit (#883 Disposition B, #1130)', () => {
-    it('persists trigger without a dead-end label, keeps waiting-for label, no replies', async () => {
+  describe('handle - no changes to commit (#883 Disposition B)', () => {
+    it('adds blocked:stuck-feedback-loop, keeps waiting-for label, no replies', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -381,10 +381,10 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #1130 FR-007/FR-008: the `blocked:stuck-feedback-loop` dead-end is
-      // retired — the trigger is persisted (waiting-for retained above), and
-      // no dead-end label is applied.
-      expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+      // stop — blocked:stuck-feedback-loop is added so the monitor pauses
+      // re-enqueue until an operator clears it.
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
@@ -725,8 +725,8 @@ describe('PrFeedbackHandler', () => {
       });
     });
 
-    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → persist trigger, no dead-end label (#1130)', () => {
-      it('B1 (success && !hasChanges): no-diff clean exit → no label applied', async () => {
+    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → blocked:stuck-feedback-loop (legacy-path stop)', () => {
+      it('B1 (success && !hasChanges): no-diff clean exit → blocked:stuck-feedback-loop', async () => {
         const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
         const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -743,9 +743,9 @@ describe('PrFeedbackHandler', () => {
 
         await handler.handle(item, checkoutPath);
 
-        // #1130 FR-007/FR-008: the divergent `blocked:stuck-feedback-loop`
-        // dead-end is retired; the trigger is simply persisted (no label).
-        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+        // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+        // stop — blocked:stuck-feedback-loop is applied on the no-diff cycle.
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
           'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
         );
         // B4/B5/B6 labels NOT applied.
@@ -765,7 +765,7 @@ describe('PrFeedbackHandler', () => {
         expectSharedFinallyInvariants();
       });
 
-      it('B2 (!success && !timedOut && hasChanges): clean non-zero exit with commit → no label applied', async () => {
+      it('B2 (!success && !timedOut && hasChanges): clean non-zero exit with commit → blocked:stuck-feedback-loop', async () => {
         const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
         const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -782,8 +782,8 @@ describe('PrFeedbackHandler', () => {
 
         await handler.handle(item, checkoutPath);
 
-        // #1130 FR-007/FR-008: persist trigger, no dead-end label.
-        expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+        // #1130 (PR #1145 review): legacy-path bounded stop applied.
+        expect(mockGitHub.addLabels).toHaveBeenCalledWith(
           'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
         );
         expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
@@ -885,8 +885,8 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
-  describe('handle - CLI failure (#883 Disposition B, #1130)', () => {
-    it('persists trigger without a dead-end label, keeps waiting-for label, no replies, no resolves', async () => {
+  describe('handle - CLI failure (#883 Disposition B)', () => {
+    it('adds blocked label, keeps waiting-for label, no replies, no resolves', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -925,8 +925,8 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #1130 FR-007/FR-008: no dead-end label; trigger persisted for retry.
-      expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+      // #1130 (PR #1145 review): legacy-path bounded stop applied.
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
@@ -1071,8 +1071,8 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
-  describe('handle - push failure (#883 Disposition B, #1130)', () => {
-    it('persists trigger without a dead-end label when push fails (hasChanges stays false)', async () => {
+  describe('handle - push failure (#883 Disposition B)', () => {
+    it('adds blocked label when push fails (hasChanges stays false)', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -1115,8 +1115,8 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #1130 FR-007/FR-008: no dead-end label; trigger persisted for retry.
-      expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+      // #1130 (PR #1145 review): legacy-path bounded stop applied.
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
@@ -1659,7 +1659,7 @@ describe('PrFeedbackHandler', () => {
       }
     });
 
-    it('persist-trigger (CLI failed or no-diff): `agent:in-progress` absent, waiting-for retained, no dead-end label (SC-004 line 4, #1130)', async () => {
+    it('blocked-stuck (CLI failed or no-diff): `agent:in-progress` absent, blocked + waiting-for retained (SC-004 line 4, both dispositions)', async () => {
       // Disposition B via CLI failure (no-diff path).
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
@@ -1676,10 +1676,10 @@ describe('PrFeedbackHandler', () => {
       const removed = collectRemovedLabels();
       expect(removed).not.toContain('waiting-for:address-pr-feedback');
       expect(removed).toContain('agent:in-progress');
-      // #1130 FR-007/FR-008: the `blocked:stuck-feedback-loop` dead-end is
-      // retired — waiting-for is retained (trigger persists) and no dead-end
-      // label is applied.
-      expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+      // stop — waiting-for is retained (trigger persists) AND
+      // blocked:stuck-feedback-loop is applied.
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,

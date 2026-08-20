@@ -2255,7 +2255,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   // Test: No Changes Skip
   // ==========================================================================
 
-  it('#883/#1130: no-diff cycle → Disposition B (persist trigger, no dead-end label, no replies, no removal)', async () => {
+  it('#883: no-diff cycle → Disposition B (blocked label, no replies, no removal)', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
     // No changes after CLI runs
@@ -2323,10 +2323,8 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       ['agent:in-progress'],
     );
 
-    // #1130 FR-007/FR-008: the `blocked:stuck-feedback-loop` dead-end is
-    // retired — the trigger persists (waiting-for retained above) with no
-    // dead-end label.
-    expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+    // #883: blocked:stuck-feedback-loop is added
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       42,

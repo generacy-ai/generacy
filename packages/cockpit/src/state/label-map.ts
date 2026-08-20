@@ -11,8 +11,8 @@ const TERMINAL_COMPLETED_LABELS = new Set<string>([
 ]);
 
 // #943: enumerated blocked:* → error tier. Any blocked:* name not in this set
-// (including any future addition) still falls through to the waiting prefix
-// branch below — safe default.
+// (including blocked:stuck-feedback-loop from #883 and any future addition)
+// still falls through to the waiting prefix branch below — safe default.
 const ERROR_BLOCKED_LABELS: ReadonlySet<string> = new Set([
   'blocked:stuck-merge-conflicts',
   'blocked:stuck-validate-fix',

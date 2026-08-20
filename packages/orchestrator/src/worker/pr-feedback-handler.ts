@@ -28,6 +28,23 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 import { warnIfEffortDropped } from './effort-mechanism-check.js';
 
 /**
+ * Label added by the legacy (flag-OFF) handler when the no-diff / push-failed
+ * fix cycle cannot advance (#883). This is the LEGACY-PATH bounded stop.
+ *
+ * #1130 caveat: the shared review/remediate loop's `on-remediation-limit` gate
+ * (`waiting-for:remediation-limit`) supersedes this label — but ONLY on the
+ * flag-ON path, which routes `address-pr-feedback` through the phase loop and
+ * never reaches this handler. `reviewPhaseEnabled` defaults to false
+ * (worker/config.ts), so in the default deployment this legacy handler is still
+ * the live fix path. Retiring this label outright would remove the ONLY stop
+ * for the flag-OFF no-diff/push-failed cycle and reintroduce the #883 runaway
+ * (the monitor's Case A re-enqueues on every poll while the trusted threads stay
+ * live, and no `remediation-limit` gate is ever applied on this path). Keep the
+ * label here as the legacy-path stop; the flag-ON path uses the gate instead.
+ */
+const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
+
+/**
  * #1070 labels for the CLI-timeout disposition split. See FR-002/002a/003 and
  * `contracts/label-vocabulary.md`.
  *   - `blocked:fixer-timeout` — retry-eligible (timeout + partial push, budget remaining).
@@ -123,7 +140,7 @@ interface PerThreadOutcome {
  *  4. Fetch fresh unresolved review threads (trust-filtered per-thread)
  *  5. Build a structured prompt with all trusted unresolved comments
  *  6. Spawn Claude CLI to address the feedback
- *  7. Commit + push. If CLI failed OR no diff → Disposition B (persist trigger)
+ *  7. Commit + push. If CLI failed OR no diff → Disposition B (blocked)
  *  8. Otherwise: for each trusted unresolved thread — post one reply targeting
  *     the root comment, then call `resolveReviewThread(thread.id)`
  *  9. Strict-decrease success test — R = count of resolves that succeeded.
@@ -131,12 +148,18 @@ interface PerThreadOutcome {
  *     warn once per persistently-failed thread, then remove the
  *     `waiting-for:address-pr-feedback` label
  *
- * Disposition B (#1130): the divergent `blocked:stuck-feedback-loop` dead-end
- * is retired (FR-007/FR-008). A no-diff / push-failed cycle now simply persists
- * the trigger — `waiting-for:address-pr-feedback` stays in place — and applies
- * no label. Exhaustion is owned by the shared review/remediate loop's
- * `on-remediation-limit` gate (`waiting-for:remediation-limit`), reachable only
- * when `reviewPhaseEnabled` routes `address-pr-feedback` through the phase loop.
+ * Disposition B (#883): a no-diff / push-failed cycle adds
+ * `blocked:stuck-feedback-loop` and leaves `waiting-for:address-pr-feedback` in
+ * place. The monitor's pre-enqueue `blocked:*` check keeps the loop paused until
+ * an operator removes the label — the bounded stop that ends the runaway
+ * "reply-only" cycle (5→10→20→…) observed on christrudelpw/sniplink#4.
+ *
+ * #1130 caveat: this label is the stop for the LEGACY (flag-OFF) path only. When
+ * `reviewPhaseEnabled` is set, `address-pr-feedback` is routed through the shared
+ * review/remediate phase loop (never this handler), and exhaustion there lands on
+ * the `on-remediation-limit` gate (`waiting-for:remediation-limit`) instead. The
+ * two paths have two distinct bounded stops; retiring this one would leave the
+ * default deployment's fix cycle unbounded (see BLOCKED_STUCK_FEEDBACK_LOOP_LABEL).
  */
 export class PrFeedbackHandler {
   private readonly repoCheckout: RepoCheckout;
@@ -542,7 +565,7 @@ export class PrFeedbackHandler {
       //   B4 (timedOut && !hasChanges)             → blocked:fixer-timeout-no-progress (terminal)
       //   B5 (timedOut && hasChanges && retryAttempt < 2)   → blocked:fixer-timeout (retry-eligible)
       //   B6 (timedOut && hasChanges && retryAttempt >= 2)  → blocked:fixer-timeout-repeat (terminal)
-      //   B1/B2/B3 (!timedOut && (!success || !hasChanges)) → persist trigger, no dead-end label (#1130)
+      //   B1/B2/B3 (!timedOut && (!success || !hasChanges)) → blocked:stuck-feedback-loop (legacy-path stop)
       //
       // FR-012: `waiting-for:address-pr-feedback` MUST stay in place across
       // every branch — the shared `finally` clears only `agent:in-progress`.
@@ -590,12 +613,17 @@ export class PrFeedbackHandler {
 
       // B1/B2/B3 — non-timeout failure paths (clean non-zero exit or no diff).
       //
-      // #1130 FR-007/FR-008: the divergent `blocked:stuck-feedback-loop`
-      // dead-end is retired. Exhaustion is now owned by the shared
-      // review/remediate loop's `on-remediation-limit` gate
-      // (`waiting-for:remediation-limit`), not this legacy path. Here we simply
-      // persist the trigger — `waiting-for:address-pr-feedback` stays (FR-012),
-      // so the monitor re-evaluates on its next poll — and apply no label.
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path MUST keep a bounded
+      // stop. Retiring `blocked:stuck-feedback-loop` in favor of the
+      // `on-remediation-limit` gate only closes the runaway on the flag-ON path
+      // (which routes through the shared phase loop, not this handler);
+      // `reviewPhaseEnabled` defaults to false, so this handler is the live fix
+      // path in the default deployment. Without a stop here the monitor's Case A
+      // re-enqueues every poll while the trusted threads stay live, the CLI
+      // produces no diff again, and the #883 runaway returns. So on the legacy
+      // path a no-diff / push-failed cycle re-applies `blocked:stuck-feedback-loop`
+      // and leaves `waiting-for:address-pr-feedback` in place (FR-012); the
+      // monitor's `blocked:*` skip pauses re-enqueue until an operator removes it.
       //
       // #1073 FR-003: gate still guarded by `!cliSelfCommitted` — a cycle in
       // which the CLI committed and pushed its own work is a success, not a
@@ -610,8 +638,9 @@ export class PrFeedbackHandler {
             disposition: !success ? 'push-failed' : 'no-diff',
             reason: !success ? 'cli-did-not-complete' : 'no-diff',
           },
-          'no-diff / push-failed cycle — persisting trigger (no dead-end label)',
+          'no-diff / push-failed cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition (legacy-path stop)',
         );
+        await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
         return;
       }
 
@@ -1203,6 +1232,34 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
       return sha.length > 0 ? sha : null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Add the `blocked:stuck-feedback-loop` label to signal that the legacy
+   * (flag-OFF) fix cycle cannot advance and must not be re-enqueued until the
+   * operator removes the label. Non-fatal on failure — leaving
+   * `waiting-for:address-pr-feedback` in place is the fallback safety net
+   * (#883). See BLOCKED_STUCK_FEEDBACK_LOOP_LABEL for why this stays on the
+   * legacy path (#1130 / PR #1145 review).
+   */
+  private async addBlockedStuckFeedbackLoopLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_STUCK_FEEDBACK_LOOP_LABEL]);
+      this.logger.info(
+        { issueNumber, label: BLOCKED_STUCK_FEEDBACK_LOOP_LABEL },
+        'Added blocked:stuck-feedback-loop label',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_STUCK_FEEDBACK_LOOP_LABEL },
+        'Failed to add blocked:stuck-feedback-loop label — non-fatal, waiting-for label persists',
+      );
     }
   }
 

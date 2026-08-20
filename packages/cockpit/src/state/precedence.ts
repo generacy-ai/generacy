@@ -24,9 +24,14 @@ export const TIER_RANK: Record<CockpitState, number> = {
  * listed here (see classifier).
  */
 export const WAITING_PIPELINE_ORDER: string[] = [
+  // #883: `blocked:stuck-feedback-loop` sorts ahead of every waiting-for:*
+  // gate so cockpit surfaces the pause first when both labels coexist. Retained
+  // as the legacy (flag-OFF) PR-feedback bounded stop (#1130 / PR #1145 review).
+  'blocked:stuck-feedback-loop',
   // #1070 D-3: terminal `blocked:fixer-timeout-*` labels outrank
   // `waiting-for:address-pr-feedback` — a terminal blocked state is the
-  // more-specific and more-urgent thing to surface.
+  // more-specific and more-urgent thing to surface (mirrors the
+  // `blocked:stuck-feedback-loop` precedent above).
   'blocked:fixer-timeout-no-progress',
   'blocked:fixer-timeout-repeat',
   // #1073 D-4: terminal `blocked:resolve-failed` (CLI-self-commit or

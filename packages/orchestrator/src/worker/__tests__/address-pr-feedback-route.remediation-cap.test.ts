@@ -2,8 +2,11 @@
 //
 // T017 (SC-005): an external-feedback route that keeps producing
 // `changes-required` (the stubbed `remediate` never fixes the diff) must land on
-// the `waiting-for:remediation-limit` gate — NEVER the retired
-// `blocked:stuck-feedback-loop` dead-end (FR-005/FR-007/FR-008). The route is
+// the `waiting-for:remediation-limit` gate. On this flag-ON route the legacy
+// `blocked:stuck-feedback-loop` dead-end is NEVER applied — the phase loop's
+// remediation-limit gate is this path's bounded stop (FR-005/FR-007/FR-008).
+// (The legacy label remains the bounded stop on the flag-OFF handler path;
+// see PR #1145 review.) The route is
 // seeded exactly as the thin adapter seeds it: a `SeedAwareReviewExecutor` wraps
 // the real executor, round 1 consumes the seed, and convergence rounds delegate.
 //
@@ -223,7 +226,8 @@ describe('#1130 external-feedback route — remediation cap & budget reset', () 
       (c: unknown[]) => c[1] as string,
     );
     expect(gateLabels).toEqual(['waiting-for:remediation-limit']);
-    // The retired dead-end is never applied anywhere on this route (FR-007/FR-008).
+    // The legacy dead-end label is never applied on this flag-ON route — the
+    // remediation-limit gate is this path's bounded stop (FR-007/FR-008).
     expect(gateLabels).not.toContain('blocked:stuck-feedback-loop');
 
     expect(readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!.round).toBe(2);

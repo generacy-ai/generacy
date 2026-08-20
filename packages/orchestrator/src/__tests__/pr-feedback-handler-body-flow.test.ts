@@ -283,7 +283,7 @@ describe('PrFeedbackHandler body-flow (#1047)', () => {
     expect(prompt).toContain(findingText);
   });
 
-  it('SC-003: body-only finding, fixer produces no commits → Disposition B fires (persist trigger, no dead-end label #1130); NOT Disposition A', async () => {
+  it('SC-003: body-only finding, fixer produces no commits → Disposition B fires (blocked-stuck-feedback-loop); NOT Disposition A', async () => {
     (mockGitHub.listReviews as ReturnType<typeof vi.fn>).mockResolvedValue([
       makeReview({
         id: 500,
@@ -309,9 +309,8 @@ describe('PrFeedbackHandler body-flow (#1047)', () => {
     expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
     expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
     // Disposition B (no-commit) fires, not Disposition C — no commit means the
-    // gate never runs. #1130 FR-007/FR-008: Disposition B persists the trigger
-    // and applies no dead-end label.
-    expect(mockGitHub.addLabels).not.toHaveBeenCalledWith(
+    // gate never runs. Both are "blocked" but distinct labels.
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
       'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
     );
   });

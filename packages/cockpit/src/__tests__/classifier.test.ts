@@ -86,8 +86,8 @@ describe('classify()', () => {
 
     it('keeps pipeline order through full chain', () => {
       const ordered = [...WAITING_PIPELINE_ORDER].reverse();
-      // The first entry of WAITING_PIPELINE_ORDER is the highest priority, so
-      // it wins regardless of input order.
+      // #883: blocked:stuck-feedback-loop is now the first entry in
+      // WAITING_PIPELINE_ORDER (highest priority), so it wins.
       expect(classify(ordered).sourceLabel).toBe(WAITING_PIPELINE_ORDER[0]);
     });
 
@@ -190,17 +190,35 @@ describe('classify()', () => {
     });
   });
 
-  describe('#1130: retired blocked:stuck-feedback-loop no longer classifies', () => {
-    it('blocked:stuck-feedback-loop is retired → not in WORKFLOW_LABELS → unknown', () => {
-      // #1130 FR-007/FR-008: the dead-end label was removed from the
-      // vocabulary. It no longer resolves to any curated tier.
-      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('unknown');
+  describe('#883: blocked:* labels classify as waiting', () => {
+    it('blocked:stuck-feedback-loop alone classifies as waiting', () => {
+      expect(classify(['blocked:stuck-feedback-loop'])).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
     });
 
-    it('surviving blocked:* label still classifies as waiting via prefix', () => {
-      // Generic coverage: a live blocked:* label (blocked:resolve-failed, #1073)
-      // inherits the waiting tier via the prefix rule in classifyByPattern.
-      expect(mapLabelToState('blocked:resolve-failed')).toBe('waiting');
+    it('arbitrary blocked:* prefix sibling also classifies as waiting', () => {
+      // Future-proofing: any `blocked:*` label inherits the waiting tier via
+      // the prefix rule in classifyByPattern, even if it is not in
+      // WORKFLOW_LABELS. mapLabelToState returns unknown for such names but
+      // the prefix branch will classify them as waiting when they reach it.
+      // Note: the classifier consumes mapLabelToState, so for this
+      // future-proofing to bite we simply verify the prefix branch below.
+      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('waiting');
+    });
+
+    it('blocked:stuck-feedback-loop wins tie-break over waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:stuck-feedback-loop']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('LABEL_TO_STATE includes blocked:stuck-feedback-loop → waiting', () => {
+      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('waiting');
     });
   });
 
@@ -218,6 +236,28 @@ describe('classify()', () => {
       expect(classify(['waiting-for:implementation-review'])).toEqual({
         state: 'waiting',
         sourceLabel: 'waiting-for:implementation-review',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop outranks address-pr-feedback (Q1 invariant preserved)', () => {
+      expect(
+        classify(['blocked:stuck-feedback-loop', 'waiting-for:address-pr-feedback']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop outranks both address-pr-feedback and implementation-review', () => {
+      expect(
+        classify([
+          'blocked:stuck-feedback-loop',
+          'waiting-for:address-pr-feedback',
+          'waiting-for:implementation-review',
+        ]),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
       });
     });
 
@@ -265,6 +305,19 @@ describe('classify()', () => {
         sourceLabel: 'waiting-for:address-pr-feedback',
       });
     });
+
+    it('blocked:stuck-feedback-loop still outranks the new #1070 terminal labels (preservation of #883)', () => {
+      expect(
+        classify([
+          'blocked:stuck-feedback-loop',
+          'blocked:fixer-timeout-no-progress',
+          'waiting-for:address-pr-feedback',
+        ]),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
   });
 
   describe('#1073: blocked:resolve-failed precedence in the waiting tier', () => {
@@ -290,6 +343,13 @@ describe('classify()', () => {
       expect(classify(['blocked:stuck-validate-fix'])).toEqual({
         state: 'error',
         sourceLabel: 'blocked:stuck-validate-fix',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop stays in waiting (preserves #883)', () => {
+      expect(classify(['blocked:stuck-feedback-loop'])).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
       });
     });
 
@@ -375,6 +435,10 @@ describe('classify()', () => {
 
     it('T005: mapLabelToState(blocked:stuck-validate-fix) is error', () => {
       expect(mapLabelToState('blocked:stuck-validate-fix')).toBe('error');
+    });
+
+    it('T005: mapLabelToState(blocked:stuck-feedback-loop) is waiting', () => {
+      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('waiting');
     });
 
     it('T006: every ERROR_PIPELINE_ORDER entry classifies as error under mapLabelToState', () => {
