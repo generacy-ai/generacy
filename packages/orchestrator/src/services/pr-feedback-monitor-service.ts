@@ -15,6 +15,7 @@ import type {
 } from '../types/monitor.js';
 import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import { PrLinker, type PrLinkInput, type PrLinkResult } from '../worker/pr-linker.js';
+import { commentCarriesEngineAuthoredReviewMarker } from '../worker/review-poster.js';
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
@@ -262,6 +263,19 @@ export class PrFeedbackMonitorService {
       const skips: typeof untrustedCommentSkips = [];
 
       for (const thread of unresolvedThreads) {
+        // #1130 / FR-010 (Q4→A): exclude a thread from the trusted-unresolved
+        // count when — and only when — *every* comment in it is engine-authored
+        // (marker-matched). The engine posts its own review threads (#1125),
+        // and those must never re-trigger this monitor into the remediate loop.
+        // Any single external comment keeps the thread live. The match rule
+        // (column-0, case-sensitive, `> `-quoted excluded) is owned by
+        // `commentCarriesEngineAuthoredReviewMarker` — pass the raw body (FR-001).
+        const allEngineAuthored =
+          thread.comments.length > 0 &&
+          thread.comments.every((c) => commentCarriesEngineAuthoredReviewMarker(c.body));
+        if (allEngineAuthored) {
+          continue;
+        }
         let threadHasTrusted = false;
         for (const c of thread.comments) {
           const decision = isTrustedCommentAuthor(c, 'pr-feedback', {

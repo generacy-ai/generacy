@@ -1699,6 +1699,112 @@ describe('PrFeedbackMonitorService', () => {
   });
 
   // ==========================================================================
+  // #1130 / FR-010 (Q4→A): engine-authored review-thread exclusion.
+  // A thread is dropped from the trusted-unresolved count iff EVERY comment
+  // carries an engine-authored marker. The match rule (column-0, case-sensitive,
+  // `> `-quoted excluded) is owned by commentCarriesEngineAuthoredReviewMarker.
+  // ==========================================================================
+
+  describe('#1130 engine-authored thread exclusion', () => {
+    it('SC-001/SC-003: an all-engine-authored thread contributes 0 and does NOT enqueue', async () => {
+      // Single unresolved thread whose only comment is an engine review body.
+      // Author is a trusted MEMBER — proving exclusion is by MARKER, not trust:
+      // the thread would enqueue on trust alone, but the marker drops it.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 501,
+          isResolved: false,
+          comments: [
+            {
+              id: 501,
+              body: '<!-- generacy-engine-review round=1 -->\n\nEngine finding text',
+              author: 'cluster-bot',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('FR-010: a mixed thread with ≥1 external trusted comment still enqueues', async () => {
+      // Thread carries an engine-authored comment AND an external MEMBER
+      // comment → not all-engine → stays live → enqueues as today.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 601,
+          isResolved: false,
+          comments: [
+            {
+              id: 601,
+              body: '<!-- generacy-finding:abc123 -->\n\nEngine inline finding',
+              author: 'cluster-bot',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+            {
+              id: 602,
+              body: 'Human reviewer: please also handle the null case',
+              author: 'maintainer',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'address-pr-feedback',
+          metadata: expect.objectContaining({ reviewThreadIds: [601] }),
+        }),
+      );
+    });
+
+    it('FR-001: a `> `-quoted marker does NOT exclude the thread (helper rule)', async () => {
+      // A human quoting an engine review body while replying is NOT an
+      // engine-authored comment — the quoted marker is not at column 0.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 701,
+          isResolved: false,
+          comments: [
+            {
+              id: 701,
+              body: '> <!-- generacy-finding:abc123 -->\n\nI disagree with this finding',
+              author: 'maintainer',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'address-pr-feedback',
+          metadata: expect.objectContaining({ reviewThreadIds: [701] }),
+        }),
+      );
+    });
+  });
+
+  // ==========================================================================
   // #879: SC-001..SC-005 + FR-009 + FR-010 regressions
   // ==========================================================================
 
