@@ -58,14 +58,17 @@ Part of epic generacy-ai/generacy#1120 (engine-native review & remediate phases)
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | On successful resolution, `MergeConflictHandler` re-arms into a `review` phase scoped to the resolution diff, not the interrupted phase carried in `metadata.phase`. | P1 | Replaces the `startPhase: metadata.phase` re-arm at `merge-conflict-handler.ts:659`. |
-| FR-002 | The scoped review's diff window is the merge commit vs. the pre-merge branch tip; unrelated branch files are excluded from its input. | P1 | Resolution-scoped, not whole-branch. |
+| FR-001 | On successful resolution, `MergeConflictHandler` re-arms into a `review` phase scoped to the resolution diff, not the interrupted phase carried in `metadata.phase`. | P1 | Replaces the `startPhase: metadata.phase` re-arm at `merge-conflict-handler.ts:659`. Gated by `reviewPhaseEnabled` (see FR-009). |
+| FR-002 | The scoped review's diff window is the merge commit vs. the pre-merge branch tip; unrelated branch files are excluded from its input. Bounding is via an explicit `base..head` diff-window input threaded into the review executor/charter (new parameter). | P1 | Resolution-scoped, not whole-branch. [Q1→A] Requires extending `review-executor.ts` + `review-charter.ts` to accept an explicit window; existing charter reviews the whole PR diff. |
 | FR-003 | A clean scoped review proceeds toward `validate` through the normal phase flow. | P1 | Normal forward flow, not a shortcut to ready/merge. |
 | FR-004 | A scoped review that surfaces findings enters the `remediate` loop. | P1 | Reuses the epic's review→remediate machinery. |
 | FR-005 | No success path reaches merge readiness without `validate` having run on the post-merge state. | P1 | Semantic-conflict safety invariant. |
-| FR-006 | The pause-context sidecar (`ResolveMergeConflictsMetadata`) carries the resolution base SHA and head SHA the scoped review consumes. | P1 | Extends the sidecar shape at `monitor.ts:67`. |
+| FR-006 | The pause-context sidecar (`ResolveMergeConflictsMetadata`) carries the resolution base SHA and head SHA. The SHAs reach the review executor by extending the `re-armed` `HandlerOutcome` (and the dispatcher enqueue → `WorkerContext`) with a `reviewScope: { baseSha, headSha }` field alongside `startPhase` — not by teaching the executor to read the sidecar (the sidecar is cleared immediately after re-arm). | P1 | Extends the sidecar shape at `monitor.ts:67` and the re-arm outcome. [Q2→B] |
 | FR-007 | Resolution itself spawns no build or test process. | P1 | Preserves the current git-state-only success predicate. |
 | FR-008 | The failure disposition (`blocked:stuck-merge-conflicts`, preserved `waiting-for:merge-conflicts`, evidence emission) is unchanged. | P1 | No change to the blocked path. |
+| FR-009 | The scoped-review re-arm is gated by `reviewPhaseEnabled`. When the flag is OFF, the handler falls back to today's `startPhase: metadata.phase` re-arm (no `review` target). | P1 | [Q3→B] Prevents the `Unknown starting phase: review` crash when `review` is filtered out of the effective sequence. |
+| FR-010 | If the resolution base and/or head SHA cannot be determined at success time, the handler re-arms `review` anyway with a whole-branch diff fallback (no fail-loud). `metadata.phase` remains required — for both the existing fail-loud guard and the FR-009 flag-off fallback. | P1 | [Q4→C] Avoids stranding a genuinely-resolved, pushed PR under `blocked:stuck-merge-conflicts`. Whole-branch review is a safe superset that still honors FR-005. |
+| FR-011 | If the resolution diff window is empty (e.g. an "ours"/"theirs" pick with no net change), the engine short-circuits: it skips the review executor and proceeds directly to `validate`. The charter's "empty diff = blocking finding" rule does not apply to the resolution-scoped case. | P1 | [Q5→A] `validate` still runs on the post-merge state, so FR-005 holds. |
 
 ## Success Criteria
 
@@ -80,8 +83,11 @@ Part of epic generacy-ai/generacy#1120 (engine-native review & remediate phases)
 ## Assumptions
 
 - The `review` and `remediate` phases and their re-arm/entry seams from epic #1120 (P1–P2: #1121/#1124/#1125/#1126) are available for the handler to target. If they have not landed on the base branch, the implement phase dependency-blocks until they merge.
-- "Scoped review" reuses the epic's review executor with a diff window bounded to the resolution base/head SHAs — it does not introduce a new review mechanism.
-- The resolution base SHA (pre-merge branch tip) and head SHA (merge commit) are both known at handler success time (the handler creates the merge commit), so populating the sidecar is a local operation.
+- "Scoped review" reuses the epic's review executor but requires extending it (and the charter) with an explicit `base..head` diff-window parameter — the current executor/charter reviews the whole PR diff and has no window input [Q1→A]. This is a minimal capability extension, not a new review mechanism.
+- The resolution base SHA (pre-merge branch tip) and head SHA (merge commit) are both known at handler success time (the handler creates the merge commit), so populating the sidecar is a local operation. When they cannot be determined, the handler falls back to a whole-branch `review` re-arm rather than failing loud [Q4→C].
+- The base/head SHAs travel from handler success to the review executor via a `reviewScope: { baseSha, headSha }` field on the `re-armed` outcome / `WorkerContext`, not via the sidecar (which is cleared immediately after re-arm) [Q2→B].
+- The scoped-review re-arm is gated by `reviewPhaseEnabled`; with the flag OFF the handler retains today's `startPhase: metadata.phase` re-arm, so `metadata.phase` stays a hard requirement [Q3→B, Q4→C].
+- An empty resolution diff window short-circuits the review executor and proceeds directly to `validate` [Q5→A].
 - `validate` continues to run against the post-merge tree in the normal forward flow; this issue does not alter validate's own behavior.
 
 ## Out of Scope
