@@ -21,7 +21,9 @@ the resolved validate command?
 - C: Opt-in substitution only — never rewrite; targeting happens only when a
   sentinel/flag or explicit targeted command is configured.
 
-**Answer**: *Pending*
+**Answer**: B — Rewrite the built-in default validate command only into the pnpm
+`...[origin/<base>]` filter form; leave an operator-set custom `validateCommand`
+fully untouched. Guards may override to full/plain/skip/test-scoped.
 
 ### Q2: Targeted-validate workflow scope
 **Context**: Determines blast radius. Defaults must stay byte-identical when the
@@ -35,7 +37,8 @@ default?
 - B: `speckit-bugfix` only; other workflows keep the plain resolved command unless
   explicitly configured.
 
-**Answer**: *Pending*
+**Answer**: B — `speckit-bugfix` only; other workflows keep the plain resolved
+command unless explicitly configured.
 
 ### Q3: Guard file globs
 **Context**: FR-004/006/007 need exact globs for the classifier. Classification is
@@ -52,7 +55,10 @@ docs-only / test-only)?
 - C: Broader docs/CI — Standard plus docs `**/*.mdx` + `*.txt`; root-config also
   `.changeset/config.json`, `turbo.json`, root-level `*.config.{ts,js}`.
 
-**Answer**: *Pending*
+**Answer**: A — Standard guard set: root-config (force full) = `pnpm-lock.yaml`,
+`package-lock.json`, `yarn.lock`, `pnpm-workspace.yaml`, root `tsconfig*.json`,
+`.github/workflows/**`; docs-only = `**/*.md` + `docs/**`; test-only =
+`**/*.{test,spec}.{ts,tsx,js,jsx}` + `**/__tests__/**`.
 
 ### Q4: `failThenPass` base-ref execution + empty-set behavior
 **Context**: FR-011. Spec explicitly defers the empty-set behavior to /clarify.
@@ -71,7 +77,9 @@ ref, and what happens when there are NO new/changed test files?
 - D: Worktree + empty warns — worktree at base; empty set → warn but do NOT block
   validate.
 
-**Answer**: *Pending*
+**Answer**: A — Run base-ref tests in a detached git worktree at the base ref
+(branch checkout untouched); new/changed test files = diff set filtered to test
+globs; empty set → non-blocking no-op.
 
 ### Q5: Per-workflow agents keying for bugfix review
 **Context**: FR-012 states "no new agent-resolution code path introduced here."

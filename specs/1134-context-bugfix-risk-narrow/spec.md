@@ -113,8 +113,10 @@ and requires them to fail there and pass on the branch,
 - [ ] When on, the engine runs the new/changed test files against the base ref and
       against the branch, and treats "passes on base" (no failure to prove) or
       "fails on branch" as a validate failure with actionable evidence.
-- [ ] When there are no new/changed test files, the check is a no-op that does not
-      block (behavior for this case is confirmed in /clarify).
+- [ ] When there are no new/changed test files, the check is a non-blocking no-op
+      (clarified: empty set does not block validate).
+- [ ] The base-ref run executes in a detached git worktree at the base ref, leaving
+      the branch checkout untouched (clarified).
 
 ### US4: Bugfix review runs on a cheaper model/effort (P3)
 
@@ -137,14 +139,14 @@ config,
 | FR-001 | The `verification` charter renders the four bugfix questions (root cause vs symptom; regression test fails-without-fix; scope creep; regression risk in changed lines). | P1 | Extends `buildReviewCharter` verification branch. |
 | FR-002 | The `standard` charter output is unchanged. | P1 | Regression guard. |
 | FR-003 | A pure, deterministic diff-classification function categorizes a changed-file set into one of: full-fallback, single-package-plain, docs-only-skip-tests, test-only, targeted. | P1 | New module; no I/O. |
-| FR-004 | Root-level config touch (lockfile, base/root tsconfig, `pnpm-workspace.yaml`, CI workflow files) forces the full-fallback classification. | P1 | Guard. Exact file globs finalized in /clarify. |
+| FR-004 | Root-level config touch (lockfile, base/root tsconfig, `pnpm-workspace.yaml`, CI workflow files) forces the full-fallback classification. | P1 | Guard. Globs (clarified): `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `pnpm-workspace.yaml`, root `tsconfig*.json`, `.github/workflows/**`. |
 | FR-005 | Single-package (non-workspace) repos always use the plain configured command. | P1 | Guard. |
-| FR-006 | Docs-only diffs skip tests. | P1 | Guard. |
-| FR-007 | Test-only diffs run only the changed test files. | P1 | Guard. |
-| FR-008 | The targeted command uses the pnpm `...[origin/<base>]` filter form scoped to changed packages + dependents. | P1 | `<base>` from resolved base branch. |
-| FR-009 | Diff classification runs *before* the validate command executes and determines the effective command; the decision is logged. | P1 | Wired into the validate phase path. |
+| FR-006 | Docs-only diffs skip tests. | P1 | Guard. Docs globs (clarified): `**/*.md` + `docs/**`. |
+| FR-007 | Test-only diffs run only the changed test files. | P1 | Guard. Test globs (clarified): `**/*.{test,spec}.{ts,tsx,js,jsx}` + `**/__tests__/**`. |
+| FR-008 | The targeted command uses the pnpm `...[origin/<base>]` filter form scoped to changed packages + dependents. | P1 | `<base>` from resolved base branch. Engine rewrites the **built-in default** validate command only; an operator-set custom `validateCommand` is left untouched (clarified). |
+| FR-009 | Diff classification runs *before* the validate command executes and determines the effective command; the decision is logged. | P1 | Wired into the validate phase path. Targeted validate + classification apply to `speckit-bugfix` only by default (clarified); other workflows keep the plain resolved command unless explicitly configured. |
 | FR-010 | `failThenPass` is off by default and, when off, leaves validate behavior byte-identical. | P1 | Preserves existing runs. |
-| FR-011 | When `failThenPass` is on, the engine runs new/changed test files on the base ref and on the branch and fails validate unless base-fails and branch-passes. | P2 | Evidence surfaced on failure. |
+| FR-011 | When `failThenPass` is on, the engine runs new/changed test files on the base ref and on the branch and fails validate unless base-fails and branch-passes. | P2 | Evidence surfaced on failure. Base-ref run uses a detached git worktree (branch checkout untouched); new/changed test files = diff set filtered to test globs; empty set → non-blocking no-op (clarified). |
 | FR-012 | Bugfix review resolves provider/model/effort via the existing per-workflow agents keying without a new resolution path. | P3 | Composition, not new code. |
 | FR-013 | Targeted validate + `failThenPass` are additive: with defaults unchanged, existing feature/bugfix runs behave as before. | P1 | Safety invariant. |
 
@@ -165,30 +167,35 @@ config,
 - pnpm is the workspace/package manager for the targeted-filter form; non-pnpm or
   non-workspace repos fall through to the plain configured command (FR-005).
 - Diff classification operates on the same changed-file set the engine can already
-  derive from the PR/branch diff; the exact git range is confirmed in /clarify.
+  derive from the PR/branch diff, computed against the resolved base branch
+  (`origin/<base>`) — the same base used by the `...[origin/<base>]` filter and the
+  `failThenPass` base-ref worktree (clarified).
 - `verification` charter question wording lives in the charter builder as static
   text (no per-run templating beyond existing fields).
 - `speckit-bugfix` default `blockingSeverity: critical` is already the global
   `DEFAULT_REVIEW` default; no per-workflow default override is required by this
   issue.
 
-## Open Questions (for /clarify)
+## Open Questions (for /clarify) — RESOLVED
 
-- **Q1**: Is the targeted command *rewritten by the engine* from the resolved base
-  command based on classification, or does the engine only substitute when a
-  sentinel/opt-in targeted command is configured? (Design implies engine-side
-  rewrite before validate; confirm the exact mechanism and precedence vs. an
-  explicitly-configured `validateCommand`.)
-- **Q2**: Exact file-glob definitions for each guard category (lockfile names,
-  "base tsconfig" path, docs globs, test-file globs).
-- **Q3**: `failThenPass` scope — how "new/changed test files" are identified, how
-  they are executed against the base ref (worktree vs. checkout), and behavior when
-  the set is empty (no-op vs. warn).
-- **Q4**: Whether targeted validate applies to all workflows or only
-  `speckit-bugfix` by default.
-- **Q5**: Exact shape/precedence for per-workflow agents keying of bugfix review
-  (relative to the phase-keyed `orchestrator.agents` from #1095) — or confirm this
-  is fully delivered by #1122 and only exercised here.
+All clarifications answered in `clarifications.md` (Batch 1). Resolutions:
+
+- **Q1 — Targeted validate mechanism** → **B**: The engine rewrites the *built-in
+  default* validate command only, into the pnpm `...[origin/<base>]` filter form.
+  An operator-set custom `validateCommand` is left fully untouched. Guards may
+  override the result to full/plain/skip/test-scoped.
+- **Q2 — Guard file globs** → **A** (standard set): root-config force-full =
+  `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `pnpm-workspace.yaml`, root
+  `tsconfig*.json`, `.github/workflows/**`; docs-only = `**/*.md` + `docs/**`;
+  test-only = `**/*.{test,spec}.{ts,tsx,js,jsx}` + `**/__tests__/**`.
+- **Q3 — `failThenPass` execution + empty-set** → **A**: base-ref run in a detached
+  git worktree (branch checkout untouched); new/changed test files = diff set
+  filtered to test globs; empty set → non-blocking no-op.
+- **Q4 — Workflow scope** → **B**: `speckit-bugfix` only by default; other workflows
+  keep the plain resolved command unless explicitly configured.
+- **Q5 — Per-workflow agents keying** → **A**: fully delivered upstream by
+  #1095/#1122 via `resolveAgentForPhase`; this issue only exercises it (no new
+  resolution path), demonstrated by the SC-003/US4 harness run.
 
 ## Out of Scope
 
