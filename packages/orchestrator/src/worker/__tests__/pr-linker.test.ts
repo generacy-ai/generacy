@@ -573,7 +573,7 @@ Fixes #99
         ['enhancement + good first issue', [{ name: 'enhancement' }, { name: 'good first issue' }]],
         ['phase:specify alone (Q4=B)', [{ name: 'phase:specify' }]],
         ['multiple phase:* only', [{ name: 'phase:implement' }, { name: 'phase:validate' }]],
-        ['blocked:* alone is not evidence', [{ name: 'blocked:stuck-feedback-loop' }]],
+        ['blocked:* alone is not evidence', [{ name: 'blocked:resolve-failed' }]],
         ['prefix match must be exact — agent-based-labeling rejected', [{ name: 'agent-based-labeling' }]],
         ['no colon on workflow — workflows rejected', [{ name: 'workflows' }]],
       ];

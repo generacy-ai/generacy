@@ -27,7 +27,21 @@ import { RepoCheckout } from './repo-checkout.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
 import { warnIfEffortDropped } from './effort-mechanism-check.js';
 
-/** Label added by the handler when the fix cycle cannot advance (#883). */
+/**
+ * Label added by the legacy (flag-OFF) handler when the no-diff / push-failed
+ * fix cycle cannot advance (#883). This is the LEGACY-PATH bounded stop.
+ *
+ * #1130 caveat: the shared review/remediate loop's `on-remediation-limit` gate
+ * (`waiting-for:remediation-limit`) supersedes this label — but ONLY on the
+ * flag-ON path, which routes `address-pr-feedback` through the phase loop and
+ * never reaches this handler. `reviewPhaseEnabled` defaults to false
+ * (worker/config.ts), so in the default deployment this legacy handler is still
+ * the live fix path. Retiring this label outright would remove the ONLY stop
+ * for the flag-OFF no-diff/push-failed cycle and reintroduce the #883 runaway
+ * (the monitor's Case A re-enqueues on every poll while the trusted threads stay
+ * live, and no `remediation-limit` gate is ever applied on this path). Keep the
+ * label here as the legacy-path stop; the flag-ON path uses the gate instead.
+ */
 const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
 
 /**
@@ -44,8 +58,8 @@ const BLOCKED_FIXER_TIMEOUT_REPEAT_LABEL = 'blocked:fixer-timeout-repeat';
 /**
  * #1073 FR-013: terminal disposition — CLI-self-commit cycle where the branch
  * HEAD advanced (code changes landed) but the reply/resolve batch had zero
- * successes. Distinct from `blocked:stuck-feedback-loop` because the remedy
- * differs: check GitHub API responses, not fixer transcripts.
+ * successes. The remedy is to check GitHub API responses, not fixer
+ * transcripts.
  */
 const BLOCKED_RESOLVE_FAILED_LABEL = 'blocked:resolve-failed';
 
@@ -130,15 +144,22 @@ interface PerThreadOutcome {
  *  8. Otherwise: for each trusted unresolved thread — post one reply targeting
  *     the root comment, then call `resolveReviewThread(thread.id)`
  *  9. Strict-decrease success test — R = count of resolves that succeeded.
- *     R === 0 → Disposition B (blocked); R ≥ 1 → Disposition A (success):
+ *     R === 0 → `blocked:resolve-failed`; R ≥ 1 → Disposition A (success):
  *     warn once per persistently-failed thread, then remove the
  *     `waiting-for:address-pr-feedback` label
  *
- * Disposition B (blocked, #883): add `blocked:stuck-feedback-loop` and leave
- * `waiting-for:address-pr-feedback` in place. The monitor's pre-enqueue
- * `blocked:*` check keeps the loop paused until an operator removes the
- * label. This ends the runaway "reply-only" cycle (5→10→20→…) observed on
- * christrudelpw/sniplink#4.
+ * Disposition B (#883): a no-diff / push-failed cycle adds
+ * `blocked:stuck-feedback-loop` and leaves `waiting-for:address-pr-feedback` in
+ * place. The monitor's pre-enqueue `blocked:*` check keeps the loop paused until
+ * an operator removes the label — the bounded stop that ends the runaway
+ * "reply-only" cycle (5→10→20→…) observed on christrudelpw/sniplink#4.
+ *
+ * #1130 caveat: this label is the stop for the LEGACY (flag-OFF) path only. When
+ * `reviewPhaseEnabled` is set, `address-pr-feedback` is routed through the shared
+ * review/remediate phase loop (never this handler), and exhaustion there lands on
+ * the `on-remediation-limit` gate (`waiting-for:remediation-limit`) instead. The
+ * two paths have two distinct bounded stops; retiring this one would leave the
+ * default deployment's fix cycle unbounded (see BLOCKED_STUCK_FEEDBACK_LOOP_LABEL).
  */
 export class PrFeedbackHandler {
   private readonly repoCheckout: RepoCheckout;
@@ -544,7 +565,7 @@ export class PrFeedbackHandler {
       //   B4 (timedOut && !hasChanges)             → blocked:fixer-timeout-no-progress (terminal)
       //   B5 (timedOut && hasChanges && retryAttempt < 2)   → blocked:fixer-timeout (retry-eligible)
       //   B6 (timedOut && hasChanges && retryAttempt >= 2)  → blocked:fixer-timeout-repeat (terminal)
-      //   B1/B2/B3 (!timedOut && (!success || !hasChanges)) → blocked:stuck-feedback-loop (unchanged)
+      //   B1/B2/B3 (!timedOut && (!success || !hasChanges)) → blocked:stuck-feedback-loop (legacy-path stop)
       //
       // FR-012: `waiting-for:address-pr-feedback` MUST stay in place across
       // every branch — the shared `finally` clears only `agent:in-progress`.
@@ -591,9 +612,20 @@ export class PrFeedbackHandler {
       }
 
       // B1/B2/B3 — non-timeout failure paths (clean non-zero exit or no diff).
-      // Behavior preserved from pre-#1070 (FR-004): `blocked:stuck-feedback-loop`.
       //
-      // #1073 FR-003: gate now guarded by `!cliSelfCommitted` — a cycle in
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path MUST keep a bounded
+      // stop. Retiring `blocked:stuck-feedback-loop` in favor of the
+      // `on-remediation-limit` gate only closes the runaway on the flag-ON path
+      // (which routes through the shared phase loop, not this handler);
+      // `reviewPhaseEnabled` defaults to false, so this handler is the live fix
+      // path in the default deployment. Without a stop here the monitor's Case A
+      // re-enqueues every poll while the trusted threads stay live, the CLI
+      // produces no diff again, and the #883 runaway returns. So on the legacy
+      // path a no-diff / push-failed cycle re-applies `blocked:stuck-feedback-loop`
+      // and leaves `waiting-for:address-pr-feedback` in place (FR-012); the
+      // monitor's `blocked:*` skip pauses re-enqueue until an operator removes it.
+      //
+      // #1073 FR-003: gate still guarded by `!cliSelfCommitted` — a cycle in
       // which the CLI committed and pushed its own work is a success, not a
       // no-diff wedge, even though the handler's own commit step finds nothing
       // to do (spec § Observed).
@@ -606,7 +638,7 @@ export class PrFeedbackHandler {
             disposition: !success ? 'push-failed' : 'no-diff',
             reason: !success ? 'cli-did-not-complete' : 'no-diff',
           },
-          'no-diff / push-failed cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition',
+          'no-diff / push-failed cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition (legacy-path stop)',
         );
         await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
         return;
@@ -672,9 +704,8 @@ export class PrFeedbackHandler {
         // #1073 FR-013: reaching 7b implies `cliSelfCommitted || (success &&
         // hasChanges)` (see guard at ~line 599), so the branch HEAD has
         // necessarily advanced by construction — a zero-resolve cycle here is
-        // always a GitHub-API-shaped failure, never a fixer wedge. Narrows the
-        // meaning of `blocked:stuck-feedback-loop`: it no longer originates
-        // from the zero-resolve path (PR #1075 review).
+        // always a GitHub-API-shaped failure, never a fixer wedge (PR #1075
+        // review).
         this.logger.warn(
           { prNumber, issueNumber, outcomes, preFixSha, postFixSha: postCliSha },
           'commit pushed but resolve batch had zero successes — entering blocked:resolve-failed disposition (#1073)',
@@ -1205,10 +1236,12 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
   }
 
   /**
-   * Add the `blocked:stuck-feedback-loop` label to signal that the fix cycle
-   * cannot advance and must not be re-enqueued until the operator removes the
-   * label. Non-fatal on failure — leaving `waiting-for:*` in place is the
-   * fallback safety net (#883).
+   * Add the `blocked:stuck-feedback-loop` label to signal that the legacy
+   * (flag-OFF) fix cycle cannot advance and must not be re-enqueued until the
+   * operator removes the label. Non-fatal on failure — leaving
+   * `waiting-for:address-pr-feedback` in place is the fallback safety net
+   * (#883). See BLOCKED_STUCK_FEEDBACK_LOOP_LABEL for why this stays on the
+   * legacy path (#1130 / PR #1145 review).
    */
   private async addBlockedStuckFeedbackLoopLabel(
     github: GitHubClient,
@@ -1305,9 +1338,9 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
   /**
    * #1073 FR-013: terminal disposition — CLI-self-commit or handler-commit
    * cycle where the branch HEAD advanced but the reply/resolve batch had zero
-   * successes. Distinct from `blocked:stuck-feedback-loop`: the code is fine;
-   * the GitHub side didn't take. Operator remediation is to check thread state
-   * and GitHub API responses, not fixer transcripts.
+   * successes. The code is fine; the GitHub side didn't take. Operator
+   * remediation is to check thread state and GitHub API responses, not fixer
+   * transcripts.
    */
   private async addBlockedResolveFailedLabel(
     github: GitHubClient,

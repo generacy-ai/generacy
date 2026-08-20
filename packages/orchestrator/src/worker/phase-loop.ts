@@ -6,8 +6,8 @@ import { defaultRemoteBranchExists } from './repo-checkout.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
+import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
-import type { ReviewExecutor } from './review-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
@@ -145,7 +145,7 @@ export interface PhaseLoopDeps {
    * and recomputes the verdict engine-side). Absent → the loop falls back to the
    * #1121 inert stub.
    */
-  reviewExecutor?: ReviewExecutor;
+  reviewExecutor?: ReviewExecutorLike;
   /**
    * #1128: Real remediate-phase executor. When injected, the off-sequence
    * `remediate` seam runs it (spawns the CLI with the remediation charter and

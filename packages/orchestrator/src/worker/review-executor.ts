@@ -46,7 +46,18 @@ export interface ReviewExecutorDeps {
   logger: Logger;
 }
 
-export class ReviewExecutor {
+/**
+ * The review-phase executor contract the phase loop depends on. Lets the loop
+ * accept either the real {@link ReviewExecutor} or the #1130
+ * `SeedAwareReviewExecutor` wrapper in the `deps.reviewExecutor` slot without a
+ * nominal-class coupling (private fields make the concrete classes
+ * non-interchangeable under structural typing).
+ */
+export interface ReviewExecutorLike {
+  execute(context: WorkerContext): Promise<PhaseResult>;
+}
+
+export class ReviewExecutor implements ReviewExecutorLike {
   private readonly agentLauncher: AgentLauncher;
   private readonly config: WorkerConfig;
   private readonly settings: OrchestratorSettings | null | undefined;
