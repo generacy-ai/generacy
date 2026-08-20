@@ -124,6 +124,25 @@ export interface ReviewIntent {
 }
 
 /**
+ * Intent for an engine-driven remediation pass (#1128). Mirrors `ReviewIntent`:
+ * the engine builds the remediation charter in-process and passes it as the
+ * prompt, routing through the same launcher plumbing as `review`.
+ */
+export interface RemediateIntent {
+  kind: 'remediate';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full charter prompt (built by RemediateExecutor via buildRemediateCharter) */
+  prompt: string;
+  /** Resolved provider from `resolveAgentForPhase(..., 'implement')`. */
+  provider?: string;
+  /** Resolved model override, provider-interpreted. */
+  model?: string;
+  /** Resolved reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
+}
+
+/**
  * Intent for a single interactive conversation turn.
  */
 export interface ConversationTurnIntent {
@@ -162,6 +181,7 @@ export type LaunchIntent =
   | ValidateFixIntent
   | MergeConflictIntent
   | ReviewIntent
+  | RemediateIntent
   | ConversationTurnIntent
   | InvokeIntent;
 

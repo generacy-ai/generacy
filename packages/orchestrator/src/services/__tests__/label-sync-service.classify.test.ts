@@ -52,7 +52,7 @@ describe('LabelSyncService per-label classification (#916 FR-004)', () => {
   it('one 422 among many: success=false with actual cause, other labels still recorded', async () => {
     const client = makeClient();
     client.createLabel.mockImplementation(async (_owner: string, _repo: string, name: string) => {
-      if (name === 'blocked:stuck-feedback-loop') {
+      if (name === 'blocked:resolve-failed') {
         throw new Error(
           'HTTP 422: Validation Failed\ndescription is too long (maximum is 100 characters)',
         );
@@ -70,7 +70,7 @@ describe('LabelSyncService per-label classification (#916 FR-004)', () => {
     // Verify the error-level log carried the classified cause + status code.
     expect(mockLogger.error).toHaveBeenCalledTimes(1);
     const errorCall = mockLogger.error.mock.calls[0]![0] as string;
-    expect(errorCall).toContain('blocked:stuck-feedback-loop');
+    expect(errorCall).toContain('blocked:resolve-failed');
     expect(errorCall).toContain('description is too long');
     expect(errorCall).toContain('HTTP 422');
   });

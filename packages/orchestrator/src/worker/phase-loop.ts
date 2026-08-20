@@ -6,8 +6,9 @@ import { defaultRemoteBranchExists } from './repo-checkout.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
-import type { ReviewExecutor } from './review-executor.js';
-import { readReviewArtifactSync } from './review-artifact.js';
+import type { ReviewExecutorLike } from './review-executor.js';
+import type { RemediateExecutor } from './remediate-executor.js';
+import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -17,7 +18,7 @@ import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
 import type { ReviewPoster } from './review-poster.js';
 import type { FindingsArtifact } from './review-findings-artifact.js';
-import type { ValidateFixHandler } from './validate-fix-handler.js';
+import type { ValidateFixHandler, ValidateFailureEvidence } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 import { PENDING_ANSWER_LITERAL } from '@generacy-ai/workflow-engine';
@@ -95,9 +96,12 @@ export interface PhaseLoopDeps {
    */
   baseMergeRunner?: BaseMergeRunner;
   /**
-   * Bounded validate-fix cycle handler (#892). Invoked on the validate failure
-   * path ONLY when `context.resumeReason === 'base-advance'` — first-time reds
-   * continue to route through `LabelManager.onError('validate')` (D7).
+   * Thin remediate adapter (#1129). Dispatched ONLY at the off-sequence
+   * remediate seam when a validate failure routed into the review→remediate
+   * loop (`pendingValidateRemediation` set) — never on the validate failure
+   * path itself and no longer coupled to `resumeReason === 'base-advance'`.
+   * The phase loop owns escalation now; the adapter is best-effort (its throw
+   * is logged and the loop continues).
    */
   validateFixHandler?: ValidateFixHandler;
   /**
@@ -141,7 +145,14 @@ export interface PhaseLoopDeps {
    * and recomputes the verdict engine-side). Absent → the loop falls back to the
    * #1121 inert stub.
    */
-  reviewExecutor?: ReviewExecutor;
+  reviewExecutor?: ReviewExecutorLike;
+  /**
+   * #1128: Real remediate-phase executor. When injected, the off-sequence
+   * `remediate` seam runs it (spawns the CLI with the remediation charter and
+   * bumps `remediationCount`). Absent → the seam falls back to the #1121 inert
+   * stub.
+   */
+  remediateExecutor?: RemediateExecutor;
   /**
    * #1124: Resolved orchestrator settings, threaded so the review gate can read
    * per-workflow `maxRemediations`. Optional — the `on-remediation-limit` gate
@@ -293,6 +304,15 @@ export class PhaseLoop {
     // remediate→review backtrack so re-review rounds (≥ 2) resolve prior
     // threads and dedupe by the round body marker.
     let reviewRound = 1;
+
+    // #1129: block-local one-shot control for a validate-origin remediation.
+    // When a failing `validate` routes into the review→remediate loop, it
+    // synthesizes a changes-required artifact and stashes the fix inputs here.
+    // The remediate seam consumes and clears it (dispatching the thin adapter
+    // instead of the review-origin stub). Not persisted, not on WorkerContext.
+    let pendingValidateRemediation:
+      | undefined
+      | { evidence: ValidateFailureEvidence; prNumber: number; baseBranch: string } = undefined;
 
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
@@ -519,22 +539,32 @@ export class PhaseLoop {
       let result: PhaseResult;
       try {
         if (phase === 'review') {
-          // #1126: delta-scoped verification-pass convergence, run FIRST as
-          // best-effort scaffolding. The reviewer's findings do not yet flow
-          // into it (the ReviewArtifact→FindingsArtifact bridge is deferred to
-          // #1127), so no addressed ids / new findings are consumed here — this
-          // wiring loads, advances, and persists the findings artifact
-          // (incrementing the round + advancing lastReviewedSha) and builds the
-          // verification prompt. Best-effort: any failure degrades to a fresh
-          // full review (FR-009 posture), never blocks the phase.
-          await this.runReviewConvergence(context, config, deps);
-          // #1124: real review executor when injected — spawns the CLI with an
-          // in-process charter, has the agent write a findings sidecar, and
-          // recomputes the verdict engine-side. Falls back to the #1121 inert
-          // stub when no executor is wired (feature-flag-off / non-worker paths).
-          result = deps.reviewExecutor
-            ? await deps.reviewExecutor.execute(context)
-            : this.runStubPhase(phase);
+          if (pendingValidateRemediation) {
+            // #1129: validate-origin backtrack. The synthesized artifact is
+            // already changes-required for this round, so skip both the
+            // convergence scaffolding and the real executor — running either
+            // would overwrite the synthesized finding or re-scope prematurely.
+            // A synthetic success leaves the artifact intact for the
+            // `on-remediation-limit` gate + the remediateTrigger seam below.
+            result = this.runStubPhase('review');
+          } else {
+            // #1126: delta-scoped verification-pass convergence, run FIRST as
+            // best-effort scaffolding. The reviewer's findings do not yet flow
+            // into it (the ReviewArtifact→FindingsArtifact bridge is deferred to
+            // #1127), so no addressed ids / new findings are consumed here — this
+            // wiring loads, advances, and persists the findings artifact
+            // (incrementing the round + advancing lastReviewedSha) and builds the
+            // verification prompt. Best-effort: any failure degrades to a fresh
+            // full review (FR-009 posture), never blocks the phase.
+            await this.runReviewConvergence(context, config, deps);
+            // #1124: real review executor when injected — spawns the CLI with an
+            // in-process charter, has the agent write a findings sidecar, and
+            // recomputes the verdict engine-side. Falls back to the #1121 inert
+            // stub when no executor is wired (feature-flag-off / non-worker paths).
+            result = deps.reviewExecutor
+              ? await deps.reviewExecutor.execute(context)
+              : this.runStubPhase(phase);
+          }
         } else if (phase === 'remediate') {
           // #1121: inert stub executor. Real remediate logic lands in a later
           // epic issue. Returns a synthetic success without spawning the CLI.
@@ -838,18 +868,97 @@ export class PhaseLoop {
           }
         }
 
-        // #892: bounded validate-fix cycle. Fires ONLY on the resume-driven
-        // validate re-run (structurally gated on WorkerContext.resumeReason
-        // === 'base-advance'). First-time reds continue through onError.
-        if (
-          phase === 'validate'
-          && context.resumeReason === 'base-advance'
-          && deps.validateFixHandler
-          && prManager.getPrNumber() !== undefined
-        ) {
-          try {
-            // resolveBaseBranch returns `origin/<name>`; strip prefix to
-            // match the base-branch string used in listOpenPullRequests results.
+        // #1129: route a failing `validate` into the engine-native
+        // review→remediate loop, superseding the legacy #892 base-advance
+        // one-shot. Guarded on the review flag; the `base-advance` precondition
+        // is gone (FR-004). The thin adapter is dispatched only at the remediate
+        // seam (T006) — never here — giving structural mutual exclusion (FR-008).
+        // Defensive fallback: if no linked PR exists, drop through to the
+        // pre-existing escalation rather than routing (contracts Step 3).
+        if (phase === 'validate' && config.reviewPhaseEnabled === true) {
+          const prNumber = prManager.getPrNumber();
+          if (prNumber !== undefined) {
+            const validateEvidence: ValidateFailureEvidence = {
+              stdout: result.capturedStdout ?? '',
+              // #890 renamed `error.stderr` → `error.output` (merged tail);
+              // fall back to it when the raw stderr buffer is empty.
+              stderr: result.capturedStderr ?? result.error?.output ?? '',
+              exitCode: result.exitCode,
+            };
+
+            // Fingerprint-first escalation (FR-006 / FR-009). The loop owns
+            // escalation now: never apply `failed:validate` (no onError), only
+            // post the alert and, at the repeat threshold, the `-repeated`
+            // backstop that terminates. Build CommandExitEvidence for the
+            // fingerprint + alert (the helpers key on it, not on the raw
+            // stdout/stderr/exitCode triple).
+            const cmdEvidence = this.buildErrorEvidence(
+              config.validateCommand,
+              result,
+              DEFAULT_VALIDATE_TIMEOUT_MS,
+              undefined,
+            );
+            const fingerprint = computeFailureFingerprint({
+              phase: 'validate',
+              evidence: cmdEvidence,
+            });
+            const priorCount = deps.failureFingerprintTracker
+              ? await deps.failureFingerprintTracker.countPriorOccurrences(
+                  context.item.owner,
+                  context.item.repo,
+                  context.item.issueNumber,
+                  fingerprint,
+                )
+              : 0;
+            const occurrence = priorCount + 1;
+            await stageCommentManager.postFailureAlert({
+              stage,
+              runId,
+              phase: 'validate',
+              evidence: cmdEvidence,
+              fingerprint,
+              occurrence,
+            });
+
+            if (occurrence >= REPEAT_FAILURE_THRESHOLD) {
+              this.logger.warn(
+                { phase, fingerprint, occurrence, issue: context.item.issueNumber },
+                'Repeat-identical validate failure — escalating with failed:validate-repeated',
+              );
+              await labelManager.onRepeatedError('validate');
+              return { results, completed: false, lastPhase: 'validate', gateHit: false };
+            }
+
+            // Synthesize a changes-required review artifact and backtrack into
+            // the review phase (contracts Step 2, data-model Entity 1). The
+            // real review executor re-scopes on re-entry; the remediate seam
+            // consumes `pendingValidateRemediation` and dispatches the adapter.
+            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+            const prior = await readReviewArtifact(context.checkoutPath, workflowId);
+            const round = (prior?.round ?? 0) + 1;
+            const head = await context.github.getCurrentCommitSha();
+            const finding: ReviewFinding = {
+              severity: 'critical',
+              file: config.validateCommand,
+              title: 'validate phase failed',
+              detail: boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+              round,
+              status: 'open',
+            };
+            await writeReviewArtifact(context.checkoutPath, workflowId, {
+              findings: [...(prior?.findings ?? []), finding],
+              verdict: 'changes-required',
+              round,
+              lastReviewedCommitSha: head,
+              // #1128 compose: carry the accumulated remediation budget forward
+              // across the #1129 validate-routing re-synthesis so the
+              // `on-remediation-limit` cap still bounds the loop (a validate
+              // failure must not silently reset the budget).
+              remediationCount: prior?.remediationCount ?? 0,
+            });
+
+            // resolveBaseBranch returns `origin/<name>`; strip prefix to match
+            // the base-branch string used in listOpenPullRequests results.
             const baseRefFull = await resolveBaseBranch(
               context.github,
               prManager,
@@ -861,25 +970,14 @@ export class PhaseLoop {
             const baseBranch = baseRefFull.startsWith('origin/')
               ? baseRefFull.slice('origin/'.length)
               : baseRefFull;
-            await deps.validateFixHandler.handle(
-              context.item,
-              context.checkoutPath,
-              { prNumber: prManager.getPrNumber()!, baseBranch },
-              {
-                stdout: result.capturedStdout ?? '',
-                // #890 renamed `error.stderr` → `error.output` (merged tail);
-                // fall back to it when the raw stderr buffer is empty.
-                stderr: result.capturedStderr ?? result.error?.output ?? '',
-                exitCode: result.exitCode,
-              },
-              context.github,
-              context.item.workflowName,
+
+            pendingValidateRemediation = { evidence: validateEvidence, prNumber, baseBranch };
+            this.logger.info(
+              { phase, prNumber, round, occurrence, fingerprint },
+              '#1129: routing validate failure into review→remediate loop',
             );
-          } catch (err) {
-            this.logger.warn(
-              { err: String(err), phase, issueNumber: context.item.issueNumber },
-              'validate-fix handler threw — falling through to standard onError path',
-            );
+            i = sequence.indexOf('review') - 1;
+            continue;
           }
         }
 
@@ -1120,14 +1218,14 @@ export class PhaseLoop {
             );
           }
         } else if (gate.condition === 'on-remediation-limit') {
-          // #1124 FR-011: cap the review↔remediate loop. Because `remediate` is
-          // still a stub, an unchanged diff would re-produce `changes-required`
-          // forever; when the persisted review round reaches `maxRemediations`
+          // #1128 FR-007/FR-008: cap the review↔remediate loop on the explicit
+          // `remediationCount` (bumped once per remediate execution), NOT the
+          // monotonic review `round`. When the count reaches `maxRemediations`
           // AND the verdict is still `changes-required`, pause for the operator
-          // instead of looping. The verdict check is load-bearing: a `clean`
-          // review that happens to land on the cap round is NOT exhaustion —
-          // the remediate seam would correctly proceed to `validate`, so this
-          // gate must not pre-empt it. Runs BEFORE the seam below.
+          // instead of looping. The verdict check is load-bearing (Q5=A): a
+          // `clean` review that happens to land on the cap round is NOT
+          // exhaustion — the remediate seam would correctly proceed to
+          // `validate`, so this gate must not pre-empt it. Runs BEFORE the seam.
           const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
           const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
           const { maxRemediations } = resolveWorkflowOverrides(
@@ -1137,13 +1235,53 @@ export class PhaseLoop {
           );
           gateActive =
             artifact !== null &&
-            artifact.round >= maxRemediations &&
+            artifact.remediationCount >= maxRemediations &&
             artifact.verdict === 'changes-required';
           if (gateActive) {
             this.logger.info(
-              { phase, gateLabel: gate.gateLabel, round: artifact?.round, maxRemediations },
+              {
+                phase,
+                gateLabel: gate.gateLabel,
+                remediationCount: artifact?.remediationCount,
+                maxRemediations,
+              },
               'Gate condition "on-remediation-limit" active — remediation cap reached',
             );
+            // #1128 FR-008: post the gate body listing the open findings the
+            // operator must triage, plus how to resume with a fresh budget.
+            // Best-effort — a comment failure must not fail the pause (SC-005:
+            // no blocked:* label is ever applied on this path).
+            try {
+              const openFindings = (artifact?.findings ?? []).filter(
+                (f) => f.status === 'open',
+              );
+              const findingLines = openFindings.map((f) => {
+                const location = f.line !== undefined ? `${f.file}:${f.line}` : f.file;
+                return `- ${location} — ${f.title}`;
+              });
+              const body = [
+                '## Remediation limit reached',
+                '',
+                `The review↔remediate loop hit its cap of ${maxRemediations} remediation attempts and the latest review still requires changes. The following findings remain open:`,
+                '',
+                ...(findingLines.length > 0
+                  ? findingLines
+                  : ['- _(No open findings were recorded.)_']),
+                '',
+                'Add `completed:remediation-limit` to resume with a fresh remediation budget.',
+              ].join('\n');
+              await context.github.addIssueComment(
+                context.item.owner,
+                context.item.repo,
+                context.item.issueNumber,
+                body,
+              );
+            } catch (error) {
+              this.logger.warn(
+                { error: String(error), phase, gateLabel: gate.gateLabel },
+                'Failed to post remediation-limit gate body — continuing to pause',
+              );
+            }
           }
         }
 
@@ -1165,6 +1303,25 @@ export class PhaseLoop {
             { phase, gateLabel: gate.gateLabel, completedLabel },
             'Gate already satisfied — skipping pause',
           );
+          // #1128 FR-009/FR-010: the remediation-limit gate is special — resuming
+          // it must reset the counter to 0 AND remove the operator label so the
+          // gate re-arms for a fresh budget. GATE_MAPPING['remediation-limit']
+          // stays { phase: 'review', resumeFrom: 'review' } unchanged. Every
+          // other gate keeps today's plain skip-and-continue.
+          if (completedLabel === 'completed:remediation-limit') {
+            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+            await resetRemediationCount(context.checkoutPath, workflowId);
+            await context.github.removeLabels(
+              context.item.owner,
+              context.item.repo,
+              context.item.issueNumber,
+              ['completed:remediation-limit'],
+            );
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, workflowId },
+              'Remediation-limit gate resumed — counter reset and gate re-armed',
+            );
+          }
           continue;
         }
 
@@ -1274,7 +1431,61 @@ export class PhaseLoop {
         // ready (never demotes a human-marked-ready PR).
         await prManager.convertToDraftIfEngineMarkedReady(context.linkedPRs);
         await labelManager.onPhaseStart('remediate');
-        const remediateResult = this.runStubPhase('remediate');
+        // #1129 + #1128 composed: the remediate seam serves two origins,
+        // mutually exclusive by `pendingValidateRemediation`.
+        let remediateResult: PhaseResult;
+        if (pendingValidateRemediation) {
+          // #1129: validate-origin remediation — dispatch the thin adapter at
+          // this seam (the sole invocation site — FR-008 structural mutual
+          // exclusion) instead of the inert review-origin stub. The adapter
+          // makes the fix and self-commits + pushes on this branch, so the
+          // #1128 generic executor + commit/push cycle below is skipped (running
+          // both would double-remediate the same synthesized finding). T007: the
+          // adapter is best-effort — a throw is logged and the loop continues;
+          // the subsequent delta-scoped review + validate re-run (or the
+          // fingerprint backstop on a repeated-identical failure) is the
+          // terminal safety net.
+          const { evidence, prNumber, baseBranch } = pendingValidateRemediation;
+          try {
+            await deps.validateFixHandler?.handle(
+              context.item,
+              context.checkoutPath,
+              { prNumber, baseBranch },
+              evidence,
+              context.github,
+              context.item.workflowName,
+            );
+          } catch (err) {
+            this.logger.warn(
+              { err: String(err), phase, issueNumber: context.item.issueNumber },
+              '#1129: validate-fix adapter threw — continuing (review + validate re-run is the safety net)',
+            );
+          }
+          pendingValidateRemediation = undefined;
+          remediateResult = this.runStubPhase('remediate');
+        } else {
+          // #1128: real remediation executor (defaults undefined → stub, keeping
+          // the seam production-inert until wired). The executor makes the code
+          // changes; verification happens on the next review round.
+          remediateResult = deps.remediateExecutor
+            ? await deps.remediateExecutor.execute(context)
+            : this.runStubPhase('remediate');
+          // #1128 FR-003: commit + push the remediation changes (and whatever
+          // partial work a timed-out CLI left behind) before re-reviewing.
+          const remediateCommitOutcome = await prManager.commitPushAndEnsurePr('remediate');
+          // #1051: a refused push MUST abort the loop — never open a duplicate PR
+          // or advance on a phantom no-op.
+          if (remediateCommitOutcome.pushRefused) {
+            this.logger.warn(
+              { phase: 'remediate', refusal: remediateCommitOutcome.pushRefused },
+              'Phase loop aborted: pre-push guard refused remediate cycle — see prior push-refused log',
+            );
+            return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+          }
+          if (remediateCommitOutcome.prUrl) {
+            context.prUrl = remediateCommitOutcome.prUrl;
+          }
+        }
         await labelManager.onPhaseComplete('remediate');
         results.push(remediateResult);
         outputCapture.clear();

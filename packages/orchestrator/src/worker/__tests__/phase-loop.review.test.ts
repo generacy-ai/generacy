@@ -22,7 +22,12 @@ import { getPhaseSequence } from '../types.js';
 import type { WorkerConfig } from '../config.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { ReviewExecutor } from '../review-executor.js';
-import { writeReviewArtifact, readReviewArtifactSync } from '../review-artifact.js';
+import type { RemediateExecutor } from '../remediate-executor.js';
+import {
+  writeReviewArtifact,
+  readReviewArtifactSync,
+  bumpRemediationCount,
+} from '../review-artifact.js';
 
 const mockLogger = {
   info: () => {},
@@ -144,6 +149,9 @@ function makeReviewExecutor(
   const execute = vi.fn(async () => {
     round += 1;
     const verdict = verdictFor(round);
+    // Preserve `remediationCount` (bumped by the remediate executor, #1128) —
+    // the review executor only owns `round`/`verdict`/`findings`.
+    const prior = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     await writeReviewArtifact(checkoutPath, WORKFLOW_ID, {
       findings:
         verdict === 'changes-required'
@@ -152,10 +160,27 @@ function makeReviewExecutor(
       verdict,
       round,
       lastReviewedCommitSha: `sha${round}`,
+      remediationCount: prior?.remediationCount ?? 0,
     });
     return makeSuccessResult('review');
   });
   return { executor: { execute } as unknown as ReviewExecutor, execute };
+}
+
+/**
+ * Remediate executor double (#1128): bumps `remediationCount` by exactly one on
+ * every invocation, mirroring the real executor's every-return-path increment
+ * (Q4=A). The `on-remediation-limit` gate keys on this counter, so the cap tests
+ * need a bumping double — the still-stubbed `remediate` never touches the sidecar.
+ */
+function makeRemediateExecutor(
+  checkoutPath: string,
+): { executor: RemediateExecutor; execute: ReturnType<typeof vi.fn> } {
+  const execute = vi.fn(async () => {
+    await bumpRemediationCount(checkoutPath, WORKFLOW_ID);
+    return makeSuccessResult('remediate');
+  });
+  return { executor: { execute } as unknown as RemediateExecutor, execute };
 }
 
 /** Production-shaped synchronous trigger: reads the sidecar verdict. */
@@ -220,10 +245,13 @@ describe('#1124 — review executor verdict seam + remediation cap', () => {
   });
 
   it('FR-011: exhausting maxRemediations fires the on-remediation-limit gate and pauses', async () => {
-    // Always changes-required → the loop would spin forever against the stub
-    // remediate; the cap must break it.
+    // Always changes-required → the loop would spin forever; the counter-based
+    // cap must break it. The remediate executor double bumps `remediationCount`
+    // by one each pass (#1128); the gate keys on that counter, not `round`.
     const { executor } = makeReviewExecutor(checkoutPath, () => 'changes-required');
+    const { executor: remediateExecutor } = makeRemediateExecutor(checkoutPath);
     deps.reviewExecutor = executor;
+    deps.remediateExecutor = remediateExecutor;
     deps.remediateTrigger = remediateTrigger;
     const config = createConfig({ reviewPhaseEnabled: true });
     const settings: OrchestratorSettings = {
@@ -237,24 +265,36 @@ describe('#1124 — review executor verdict seam + remediation cap', () => {
     // Paused, did not complete.
     expect(result.completed).toBe(false);
     expect(result.gateHit).toBe(true);
-    // implement → review(r1) → remediate → review(r2) → gate fires (r2 >= 2).
-    expect(phaseStartOrder(deps)).toEqual(['implement', 'review', 'remediate', 'review']);
+    // implement → review(r1,count0) → remediate(→1) → review(r2,count1) →
+    // remediate(→2) → review(r3,count2) → gate fires (count 2 >= 2).
+    expect(phaseStartOrder(deps)).toEqual([
+      'implement',
+      'review',
+      'remediate',
+      'review',
+      'remediate',
+      'review',
+    ]);
     expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('review', 'waiting-for:remediation-limit');
-    expect(readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!.round).toBe(2);
+    const artifact = readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!;
+    expect(artifact.round).toBe(3);
+    expect(artifact.remediationCount).toBe(2);
   });
 
-  it('FR-011: a `clean` verdict landing on the cap round advances to validate (gate keys on verdict, not round alone)', async () => {
-    // round 1 → changes-required (drives one remediate); round 2 → clean, which
-    // lands exactly on `maxRemediations`. The cap round is reached but the
-    // review is CLEAN — this is NOT exhaustion, so the gate must NOT fire and
-    // the loop must proceed to validate. Regression guard for the on-remediation-limit
-    // gate ignoring the verdict.
+  it('FR-011: a `clean` verdict landing on the cap round advances to validate (gate keys on verdict, not count alone)', async () => {
+    // round 1 → changes-required (drives one remediate, bumping the counter to
+    // maxRemediations=1); round 2 → clean. The counter cap is reached but the
+    // review is CLEAN — this is NOT exhaustion (Q5=A), so the gate must NOT fire
+    // and the loop must proceed to validate. Regression guard for the
+    // on-remediation-limit gate ignoring the verdict conjunct.
     const { executor } = makeReviewExecutor(checkoutPath, (r) => (r === 1 ? 'changes-required' : 'clean'));
+    const { executor: remediateExecutor } = makeRemediateExecutor(checkoutPath);
     deps.reviewExecutor = executor;
+    deps.remediateExecutor = remediateExecutor;
     deps.remediateTrigger = remediateTrigger;
     const config = createConfig({ reviewPhaseEnabled: true });
     const settings: OrchestratorSettings = {
-      workflows: { 'speckit-feature': { maxRemediations: 2 } },
+      workflows: { 'speckit-feature': { maxRemediations: 1 } },
     };
     deps.settings = settings;
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
@@ -263,12 +303,14 @@ describe('#1124 — review executor verdict seam + remediation cap', () => {
 
     // Completed — the clean verdict at the cap round did NOT pause.
     expect(result.completed).toBe(true);
-    // implement → review(r1, changes-required) → remediate → review(r2, clean) → validate.
+    // implement → review(r1, changes-required, count0) → remediate(→1) →
+    // review(r2, clean, count1 === max) → validate.
     expect(phaseStartOrder(deps)).toEqual(['implement', 'review', 'remediate', 'review', 'validate']);
-    // The gate must not have fired despite round === maxRemediations.
+    // The gate must not have fired despite remediationCount === maxRemediations.
     expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
     const artifact = readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!;
     expect(artifact.round).toBe(2);
+    expect(artifact.remediationCount).toBe(1);
     expect(artifact.verdict).toBe('clean');
   });
 

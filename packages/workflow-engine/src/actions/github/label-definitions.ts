@@ -63,6 +63,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:review', color: '0E8A16', description: 'Review phase completed' },
   { name: 'completed:validate', color: '0E8A16', description: 'Validation completed' },
   { name: 'completed:remediate', color: '0E8A16', description: 'Remediation phase completed' },
+  { name: 'completed:remediation-limit', color: '0E8A16', description: 'Remediation-limit gate satisfied by operator' },
   { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
 
