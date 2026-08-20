@@ -14,6 +14,7 @@ export const GATE_MAPPING: Record<string, { phase: WorkflowPhase; resumeFrom: Wo
   'tasks-review':           { phase: 'tasks',      resumeFrom: 'implement' },
   'implementation-review':  { phase: 'implement',  resumeFrom: 'validate' },
   'manual-validation':      { phase: 'validate',   resumeFrom: 'validate' },
+  'remediation-limit':      { phase: 'review',     resumeFrom: 'review' },
 };
 
 /**
