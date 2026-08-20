@@ -44,6 +44,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
   { name: 'waiting-for:merge-conflicts', color: 'FBCA04', description: 'Base-merge conflict. See stage comment for the manual remedy.' },
   { name: 'waiting-for:remediation-limit', color: 'FBCA04', description: 'Review↔remediate cap reached; awaiting operator' },
+  { name: 'waiting-for:ci', color: 'FBCA04', description: 'Waiting for CI to go green on the ready PR (#1133)' },
 
   // Completed labels
   { name: 'completed:spec-review', color: '0E8A16', description: 'Spec review completed' },
@@ -64,6 +65,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:validate', color: '0E8A16', description: 'Validation completed' },
   { name: 'completed:remediate', color: '0E8A16', description: 'Remediation phase completed' },
   { name: 'completed:remediation-limit', color: '0E8A16', description: 'Remediation-limit gate satisfied by operator' },
+  { name: 'completed:ci', color: '0E8A16', description: 'CI merge-readiness gate satisfied (#1133)' },
   { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
 

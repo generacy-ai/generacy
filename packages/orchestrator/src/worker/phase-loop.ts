@@ -9,6 +9,7 @@ import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, 
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
+import { waitForCiGreen } from './ci-merge-readiness.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -351,6 +352,38 @@ export class PhaseLoop {
       { startPhase: context.startPhase, startIndex, totalPhases: sequence.length, runId },
       'Starting phase loop',
     );
+
+    // #1133 FR-006 / research Decision 5: terminal no-op resume. When the
+    // CI-aware merge gate is on, the relocated `implementation-review` gate
+    // fires on `validate` (the terminal phase) and its GATE_MAPPING resumes
+    // at `validate`. A `continue` re-entry that already carries both
+    // `completed:validate` and `completed:implementation-review` therefore has
+    // nothing left to run — re-executing `validate` would be wrong. Short-
+    // circuit to a completed result instead of adding a synthetic terminal
+    // WorkflowPhase member (which would ripple across every exhaustive phase
+    // enum/union/Record site). Flag-OFF never reaches this branch (SC-006).
+    if (
+      config.ciMergeGateEnabled
+      && context.startPhase === 'validate'
+      && context.item.command === 'continue'
+    ) {
+      const resumeIssue = await context.github.getIssue(
+        context.item.owner,
+        context.item.repo,
+        context.item.issueNumber,
+      );
+      const resumeLabels = resumeIssue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+      if (
+        resumeLabels.includes('completed:validate')
+        && resumeLabels.includes('completed:implementation-review')
+      ) {
+        this.logger.info(
+          { startPhase: context.startPhase, runId },
+          '#1133: implementation-review gate already satisfied — terminal no-op resume, skipping phase loop',
+        );
+        return { results, completed: true, lastPhase: 'validate', gateHit: false };
+      }
+    }
 
     // #1051 FR-002/003: phase-start pre-push guard. Closes the "hasChanges:
     // false no-op hole" (research R3, Q5 clarification) — pr-manager's guard
@@ -1230,6 +1263,70 @@ export class PhaseLoop {
         await handler({ ...context, phase, commitResult: { prUrl, hasChanges } });
       }
 
+      // #1133 US3/FR-004: CI-aware merge readiness. On a successful `validate`
+      // with the flag on, mark the PR ready (so repo CI that only triggers on
+      // ready_for_review actually runs) and wait for the head-SHA rollup to
+      // resolve. `green` → let the relocated `on-ci-green` gate fire below;
+      // `not-passed` → readiness is blocked, the gate is NOT raised and the
+      // loop completes normally; `timeout` → pause with `waiting-for:ci` +
+      // `agent:paused` (short-circuit before the gate loop, never busy-loop —
+      // SC-005). Skipped/neutral runs read as pending → they never mark the PR
+      // green, so a skipped-only PR times out into the pause (SC-001).
+      let ciMergeVerdict: 'green' | 'not-passed' | undefined;
+      if (phase === 'validate' && result.success && config.ciMergeGateEnabled) {
+        await prManager.markReadyForReview(context.linkedPRs);
+        let headSha = 'unknown';
+        try {
+          headSha = await context.github.getCurrentCommitSha();
+        } catch (err) {
+          this.logger.warn(
+            { err: String(err), phase },
+            '#1133: getCurrentCommitSha failed before CI readiness wait',
+          );
+        }
+        const outcome = await waitForCiGreen({
+          github: context.github,
+          owner: context.item.owner,
+          repo: context.item.repo,
+          headSha,
+          branch: context.branch ?? '',
+          ciWaitTimeoutMs: config.ciWaitTimeoutMs,
+          logger: this.logger,
+        });
+        this.logger.info(
+          { phase, outcome: outcome.kind, ciWaitTimeoutMs: config.ciWaitTimeoutMs },
+          '#1133: CI merge-readiness wait resolved',
+        );
+        if (outcome.kind === 'timeout') {
+          jobEventEmitter?.('job:paused', {
+            jobId: context.jobId,
+            workflowName: context.item.workflowName,
+            owner: context.item.owner,
+            repo: context.item.repo,
+            issueNumber: context.item.issueNumber,
+            status: 'paused',
+            currentStep: phase,
+            gateLabel: 'waiting-for:ci',
+          });
+          await labelManager.onGateHit(phase, 'waiting-for:ci');
+          result.gateHit = {
+            gateLabel: 'waiting-for:ci',
+            reason: 'CI did not turn green within the merge-readiness timeout',
+          };
+          const ciTs = phaseTimestamps.get(phase);
+          if (ciTs) ciTs.completedAt = new Date().toISOString();
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'in_progress',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+          return { results, completed: false, lastPhase: phase, gateHit: true };
+        }
+        ciMergeVerdict = outcome.kind;
+      }
+
       // 6. Check for review gates (multi-gate: iterate all matching gates for this phase)
       const gates = gateChecker.checkGates(phase, context.item.workflowName, config);
 
@@ -1335,6 +1432,24 @@ export class PhaseLoop {
               );
             }
           }
+        } else if (gate.condition === 'on-ci-green') {
+          // #1133 FR-005: the relocated `implementation-review` gate only fires
+          // when the CI merge-readiness wait above resolved to `green`. A
+          // `not-passed` verdict leaves `ciMergeVerdict === 'not-passed'` and a
+          // `timeout` already short-circuited before this loop, so this branch
+          // never sees it.
+          gateActive = ciMergeVerdict === 'green';
+          if (gateActive) {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel },
+              'Gate condition "on-ci-green" active — CI is green, raising implementation-review',
+            );
+          } else {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, ciMergeVerdict },
+              'Gate condition "on-ci-green" not met — CI not green, gate not raised',
+            );
+          }
         }
 
         if (!gateActive) continue;
@@ -1394,6 +1509,24 @@ export class PhaseLoop {
           currentStep: phase,
           gateLabel: gate.gateLabel,
         });
+
+        // #1133 FR-006 fix: the CI-merge gate is a POST-completion approval gate
+        // — `validate` genuinely finished (tests passed, PR marked ready, CI
+        // green) before it pauses. Grant `completed:validate` now, at the pause,
+        // so (a) cockpit's TERMINAL_COMPLETED_LABELS surface treats the PR as
+        // merge-eligible while it waits for approval and (b) the approve→resume
+        // terminal no-op at loop entry — which keys on both `completed:validate`
+        // AND `completed:implementation-review` — actually fires, so `validate`
+        // does not re-run (re-test / re-mark-ready / re-wait-CI). This is the one
+        // gate where `completed:<phase>` is granted at pause; every other gate
+        // keeps the #958 FR-008 ordering (granted only after all gates skip)
+        // because their phase has NOT completed. Order matters: onPhaseComplete
+        // removes `phase:validate` + adds `completed:validate`, then onGateHit
+        // adds the pause pair — end state is completed:validate +
+        // waiting-for:implementation-review + agent:paused.
+        if (gate.condition === 'on-ci-green') {
+          await labelManager.onPhaseComplete(phase);
+        }
 
         await labelManager.onGateHit(phase, gate.gateLabel);
 

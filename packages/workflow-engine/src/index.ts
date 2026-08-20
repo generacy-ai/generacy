@@ -261,6 +261,9 @@ export {
 // Comment types (re-exported so consumers filtering via isTrustedCommentAuthor
 // don't need to import from the deep types barrel)
 export type {
+  CiConclusion,
+  CiRun,
+  CiVerdict,
   Comment,
   CreateReviewComment,
   CreateReviewInput,
@@ -271,3 +274,4 @@ export type {
   ReviewThread,
   SkippedCommentInfo,
 } from './types/github.js';
+export { aggregateCiVerdict } from './actions/github/client/ci-verdict.js';

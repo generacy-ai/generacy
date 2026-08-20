@@ -13,6 +13,7 @@ import type {
   ReviewThread,
   CreateReviewInput,
   PullRequestFile,
+  CiRun,
 } from '../../../types/github.js';
 
 /**
@@ -509,6 +510,32 @@ export interface GitHubClient {
    * @throws Error on malformed response (non-40-hex).
    */
   getRefHeadSha(owner: string, repo: string, ref: string): Promise<string>;
+
+  /**
+   * Read the CI runs for a commit SHA, for merge-readiness aggregation (#1133).
+   *
+   * Primary path queries the check-runs API; on non-zero exit (the observed
+   * symptom of a token lacking `checks:read`) it falls back to the actions/runs
+   * API filtered to the head SHA. Both paths normalize to `CiRun[]` consumable
+   * by `aggregateCiVerdict` unchanged — the verdict for a given real CI state is
+   * identical across paths (SC-004).
+   *
+   * @param owner - Repository owner.
+   * @param repo - Repository name.
+   * @param headSha - The commit SHA to read CI runs for.
+   * @param branch - Branch name, used by the actions/runs fallback filter.
+   * @returns The normalized runs and which source produced them. Empty result
+   *   (no check-runs and no matching actions/runs) → `{ runs: [], source }`.
+   * @throws Error with stderr when BOTH paths exit non-zero (mirrors
+   *   `getRefHeadSha`). The caller's readiness wait treats a thrown readout as
+   *   transient and continues backoff.
+   */
+  getCiRunsForSha(
+    owner: string,
+    repo: string,
+    headSha: string,
+    branch: string,
+  ): Promise<{ runs: CiRun[]; source: 'check-runs' | 'actions-runs' }>;
 
   /**
    * List the file names touched by a pull request via `gh pr diff --name-only`.
