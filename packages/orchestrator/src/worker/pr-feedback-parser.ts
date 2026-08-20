@@ -29,6 +29,7 @@ import {
 import type { Comment, GitHubClient, Review } from '@generacy-ai/workflow-engine';
 import type { Logger } from './types.js';
 import type { ExternalFeedbackFinding } from './external-feedback-seed.js';
+import { commentCarriesEngineAuthoredReviewMarker } from './review-poster.js';
 
 export interface ParseExternalFeedbackParams {
   github: GitHubClient;
@@ -85,6 +86,16 @@ export async function parseExternalFeedback(
   const unresolvedThreads = threads.filter((t) => !t.isResolved);
   for (const thread of unresolvedThreads) {
     for (const c of thread.comments) {
+      // #1130 finding #4: exclude engine-authored comments regardless of trust.
+      // The engine bot IS a trusted author, so a pure trust filter would re-seed
+      // the engine's own review threads (`<!-- generacy-finding:... -->` /
+      // `<!-- generacy-engine-review ... -->`) into the remediate loop alongside
+      // the genuine human ask — the same double-processing the monitor's FR-010
+      // exclusion prevents. Skipping per-comment (not per-thread) keeps a mixed
+      // thread's human comment(s) while dropping the engine reply(ies) in it.
+      if (commentCarriesEngineAuthoredReviewMarker(c.body)) {
+        continue;
+      }
       const decision = isTrustedCommentAuthor(c, 'pr-feedback', {
         logger,
         ...(botLogin ? { botLogin } : {}),
@@ -118,6 +129,14 @@ export async function parseExternalFeedback(
         r.body.trim().length > 0,
     );
     for (const r of stateAndBodyOK) {
+      // #1130 finding #4: the engine posts its own review submissions carrying
+      // the round marker (`<!-- generacy-engine-review round=<N> -->`). Exclude
+      // them from external-feedback synthesis for the same reason as the inline
+      // path — the engine's review is already the driver of the shared loop, not
+      // external feedback to route back into it.
+      if (commentCarriesEngineAuthoredReviewMarker(r.body)) {
+        continue;
+      }
       const stub: Comment = {
         id: r.id,
         body: r.body,
