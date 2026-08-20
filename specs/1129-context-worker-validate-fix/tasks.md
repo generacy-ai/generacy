@@ -80,12 +80,12 @@
 ## Phase 3: Tests
 <!-- Phase boundary: Complete Phase 1–2 before Phase 3 -->
 
-- [ ] T008 [P] [US3] Create `packages/orchestrator/src/worker/__tests__/validate-fix-handler.adapter.test.ts`
+- [X] T008 [P] [US3] Create `packages/orchestrator/src/worker/__tests__/validate-fix-handler.adapter.test.ts`
       (FR-005 / FR-010): assert the reduced adapter still builds the fix prompt from evidence, commits,
       enumerates sibling-owned files and reverts-on-overlap, and that the one-attempt-per-evidence-hash
       cap and `failed:*` label application are gone.
 
-- [ ] T009 [P] [US1] Create
+- [X] T009 [P] [US1] Create
       `packages/orchestrator/src/worker/__tests__/phase-loop.validate-remediate.integration.test.ts`
       (SC-001 / SC-004 / SC-005): assert a failing `validate` drives
       `remediate → review → validate-green` end-to-end with the phase order observed; assert the
@@ -93,7 +93,7 @@
       (SC-004); assert that with `reviewPhaseEnabled = false` behavior is byte-identical to pre-change
       (SC-005).
 
-- [ ] T010 [P] [US2] Create `packages/orchestrator/src/worker/__tests__/phase-loop.validate-fingerprint.test.ts`
+- [X] T010 [P] [US2] Create `packages/orchestrator/src/worker/__tests__/phase-loop.validate-fingerprint.test.ts`
       (SC-002 / SC-003): reproduce the same validate evidence across remediations and assert fingerprint
       escalation applies `failed:validate-repeated` at `REPEAT_FAILURE_THRESHOLD`; assert `failed:validate`
       is never applied on the routed path (FR-009); assert the legacy handler is invoked at exactly one
@@ -102,12 +102,12 @@
 ## Phase 4: Changeset & verification
 <!-- Phase boundary: Complete Phase 3 before Phase 4 -->
 
-- [ ] T011 [US1] Add `.changeset/1129-validate-remediate-routing.md`: `@generacy-ai/orchestrator`
+- [X] T011 [US1] Add `.changeset/1129-validate-remediate-routing.md`: `@generacy-ai/orchestrator`
       **patch** — internal phase-loop/handler behavior change (`workflow:speckit-bugfix`), no new public
       exports, no new label vocabulary (`waiting-for:remediation-limit` and `failed:validate-repeated`
       already exist). Must be a newly added file per the changeset CI gate.
 
-- [ ] T012 [US1] Run the orchestrator test + typecheck suite (`pnpm --filter @generacy-ai/orchestrator
+- [X] T012 [US1] Run the orchestrator test + typecheck suite (`pnpm --filter @generacy-ai/orchestrator
       test` and build/typecheck) and confirm existing flag-off phase-loop suites still pass unchanged
       (SC-005) alongside T008–T010.
 
