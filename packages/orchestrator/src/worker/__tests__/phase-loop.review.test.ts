@@ -239,6 +239,35 @@ describe('#1124 — review executor verdict seam + remediation cap', () => {
     expect(readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!.round).toBe(2);
   });
 
+  it('FR-011: a `clean` verdict landing on the cap round advances to validate (gate keys on verdict, not round alone)', async () => {
+    // round 1 → changes-required (drives one remediate); round 2 → clean, which
+    // lands exactly on `maxRemediations`. The cap round is reached but the
+    // review is CLEAN — this is NOT exhaustion, so the gate must NOT fire and
+    // the loop must proceed to validate. Regression guard for the on-remediation-limit
+    // gate ignoring the verdict.
+    const { executor } = makeReviewExecutor(checkoutPath, (r) => (r === 1 ? 'changes-required' : 'clean'));
+    deps.reviewExecutor = executor;
+    deps.remediateTrigger = remediateTrigger;
+    const config = createConfig({ reviewPhaseEnabled: true });
+    const settings: OrchestratorSettings = {
+      workflows: { 'speckit-feature': { maxRemediations: 2 } },
+    };
+    deps.settings = settings;
+    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(createMockContext(checkoutPath), config, deps, sequence);
+
+    // Completed — the clean verdict at the cap round did NOT pause.
+    expect(result.completed).toBe(true);
+    // implement → review(r1, changes-required) → remediate → review(r2, clean) → validate.
+    expect(phaseStartOrder(deps)).toEqual(['implement', 'review', 'remediate', 'review', 'validate']);
+    // The gate must not have fired despite round === maxRemediations.
+    expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
+    const artifact = readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!;
+    expect(artifact.round).toBe(2);
+    expect(artifact.verdict).toBe('clean');
+  });
+
   it('SC-005: with reviewPhaseEnabled=false, review is absent and the executor is never invoked', async () => {
     const { executor, execute } = makeReviewExecutor(checkoutPath, () => 'changes-required');
     deps.reviewExecutor = executor;

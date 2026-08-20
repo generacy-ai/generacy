@@ -1081,9 +1081,12 @@ export class PhaseLoop {
         } else if (gate.condition === 'on-remediation-limit') {
           // #1124 FR-011: cap the review↔remediate loop. Because `remediate` is
           // still a stub, an unchanged diff would re-produce `changes-required`
-          // forever; when the persisted review round reaches `maxRemediations`,
-          // pause for the operator instead of looping. Runs BEFORE the seam
-          // below, so it pre-empts another remediate pass.
+          // forever; when the persisted review round reaches `maxRemediations`
+          // AND the verdict is still `changes-required`, pause for the operator
+          // instead of looping. The verdict check is load-bearing: a `clean`
+          // review that happens to land on the cap round is NOT exhaustion —
+          // the remediate seam would correctly proceed to `validate`, so this
+          // gate must not pre-empt it. Runs BEFORE the seam below.
           const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
           const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
           const { maxRemediations } = resolveWorkflowOverrides(
@@ -1091,7 +1094,10 @@ export class PhaseLoop {
             deps.settings,
             context.item.workflowName,
           );
-          gateActive = artifact !== null && artifact.round >= maxRemediations;
+          gateActive =
+            artifact !== null &&
+            artifact.round >= maxRemediations &&
+            artifact.verdict === 'changes-required';
           if (gateActive) {
             this.logger.info(
               { phase, gateLabel: gate.gateLabel, round: artifact?.round, maxRemediations },
