@@ -48,6 +48,10 @@ export const ReviewArtifactSchema = z.object({
   verdict: VerdictSchema,
   round: z.number().int().positive(),
   lastReviewedCommitSha: z.string().min(1),
+  // #1128: caps the review↔remediate loop. Distinct from `round` (monotonic,
+  // #1126). `.default(0)` is load-bearing — #1124 artifacts written before this
+  // deploy lack the field and must still parse rather than returning `null`.
+  remediationCount: z.number().int().nonnegative().default(0),
 });
 
 export type ReviewArtifact = z.infer<typeof ReviewArtifactSchema>;
@@ -87,6 +91,47 @@ export async function writeReviewArtifact(
   const tempPath = `${filePath}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(artifact, null, 2), 'utf-8');
   await fs.rename(tempPath, filePath);
+}
+
+/**
+ * #1128: read → +1 → atomic write of `remediationCount`. Returns the new count.
+ * No-op returning `0` if the artifact is missing/invalid (nothing to bump).
+ * Called once per `remediate` execution on every return path so a perpetually
+ * timing-out attempt still consumes budget (Q4=A / SC-001).
+ */
+export async function bumpRemediationCount(
+  checkoutPath: string,
+  workflowId: string,
+): Promise<number> {
+  const artifact = await readReviewArtifact(checkoutPath, workflowId);
+  if (!artifact) {
+    return 0;
+  }
+  const next = artifact.remediationCount + 1;
+  await writeReviewArtifact(checkoutPath, workflowId, {
+    ...artifact,
+    remediationCount: next,
+  });
+  return next;
+}
+
+/**
+ * #1128: reset `remediationCount` to 0 (operator resume — fresh budget). No-op
+ * if the artifact is missing/invalid. Leaves `round` + `lastReviewedCommitSha`
+ * untouched (INV-3).
+ */
+export async function resetRemediationCount(
+  checkoutPath: string,
+  workflowId: string,
+): Promise<void> {
+  const artifact = await readReviewArtifact(checkoutPath, workflowId);
+  if (!artifact) {
+    return;
+  }
+  await writeReviewArtifact(checkoutPath, workflowId, {
+    ...artifact,
+    remediationCount: 0,
+  });
 }
 
 /**
