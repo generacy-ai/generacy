@@ -69,6 +69,9 @@ describe('runFailThenPass (#1134 T009 / #1150)', () => {
     execFileSpy.mockClear();
     mkdirSpy.mockClear();
     copyFileSpy.mockClear();
+    // Restore the default no-op copy; tests that simulate a missing source
+    // override this and must not leak the override into later tests.
+    copyFileSpy.mockImplementation(async () => undefined);
     handler = () => ({ ok: true });
   });
 
@@ -218,6 +221,112 @@ describe('runFailThenPass (#1134 T009 / #1150)', () => {
     });
 
     expect(copyFileSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('missing branch source (deleted/renamed test) is skipped non-blockingly', async () => {
+    // The deleted path is in the base...HEAD diff but no longer exists in the
+    // branch checkout, so copyFile from it throws ENOENT.
+    copyFileSpy.mockImplementation(async (source: string) => {
+      if (String(source).includes('gone.test.ts')) {
+        const err = new Error('no such file') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return undefined;
+    });
+
+    let vitestCalls = 0;
+    const vitestFileArgs: string[][] = [];
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        vitestCalls += 1;
+        vitestFileArgs.push(args.slice(2)); // files after 'vitest', 'run'
+        return vitestCalls === 1
+          ? { ok: false, stdout: 'base red' }
+          : { ok: true, stdout: 'branch green' };
+      }
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/deleted/src/gone.test.ts', 'packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    // Infra condition did not hard-fail; the remaining test proves the fix.
+    expect(result).toEqual({ kind: 'pass' });
+    // Both files attempted; the missing one skipped, so only the present file
+    // is exercised by both the base and branch runs.
+    expect(copyFileSpy).toHaveBeenCalledTimes(2);
+    expect(vitestFileArgs).toHaveLength(2);
+    for (const files of vitestFileArgs) {
+      expect(files).toEqual(['packages/a/src/x.test.ts']);
+    }
+    // worktree cleaned up.
+    expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreeRemove(c as string, a as string[]))).toBe(
+      true,
+    );
+  });
+
+  it('all changed test files deleted/renamed on branch → noop, no vitest run', async () => {
+    copyFileSpy.mockImplementation(async () => {
+      const err = new Error('no such file') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
+
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts', 'packages/b/src/__tests__/y.ts'],
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ kind: 'noop' });
+    // No test run happened, but the worktree was still cleaned up.
+    expect(execFileSpy.mock.calls.some(([c, a]) => isVitest(c as string, a as string[]))).toBe(false);
+    expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreeRemove(c as string, a as string[]))).toBe(
+      true,
+    );
+  });
+
+  it('non-ENOENT overlay error propagates (unexpected infra faults still fail loud)', async () => {
+    copyFileSpy.mockImplementation(async () => {
+      const err = new Error('permission denied') as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      throw err;
+    });
+
+    handler = (cmd, args) => {
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      return { ok: true };
+    };
+
+    await expect(
+      runFailThenPass({
+        checkoutPath: CHECKOUT,
+        baseRef: BASE_REF,
+        changedTestFiles: ['packages/a/src/x.test.ts'],
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+
+    // worktree cleaned up in finally despite the throw.
+    expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreeRemove(c as string, a as string[]))).toBe(
+      true,
+    );
   });
 
   it('worktree removed even when the base run path throws (cleanup in finally)', async () => {

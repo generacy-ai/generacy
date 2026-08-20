@@ -113,17 +113,37 @@ async function installDeps(
  * Overlay the branch's version of each changed test file onto the base worktree,
  * creating parent directories as needed. This is what makes a newly-added test
  * file (absent at the base ref) runnable against the base source.
+ *
+ * A path in the base...HEAD diff may have been DELETED or RENAMED on the branch,
+ * so it no longer exists in the branch checkout. Copying such a phantom source
+ * throws `ENOENT`; that is an infrastructure condition, not a proof failure, and
+ * must not hard-fail validate (mirrors the non-blocking install-failure skip). A
+ * missing source is simply not overlaid, and — since a test file absent on the
+ * branch has no branch version to prove — it is dropped from the effective proof
+ * set. Returns the files that were actually overlaid.
  */
 async function overlayTestFiles(
   fromRoot: string,
   toRoot: string,
   files: string[],
-): Promise<void> {
+): Promise<string[]> {
+  const overlaid: string[] = [];
   for (const file of files) {
     const dest = join(toRoot, file);
-    await mkdir(dirname(dest), { recursive: true });
-    await copyFile(join(fromRoot, file), dest);
+    try {
+      await mkdir(dirname(dest), { recursive: true });
+      await copyFile(join(fromRoot, file), dest);
+      overlaid.push(file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Deleted/renamed-away on the branch: no branch source to overlay or
+        // prove — skip it non-blockingly rather than throwing into validate.
+        continue;
+      }
+      throw err;
+    }
   }
+  return overlaid;
 }
 
 /**
@@ -142,6 +162,7 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
   const worktreePath = join(await mkdtemp(join(tmpdir(), 'gen-ftp-')), 'wt');
 
   let baseOutcome: TestRunOutcome;
+  let effectiveTestFiles: string[];
   try {
     await execFileAsync('git', ['worktree', 'add', '--detach', worktreePath, baseRef], {
       cwd: checkoutPath,
@@ -158,8 +179,15 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
       };
     }
 
-    await overlayTestFiles(checkoutPath, worktreePath, changedTestFiles);
-    baseOutcome = await runTests(worktreePath, changedTestFiles, signal);
+    // Only files that still exist on the branch can be overlaid AND run there;
+    // deleted/renamed-away paths drop out of the proof set entirely.
+    effectiveTestFiles = await overlayTestFiles(checkoutPath, worktreePath, changedTestFiles);
+    if (effectiveTestFiles.length === 0) {
+      // Every changed test path was deleted/renamed on the branch — no branch
+      // test remains to prove anything. Non-blocking, same as an empty input.
+      return { kind: 'noop' };
+    }
+    baseOutcome = await runTests(worktreePath, effectiveTestFiles, signal);
   } finally {
     // Always remove the worktree, even if the base setup/run threw.
     await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
@@ -180,7 +208,7 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
     };
   }
 
-  const branchOutcome = await runTests(checkoutPath, changedTestFiles, signal);
+  const branchOutcome = await runTests(checkoutPath, effectiveTestFiles, signal);
   if (!branchOutcome.passed) {
     return {
       kind: 'fail',
