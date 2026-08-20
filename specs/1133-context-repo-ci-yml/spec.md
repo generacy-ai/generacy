@@ -1,7 +1,17 @@
 # Feature Specification: Merge readiness — CI skipped≠passed, validate/CI parallel semantics, post-validate approval gate
 
-**Branch**: `1133-context-repo-ci-yml` | **Date**: 2026-08-20 | **Status**: Draft
+**Branch**: `1133-context-repo-ci-yml` | **Date**: 2026-08-20 | **Status**: Clarified
 **Issue**: [generacy-ai/generacy#1133](https://github.com/generacy-ai/generacy/issues/1133) | **Epic**: [#1120](https://github.com/generacy-ai/generacy/issues/1120) (engine-native review & remediate phases)
+
+## Clarifications
+
+### Batch 1 — 2026-08-20
+
+- Q: CI-wait timeout ceiling and on-timeout behavior → A: Configurable per-workflow `ciWaitTimeoutMs` (sane default); on timeout pause with a resumable `waiting-for:ci`-style gate + `agent:paused`. Never declares green on pending.
+- Q: Which run(s) determine the verdict among all runs for the head SHA → A: Aggregate all workflow runs for the head SHA, ignoring `skipped`/`neutral` runs; green only if every non-skipped run is `success` and at least one `success` exists.
+- Q: Semantics when NO CI run exists for the head SHA → A: Treat as pending — wait with backoff; if still none at the `ciWaitTimeoutMs` ceiling, enter the resumable-pause terminal state. Never declares green.
+- Q: Post-validate gate placement + resume position → A: Keep the gate on the `validate` phase, firing on validate completion once CI is confirmed green; `GATE_MAPPING['implementation-review']` resumes at a terminal/no-op position so neither `validate` nor `implement` re-runs.
+- Q: Feature-flag scope + disabled fallback → A: New independent flag `ciMergeGateEnabled`; when disabled, `implementation-review` stays `{ phase: 'implement', resumeFrom: 'validate' }` exactly as today.
 
 ## Summary
 
@@ -69,14 +79,14 @@ This feature makes merge readiness require **both** `validate` success (on the w
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Add engine-side CI merge-readiness evaluation that maps CI conclusions to `green` / `pending` / `not-passed`, treating `skipped`, `neutral`, `cancelled`, `timed_out`, `action_required`, `failure` as NOT green and only `success` as green. | P1 | In-progress/`null` → pending. |
-| FR-002 | When the check-runs API is unavailable or token-limited (no `checks:read`), fall back to `actions/runs?branch=<head>` filtered to the PR head SHA to derive the same green/pending/not-passed verdict. | P1 | `packages/github-actions/src/operations/runs.ts` is the known-working readout. |
+| FR-002 | When the check-runs API is unavailable or token-limited (no `checks:read`), fall back to `actions/runs?branch=<head>` filtered to the PR head SHA to derive the same green/pending/not-passed verdict. The verdict aggregates **all** workflow runs for the head SHA while **ignoring** `skipped`/`neutral` runs: green only if every non-skipped run is `success` **and** at least one `success` exists. | P1 | `packages/github-actions/src/operations/runs.ts` is the known-working readout. Skipped-of-an-unrelated-workflow is non-blocking; skipped≠passed. |
 | FR-003 | After a clean review, mark the PR ready-for-review, then run `validate` on the worker while CI runs on GitHub; treat completion as requiring both validate success and CI green. | P1 | Reuses existing `markReadyForReview` (`phase-loop.ts:1419`). |
-| FR-004 | On `validate` success with CI pending, wait for CI via event/poll with backoff (bounded, not a busy loop) before evaluating readiness. | P1 | Backoff strategy + timeout ceiling required. |
-| FR-005 | Move the `implementation-review` gate so it fires post-validate, activating only when both `validate` and CI are green. | P1 | Relocate gate def out of `implement` (`worker/config.ts:169`) to a post-validate position. |
-| FR-006 | Rework `GATE_MAPPING['implementation-review']` (`worker/phase-resolver.ts:9-17`) so its `phase`/`resumeFrom` reflect the post-validate position and resume does not re-run validate/implement. | P1 | Keep `speckit-feature` and `speckit-bugfix` consistent. |
+| FR-004 | On `validate` success with CI pending (including "no CI run yet found" for the head SHA), wait for CI via event/poll with bounded backoff (not a busy loop) before evaluating readiness. The ceiling is a configurable per-workflow key `ciWaitTimeoutMs` with a sane default; on timeout, pause with a resumable `waiting-for:ci`-style gate + `agent:paused` (never declares green). | P1 | "No run found" is pending (Q3-A), not fail-fast. Backoff strategy required. |
+| FR-005 | Keep the `implementation-review` gate attached to the `validate` phase but make it fire only on `validate` completion **once CI is confirmed green** (both signals green). Do not relocate the gate to a new phase. | P1 | Gate def stays with `validate`; CI wait folded into validate's completion (Q4-A). |
+| FR-006 | Rework `GATE_MAPPING['implementation-review']` (`worker/phase-resolver.ts:9-17`) so it resumes at a terminal/no-op position — a satisfied gate re-runs neither `validate` nor `implement`. | P1 | Keep `speckit-feature` and `speckit-bugfix` consistent. |
 | FR-007 | Expose the achieved merge-eligible state so cockpit / `cockpit_merge` can consume it (gate answer → merge-eligible). | P1 | |
 | FR-008 | Provide a migration note + docs: target repos must add `ready_for_review` to `pull_request` trigger `types`, and document the readiness contract. | P2 | |
-| FR-009 | Preserve existing behavior when the review/CI-gate path is disabled (feature-flag/back-compat), so unaffected workflows resolve the same start phase and gate as today. | P1 | Mirror `reviewPhaseEnabled` threading in `phase-resolver.ts`. |
+| FR-009 | Gate CI-aware merge readiness behind a new independent flag `ciMergeGateEnabled` (separate from `reviewPhaseEnabled`). When disabled, `implementation-review` stays `{ phase: 'implement', resumeFrom: 'validate' }` exactly as today (byte-identical, no CI check). | P1 | New flag threaded like `reviewPhaseEnabled` in `phase-resolver.ts`; not coupled to it. |
 
 ## Success Criteria
 
@@ -93,7 +103,8 @@ This feature makes merge readiness require **both** `validate` success (on the w
 
 - The PR head SHA is resolvable at the point readiness is evaluated (after the draft→ready flip).
 - `actions/runs?branch=<head>` returns runs that can be filtered to the PR head SHA and mapped to a conclusion.
-- A bounded CI-wait timeout is acceptable; on timeout the workflow pauses/escalates rather than declaring green.
+- A bounded CI-wait timeout (`ciWaitTimeoutMs`, configurable per-workflow, sane default) is acceptable; on timeout the workflow pauses with a resumable `waiting-for:ci`-style gate + `agent:paused` rather than declaring green.
+- "No CI run found for the head SHA" is treated as pending (wait then time out), not fail-fast — the unmigrated-repo case converges on the same timeout pause.
 - Only the primary PR's CI is gated in this issue; sibling/multi-repo CI aggregation (if any) follows existing linked-PR patterns.
 
 ## Out of Scope
