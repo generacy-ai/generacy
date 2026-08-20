@@ -248,6 +248,27 @@ function loadFromEnv(): Record<string, unknown> {
     (config.worker as Record<string, unknown>).reviewPhaseEnabled = reviewPhaseEnabled === 'true' || reviewPhaseEnabled === '1';
   }
 
+  // CI-aware merge readiness feature flag (#1133): WORKER_CI_MERGE_GATE_ENABLED=true
+  // relocates the implementation-review gate to fire on validate completion only
+  // once CI is green. Default false keeps behavior byte-identical (SC-006).
+  const ciMergeGateEnabled = process.env['WORKER_CI_MERGE_GATE_ENABLED'] ?? process.env[`${ENV_PREFIX}WORKER_CI_MERGE_GATE_ENABLED`];
+  if (ciMergeGateEnabled !== undefined) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).ciMergeGateEnabled = ciMergeGateEnabled === 'true' || ciMergeGateEnabled === '1';
+  }
+
+  // CI wait timeout (#1133): max wall-clock (ms) to wait for CI to resolve before
+  // pausing with waiting-for:ci. Mirrors WORKER_PHASE_TIMEOUT_MS parsing.
+  const ciWaitTimeoutMs = process.env['WORKER_CI_WAIT_TIMEOUT_MS'] ?? process.env[`${ENV_PREFIX}WORKER_CI_WAIT_TIMEOUT_MS`];
+  if (ciWaitTimeoutMs) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).ciWaitTimeoutMs = parseInt(ciWaitTimeoutMs, 10);
+  }
+
   // Per-phase timeout overrides: WORKER_PHASE_TIMEOUT_<PHASE>_MS (e.g. WORKER_PHASE_TIMEOUT_PLAN_MS).
   // `validate` is excluded — it runs a shell command on a separate timeout path.
   const overridablePhases = ['specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'remediate'] as const;

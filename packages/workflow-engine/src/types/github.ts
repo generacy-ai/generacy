@@ -207,6 +207,44 @@ export interface PullRequestFile {
 }
 
 // =============================================================================
+// CI merge-readiness (#1133)
+// =============================================================================
+
+/**
+ * A CI run conclusion, as reported by the check-runs / actions-runs APIs.
+ * `null` means the run is in-progress / not yet concluded. Values outside this
+ * union are passed through as-is and treated conservatively by the aggregator
+ * (not `success`, so not green).
+ */
+export type CiConclusion =
+  | 'success'
+  | 'failure'
+  | 'cancelled'
+  | 'timed_out'
+  | 'action_required'
+  | 'skipped'
+  | 'neutral'
+  | null;
+
+/**
+ * Normalized CI run shape produced by both the check-runs and actions/runs
+ * readouts. Consumed by `aggregateCiVerdict`.
+ */
+export interface CiRun {
+  /** GitHub run/check status: 'queued' | 'in_progress' | 'completed'. */
+  status: string;
+  /** Conclusion once completed; null while in progress. */
+  conclusion: CiConclusion;
+}
+
+/**
+ * Three-state CI merge-readiness verdict. `skipped`/`neutral` runs are ignored
+ * (skipped≠passed); `green` requires ≥1 concrete success and no failures or
+ * in-progress runs.
+ */
+export type CiVerdict = 'green' | 'pending' | 'not-passed';
+
+// =============================================================================
 // Workflow Entities
 // =============================================================================
 

@@ -25,6 +25,8 @@ import type {
   ReviewThread,
   CreateReviewInput,
   PullRequestFile,
+  CiRun,
+  CiConclusion,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
 import { writeFile, unlink } from 'node:fs/promises';
@@ -1654,6 +1656,100 @@ export class GhCliGitHubClient implements GitHubClient {
       );
     }
     return sha;
+  }
+
+  /**
+   * Read CI runs for a commit SHA for merge-readiness aggregation (#1133).
+   *
+   * Primary: `gh api repos/{o}/{r}/commits/{sha}/check-runs` → source
+   * `check-runs`. On non-zero exit — including the `GhAuthError` (HTTP 401/403)
+   * that `executeGh` raises, which is the observed symptom of a token lacking
+   * `checks:read` (FR-002) — fall back to
+   * `gh api repos/{o}/{r}/actions/runs?branch={branch}` filtered client-side to
+   * the head SHA → source `actions-runs`.
+   *
+   * Both paths normalize to `CiRun[]` consumable by `aggregateCiVerdict`
+   * unchanged (SC-004). Empty result → `{ runs: [], source }`. Non-zero exit on
+   * BOTH paths → throw with stderr (mirrors `getRefHeadSha`).
+   */
+  async getCiRunsForSha(
+    owner: string,
+    repo: string,
+    headSha: string,
+    branch: string,
+  ): Promise<{ runs: CiRun[]; source: 'check-runs' | 'actions-runs' }> {
+    let primaryError = '';
+    try {
+      const primary = await this.executeGh([
+        'api',
+        `repos/${owner}/${repo}/commits/${headSha}/check-runs`,
+        '--jq', '.check_runs[] | {status, conclusion}',
+      ]);
+      if (primary.exitCode === 0) {
+        return {
+          runs: this.parseCiRunLines(primary.stdout),
+          source: 'check-runs',
+        };
+      }
+      primaryError = `exit ${primary.exitCode}: ${primary.stderr.trim()}`;
+    } catch (err) {
+      // executeGh throws GhAuthError on 401/403 — the checks:read-missing
+      // symptom. Treat it as a fallback trigger, not a fatal readout error.
+      primaryError = err instanceof Error ? err.message : String(err);
+    }
+
+    const fallback = await this.executeGh([
+      'api',
+      `repos/${owner}/${repo}/actions/runs?branch=${branch}&per_page=100`,
+      '--jq', '.workflow_runs[] | {head_sha, status, conclusion}',
+    ]);
+
+    if (fallback.exitCode !== 0) {
+      throw new Error(
+        `getCiRunsForSha ${owner}/${repo}@${headSha} failed on both paths ` +
+          `(check-runs ${primaryError}; ` +
+          `actions-runs exit ${fallback.exitCode}: ${fallback.stderr.trim()})`,
+      );
+    }
+
+    // The actions/runs jq keeps head_sha, so filter to the target SHA.
+    const filtered: CiRun[] = [];
+    for (const line of fallback.stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parsed = parseJSONSafe(trimmed) as
+        | { head_sha?: unknown; status?: unknown; conclusion?: unknown }
+        | null;
+      if (!parsed || parsed.head_sha !== headSha) continue;
+      filtered.push({
+        status: typeof parsed.status === 'string' ? parsed.status : '',
+        conclusion: (parsed.conclusion ?? null) as CiConclusion,
+      });
+    }
+
+    return { runs: filtered, source: 'actions-runs' };
+  }
+
+  /**
+   * Parse newline-delimited `{status, conclusion}` JSON objects (jq stream
+   * output) into `CiRun[]`. Blank lines and unparseable lines are skipped.
+   * Unknown `conclusion` values are passed through as-is.
+   */
+  private parseCiRunLines(stdout: string): CiRun[] {
+    const runs: CiRun[] = [];
+    for (const line of stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parsed = parseJSONSafe(trimmed) as
+        | { status?: unknown; conclusion?: unknown }
+        | null;
+      if (!parsed) continue;
+      runs.push({
+        status: typeof parsed.status === 'string' ? parsed.status : '',
+        conclusion: (parsed.conclusion ?? null) as CiConclusion,
+      });
+    }
+    return runs;
   }
 
   /**
