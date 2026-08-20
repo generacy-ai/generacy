@@ -43,6 +43,34 @@ generacy-ai/tetrad-development and the shipped Phase 1–4 code):
 - Contracts to document: the findings-artifact sidecar shape and the engine-authored review marker
   (so operators and downstream tooling recognize engine-posted `COMMENT`-event reviews).
 
+## Clarifications
+
+### Session 2026-08-20
+
+- Q1 (Dogfood execution scope) → **C**: This issue ships the P1 docs + rollout checklist now AND
+  adds an unchecked in-repo dogfood checklist/runbook artifact that the operator ticks off and links
+  to epic #1120 later. The PR does **not** block on the live run — an automated speckit worker in
+  this repo cannot restart clusters or drive live stories.
+- Q2 (Doc file locations) → **A**: One migration guide page under `docs/docs/guides/generacy/`
+  (migration + gate semantics + flags), a separate contracts reference page under
+  `docs/docs/reference/` (next to `bugfix-profile-config.md`), and the rollout checklist as its own
+  docs page. Extend `bugfix-profile-config.md` by link rather than duplicating it.
+- Q3 (Canary/dogfood repo identity) → **A**: Repo-agnostic checklist with a clearly-marked
+  placeholder the operator fills in at run time; do not hard-code a canary repo.
+- Q4 (Contracts documentation) → **C**: Hybrid — inline summary of the sidecar/marker shapes PLUS a
+  link to the canonical shipped files as the authoritative source. Canonical sidecar contract:
+  `ReviewArtifactSchema` in `packages/orchestrator/src/worker/review-artifact.ts` (path
+  `.generacy/review-findings-<sanitized-workflowId>.json`; severity `critical|major|minor`, status
+  `open|resolved`, verdict `clean|changes-required`, `round`, `remediationCount`; #1124). Engine
+  review marker contract: `packages/orchestrator/src/worker/review-poster.ts` — body marker
+  `<!-- generacy-engine-review round=<N> -->` and inline `<!-- generacy-finding:<marker> -->`. The
+  canonical "contract name" key the generacy-cloud mirror matches on is the marker string
+  `generacy-engine-review` (body) / `generacy-finding:` (inline).
+- Q5 (Docs build/validation gate) → **A**: Wire new pages into `docs/sidebars.ts`/nav and ensure a
+  clean Docusaurus build; treat that build (there is no per-PR docs CI job) as the acceptance gate.
+  Also retroactively wire the currently-orphaned Phase-4 `docs/docs/reference/bugfix-profile-config.md`
+  into the sidebar.
+
 ## User Stories
 
 ### US1: Repo owner migrates a repo onto the new flow (P1)
@@ -118,14 +146,15 @@ merging PRs whose CI never ran.
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Publish a per-repo migration guide (Markdown, in the docs site) covering `ready_for_review` CI trigger, `validateCommand` slimming, and per-workflow config examples for feature + bugfix. | P1 | Consolidates/links the existing `docs/docs/reference/bugfix-profile-config.md` shipped in Phase 4. |
-| FR-002 | Document gate semantics for `remediation-limit`, the relocated post-validate `implementation-review`, and `waiting-for:ci`. | P1 | Include resume labels and counter-reset behavior. |
-| FR-003 | Document the findings-artifact sidecar contract and the engine-authored review marker contract. | P2 | Keyed by contract name; note engine-internal verdict authority. |
-| FR-004 | Publish a rollout checklist: publish → cluster restart → worker restart → fresh session, plus canary story and rollback note. | P1 | Must state `generacy update` is insufficient. |
+| FR-001 | Publish a per-repo migration guide as **one page** under `docs/docs/guides/generacy/` covering `ready_for_review` CI trigger, `validateCommand` slimming, per-workflow config examples for feature + bugfix, gate semantics (US2), and the feature flags (US1). | P1 | Extends the existing `docs/docs/reference/bugfix-profile-config.md` **by link**, not duplication (Q2→A). |
+| FR-002 | Document gate semantics for `remediation-limit`, the relocated post-validate `implementation-review`, and `waiting-for:ci` **within the FR-001 migration guide page**. | P1 | Include resume labels and counter-reset behavior (Q2→A). |
+| FR-003 | Document the findings-artifact sidecar contract and the engine-authored review marker contract on a **separate contracts reference page** under `docs/docs/reference/`, **hybrid style**: inline summary of the shapes PLUS a link to the canonical shipped files as source of truth. | P2 | Canonical files: `review-artifact.ts` (`ReviewArtifactSchema`, #1124) and `review-poster.ts` (markers, #1125). Contract-name key = marker strings `generacy-engine-review` / `generacy-finding:` (Q4→C). |
+| FR-004 | Publish a rollout checklist **as its own docs page**: publish → cluster restart → worker restart → fresh session, plus canary story and rollback note. | P1 | Must state `generacy update` is insufficient. Checklist is **repo-agnostic** with a clearly-marked canary placeholder (Q3→A). |
 | FR-005 | Document the feature flags gating the new flow (`WORKER_REVIEW_PHASE_ENABLED`, `WORKER_CI_MERGE_GATE_ENABLED`) and their default-OFF posture. | P1 | Rollback lever for US4. |
-| FR-006 | Execute the rollout checklist on a canary test repo and drive one feature + one bugfix story end to end. | P1 | Dogfood; the acceptance evidence. |
-| FR-007 | Record dogfood findings and link results back to epic generacy-ai/generacy#1120. | P1 | Closes the epic. |
+| FR-006 | Ship an **unchecked in-repo dogfood checklist/runbook artifact** for driving one feature + one bugfix story end to end on a canary. The live execution is a **manual operator step** performed after merge; the PR does not block on it. | P1 | Q1→C. The runbook is the deliverable; the live run is operator-executed. |
+| FR-007 | The dogfood runbook instructs the operator to record findings and link results back to epic generacy-ai/generacy#1120. | P1 | Closes the epic (operator-executed, post-merge). |
 | FR-008 | Where documentation and shipped code disagree, correct the docs to match the code. | P2 | Docs describe reality, not the plan sketch. |
+| FR-009 | Wire all new pages into `docs/sidebars.ts`/nav and ensure a clean Docusaurus build; also retroactively wire the orphaned `docs/docs/reference/bugfix-profile-config.md` into the sidebar. | P1 | The Docusaurus build (`onBrokenLinks:'throw'`) is the acceptance gate — there is no per-PR docs CI job (Q5→A). |
 
 ## Success Criteria
 
@@ -133,18 +162,21 @@ merging PRs whose CI never ran.
 |----|--------|--------|-------------|
 | SC-001 | Migration guide completeness | All four migration topics present (CI trigger, validateCommand slimming, per-workflow examples, flags) | Guide review against US1 acceptance |
 | SC-002 | Gate + contract docs completeness | All three gates and both contracts documented | Doc review against US2/US3 acceptance |
-| SC-003 | Rollout checklist executable | Checklist followed on a canary with no undocumented manual step required | Canary run log |
-| SC-004 | Dogfood feature story | 1 feature story merges through the full loop | PR link + epic comment |
-| SC-005 | Dogfood bugfix story | 1 bugfix merges through the full loop under bugfix profile | PR link + epic comment |
+| SC-003 | Rollout checklist executable | Repo-agnostic checklist + dogfood runbook shipped in-repo with no undocumented manual step required | Checklist/runbook review (live run is operator-executed post-merge) |
+| SC-004 | Dogfood feature story | Runbook covers driving 1 feature story through the full loop; live run recorded against #1120 by the operator | Runbook artifact; PR link + epic comment (post-merge) |
+| SC-005 | Dogfood bugfix story | Runbook covers driving 1 bugfix through the full loop under bugfix profile; live run recorded against #1120 by the operator | Runbook artifact; PR link + epic comment (post-merge) |
+| SC-007 | Docs discoverable | All new pages + `bugfix-profile-config.md` reachable from the sidebar; Docusaurus build passes clean | `docs` build + sidebar review |
 | SC-006 | Epic linkage | Dogfood results and doc PR linked in epic #1120 | Epic comment |
 
 ## Assumptions
 
 - Phases 1–4 (issues #1121–#1135) are merged to `develop` and the packages are publishable; this
   issue documents and exercises shipped behavior rather than defining new behavior.
-- Docs live in the existing Docusaurus site under `docs/docs/` (e.g. `guides/generacy/` for the
-  migration guide, `reference/config/` for config examples), extending the Phase-4
-  `bugfix-profile-config.md` reference rather than duplicating it.
+- Docs live in the existing Docusaurus site under `docs/docs/`: the migration guide under
+  `guides/generacy/`, the contracts reference page under `reference/` (next to the Phase-4
+  `bugfix-profile-config.md`, which is extended by link not duplicated), and the rollout checklist as
+  its own docs page (Q2→A). New pages are wired into `docs/sidebars.ts` and the Docusaurus build must
+  pass clean (Q5→A).
 - A designated canary/test repo is available for the dogfood run with the operator holding
   `Workflows: write` to add the `ready_for_review` CI trigger.
 - The dogfood is performed against a channel that already carries the Phase 1–4 packages.
