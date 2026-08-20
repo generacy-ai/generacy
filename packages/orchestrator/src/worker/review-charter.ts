@@ -81,13 +81,48 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
   lines.push('');
 
   if (profile === 'verification') {
-    lines.push('## Verification findings');
+    // #1134 FR-001 — bugfix verification charter. Replace the generic
+    // "needs verification" paragraph with four delineated bugfix questions.
+    // Each concern the agent cannot confirm by static reading becomes its own
+    // "needs verification" finding for the `validate` phase to confirm.
+    lines.push('## Bugfix verification');
     lines.push('');
     lines.push(
-      'In addition to defects, emit "needs verification" findings: concrete ' +
-        'behaviors or claims in this change that you cannot confirm by static ' +
-        'reading alone and that the `validate` phase must confirm. Record each as ' +
-        'its own finding describing exactly what must be verified.',
+      'This change is a bug fix. In addition to defects, interrogate the four ' +
+        'questions below. Record each concern you cannot confirm by static ' +
+        'reading alone as its own "needs verification" finding describing exactly ' +
+        'what the `validate` phase must confirm.',
+    );
+    lines.push('');
+    lines.push('### 1. Root cause vs symptom');
+    lines.push('');
+    lines.push(
+      'Does the change fix the underlying cause of the bug, or does it only mask ' +
+        'a symptom? A fix that suppresses the observable symptom without addressing ' +
+        'the root cause is a finding.',
+    );
+    lines.push('');
+    lines.push('### 2. Regression test present that fails without the fix');
+    lines.push('');
+    lines.push(
+      'Is there a new or changed test that would fail on the base ref (without ' +
+        'this change) and pass with it? The absence of such a regression test is a ' +
+        'finding.',
+    );
+    lines.push('');
+    lines.push('### 3. Scope creep');
+    lines.push('');
+    lines.push(
+      'Does the diff include changes beyond what the fix strictly requires ' +
+        '(unrelated refactors, formatting churn, or feature work)? Out-of-scope ' +
+        'changes are a finding.',
+    );
+    lines.push('');
+    lines.push('### 4. Regression risk in changed lines');
+    lines.push('');
+    lines.push(
+      'Do the changed lines risk breaking adjacent or dependent behavior? Call out ' +
+        'any such regression risk in the changed lines as a finding.',
     );
     lines.push('');
   }

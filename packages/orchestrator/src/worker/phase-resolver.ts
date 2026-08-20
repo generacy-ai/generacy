@@ -50,17 +50,24 @@ export class PhaseResolver {
    *   start phase as pre-change — otherwise `review` sits in the sequence and a
    *   `process` requeue completed through `implement` would resolve to `review`
    *   instead of `validate`, shifting the resume start index (SC-004 / FR-009).
+   * @param ciMergeGateEnabled - Whether CI-aware merge readiness is active
+   *   (#1133). When true, the `implementation-review` gate belongs to `validate`
+   *   (not `implement`) and resumes from `validate` (the terminal phase), so a
+   *   `continue` with `completed:implementation-review` re-enters at `validate`,
+   *   where `executeLoopInner` short-circuits to complete. Flag-OFF is
+   *   byte-identical to today's mapping (SC-006).
    */
   resolveStartPhase(
     labels: string[],
     command: 'process' | 'continue',
     workflowName?: string,
     reviewPhaseEnabled = false,
+    ciMergeGateEnabled = false,
   ): WorkflowPhase {
     if (command === 'continue') {
-      return this.resolveFromContinue(labels, workflowName, reviewPhaseEnabled);
+      return this.resolveFromContinue(labels, workflowName, reviewPhaseEnabled, ciMergeGateEnabled);
     }
-    return this.resolveFromProcess(labels, workflowName, reviewPhaseEnabled);
+    return this.resolveFromProcess(labels, workflowName, reviewPhaseEnabled, ciMergeGateEnabled);
   }
 
   /**
@@ -76,9 +83,10 @@ export class PhaseResolver {
     labels: string[],
     workflowName?: string,
     reviewPhaseEnabled = false,
+    ciMergeGateEnabled = false,
   ): WorkflowPhase {
     const sequence = getPhaseSequence(workflowName ?? '', reviewPhaseEnabled);
-    const effectiveGateMapping = this.getEffectiveGateMapping(workflowName);
+    const effectiveGateMapping = this.getEffectiveGateMapping(workflowName, ciMergeGateEnabled);
 
     // Check for an active phase label
     for (const label of labels) {
@@ -130,9 +138,10 @@ export class PhaseResolver {
     labels: string[],
     workflowName?: string,
     reviewPhaseEnabled = false,
+    ciMergeGateEnabled = false,
   ): WorkflowPhase {
     const sequence = getPhaseSequence(workflowName ?? '', reviewPhaseEnabled);
-    const effectiveGateMapping = this.getEffectiveGateMapping(workflowName);
+    const effectiveGateMapping = this.getEffectiveGateMapping(workflowName, ciMergeGateEnabled);
 
     const completedGates = new Set<string>();
 
@@ -157,23 +166,34 @@ export class PhaseResolver {
     }
 
     // Fallback: use the process resolver
-    return this.resolveFromProcess(labels, workflowName, reviewPhaseEnabled);
+    return this.resolveFromProcess(labels, workflowName, reviewPhaseEnabled, ciMergeGateEnabled);
   }
 
   /**
    * Build the effective gate mapping for a workflow.
    * Workflow-specific mappings in WORKFLOW_GATE_MAPPING override entries in the global GATE_MAPPING.
+   *
+   * When `ciMergeGateEnabled` is true (#1133), the `implementation-review` gate is
+   * relocated to `validate` and resumes from `validate` (the terminal phase). This
+   * override is applied last so it wins over any workflow-specific entry. Flag-OFF
+   * returns today's mapping unchanged (SC-006).
    */
   private getEffectiveGateMapping(
     workflowName?: string,
+    ciMergeGateEnabled = false,
   ): Record<string, { phase: WorkflowPhase; resumeFrom: WorkflowPhase }> {
-    if (!workflowName || !WORKFLOW_GATE_MAPPING[workflowName]) {
-      return GATE_MAPPING;
+    const base =
+      !workflowName || !WORKFLOW_GATE_MAPPING[workflowName]
+        ? GATE_MAPPING
+        : { ...GATE_MAPPING, ...WORKFLOW_GATE_MAPPING[workflowName] };
+
+    if (!ciMergeGateEnabled) {
+      return base;
     }
 
     return {
-      ...GATE_MAPPING,
-      ...WORKFLOW_GATE_MAPPING[workflowName],
+      ...base,
+      'implementation-review': { phase: 'validate', resumeFrom: 'validate' },
     };
   }
 }

@@ -5,10 +5,11 @@ import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
-import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides } from './config.js';
+import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
+import { waitForCiGreen } from './ci-merge-readiness.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -46,9 +47,32 @@ import {
 import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { classifyDiff, isTestFile, type Classification } from './diff-classifier.js';
+import { runFailThenPass } from './fail-then-pass.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
+
+/**
+ * #1134 (US2): outcome of the speckit-bugfix targeted-validate classification.
+ * Carries the resolved effective command plus the raw inputs (`baseRef`,
+ * `changedFiles`, `classification`) so the US3 fail-then-pass check can reuse
+ * them without re-resolving the base ref or re-fetching the diff.
+ */
+interface TargetedValidateDecision {
+  /** The command that validate should actually run. */
+  effectiveCommand: string;
+  /** `origin/<base>` — the ref the diff was computed against. */
+  baseRef: string;
+  /** Bare base branch name (`origin/` stripped). */
+  base: string;
+  /** Changed-file paths against `baseRef`. */
+  changedFiles: string[];
+  /** The diff classification. */
+  classification: Classification;
+}
 
 /**
  * TTL for the persisted phase-start commit ref (#1107). 7 days — longer than
@@ -328,6 +352,38 @@ export class PhaseLoop {
       { startPhase: context.startPhase, startIndex, totalPhases: sequence.length, runId },
       'Starting phase loop',
     );
+
+    // #1133 FR-006 / research Decision 5: terminal no-op resume. When the
+    // CI-aware merge gate is on, the relocated `implementation-review` gate
+    // fires on `validate` (the terminal phase) and its GATE_MAPPING resumes
+    // at `validate`. A `continue` re-entry that already carries both
+    // `completed:validate` and `completed:implementation-review` therefore has
+    // nothing left to run — re-executing `validate` would be wrong. Short-
+    // circuit to a completed result instead of adding a synthetic terminal
+    // WorkflowPhase member (which would ripple across every exhaustive phase
+    // enum/union/Record site). Flag-OFF never reaches this branch (SC-006).
+    if (
+      config.ciMergeGateEnabled
+      && context.startPhase === 'validate'
+      && context.item.command === 'continue'
+    ) {
+      const resumeIssue = await context.github.getIssue(
+        context.item.owner,
+        context.item.repo,
+        context.item.issueNumber,
+      );
+      const resumeLabels = resumeIssue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+      if (
+        resumeLabels.includes('completed:validate')
+        && resumeLabels.includes('completed:implementation-review')
+      ) {
+        this.logger.info(
+          { startPhase: context.startPhase, runId },
+          '#1133: implementation-review gate already satisfied — terminal no-op resume, skipping phase loop',
+        );
+        return { results, completed: true, lastPhase: 'validate', gateHit: false };
+      }
+    }
 
     // #1051 FR-002/003: phase-start pre-push guard. Closes the "hasChanges:
     // false no-op hole" (research R3, Q5 clarification) — pr-manager's guard
@@ -625,12 +681,41 @@ export class PhaseLoop {
             }
           }
 
-          // Validate phase — run test command
-          result = await cliSpawner.runValidatePhase(
-            context.checkoutPath,
-            config.validateCommand,
-            context.signal,
-          );
+          // Validate phase — run test command.
+          // #1134 (US2): for speckit-bugfix, classify the diff and narrow the
+          // built-in default validate command to a pnpm workspace-filter form.
+          // Every other workflow reaches the plain default unchanged (SC-005).
+          let effectiveValidateCommand = config.validateCommand;
+          let targetedValidate: TargetedValidateDecision | undefined;
+          if (context.item.workflowName === 'speckit-bugfix') {
+            targetedValidate = await this.resolveTargetedValidate(
+              context,
+              prManager,
+              config,
+              deps.settings ?? null,
+            );
+            effectiveValidateCommand = targetedValidate.effectiveCommand;
+          }
+
+          // #1134 (US3): opt-in fail-then-pass regression proof. Off by default;
+          // when enabled for speckit-bugfix, verify the changed test files fail
+          // on the base ref and pass on the branch before running validate.
+          let validateResult: PhaseResult | undefined;
+          if (
+            targetedValidate &&
+            resolveWorkflowOverrides(config, deps.settings ?? null, context.item.workflowName).review
+              .failThenPass
+          ) {
+            validateResult = await this.runFailThenPassCheck(context, targetedValidate);
+          }
+
+          result =
+            validateResult ??
+            (await cliSpawner.runValidatePhase(
+              context.checkoutPath,
+              effectiveValidateCommand,
+              context.signal,
+            ));
         } else {
           // Set up conversation logger for this CLI phase
           if (conversationLogger) {
@@ -1178,6 +1263,70 @@ export class PhaseLoop {
         await handler({ ...context, phase, commitResult: { prUrl, hasChanges } });
       }
 
+      // #1133 US3/FR-004: CI-aware merge readiness. On a successful `validate`
+      // with the flag on, mark the PR ready (so repo CI that only triggers on
+      // ready_for_review actually runs) and wait for the head-SHA rollup to
+      // resolve. `green` → let the relocated `on-ci-green` gate fire below;
+      // `not-passed` → readiness is blocked, the gate is NOT raised and the
+      // loop completes normally; `timeout` → pause with `waiting-for:ci` +
+      // `agent:paused` (short-circuit before the gate loop, never busy-loop —
+      // SC-005). Skipped/neutral runs read as pending → they never mark the PR
+      // green, so a skipped-only PR times out into the pause (SC-001).
+      let ciMergeVerdict: 'green' | 'not-passed' | undefined;
+      if (phase === 'validate' && result.success && config.ciMergeGateEnabled) {
+        await prManager.markReadyForReview(context.linkedPRs);
+        let headSha = 'unknown';
+        try {
+          headSha = await context.github.getCurrentCommitSha();
+        } catch (err) {
+          this.logger.warn(
+            { err: String(err), phase },
+            '#1133: getCurrentCommitSha failed before CI readiness wait',
+          );
+        }
+        const outcome = await waitForCiGreen({
+          github: context.github,
+          owner: context.item.owner,
+          repo: context.item.repo,
+          headSha,
+          branch: context.branch ?? '',
+          ciWaitTimeoutMs: config.ciWaitTimeoutMs,
+          logger: this.logger,
+        });
+        this.logger.info(
+          { phase, outcome: outcome.kind, ciWaitTimeoutMs: config.ciWaitTimeoutMs },
+          '#1133: CI merge-readiness wait resolved',
+        );
+        if (outcome.kind === 'timeout') {
+          jobEventEmitter?.('job:paused', {
+            jobId: context.jobId,
+            workflowName: context.item.workflowName,
+            owner: context.item.owner,
+            repo: context.item.repo,
+            issueNumber: context.item.issueNumber,
+            status: 'paused',
+            currentStep: phase,
+            gateLabel: 'waiting-for:ci',
+          });
+          await labelManager.onGateHit(phase, 'waiting-for:ci');
+          result.gateHit = {
+            gateLabel: 'waiting-for:ci',
+            reason: 'CI did not turn green within the merge-readiness timeout',
+          };
+          const ciTs = phaseTimestamps.get(phase);
+          if (ciTs) ciTs.completedAt = new Date().toISOString();
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'in_progress',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+          return { results, completed: false, lastPhase: phase, gateHit: true };
+        }
+        ciMergeVerdict = outcome.kind;
+      }
+
       // 6. Check for review gates (multi-gate: iterate all matching gates for this phase)
       const gates = gateChecker.checkGates(phase, context.item.workflowName, config);
 
@@ -1283,6 +1432,24 @@ export class PhaseLoop {
               );
             }
           }
+        } else if (gate.condition === 'on-ci-green') {
+          // #1133 FR-005: the relocated `implementation-review` gate only fires
+          // when the CI merge-readiness wait above resolved to `green`. A
+          // `not-passed` verdict leaves `ciMergeVerdict === 'not-passed'` and a
+          // `timeout` already short-circuited before this loop, so this branch
+          // never sees it.
+          gateActive = ciMergeVerdict === 'green';
+          if (gateActive) {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel },
+              'Gate condition "on-ci-green" active — CI is green, raising implementation-review',
+            );
+          } else {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, ciMergeVerdict },
+              'Gate condition "on-ci-green" not met — CI not green, gate not raised',
+            );
+          }
         }
 
         if (!gateActive) continue;
@@ -1342,6 +1509,24 @@ export class PhaseLoop {
           currentStep: phase,
           gateLabel: gate.gateLabel,
         });
+
+        // #1133 FR-006 fix: the CI-merge gate is a POST-completion approval gate
+        // — `validate` genuinely finished (tests passed, PR marked ready, CI
+        // green) before it pauses. Grant `completed:validate` now, at the pause,
+        // so (a) cockpit's TERMINAL_COMPLETED_LABELS surface treats the PR as
+        // merge-eligible while it waits for approval and (b) the approve→resume
+        // terminal no-op at loop entry — which keys on both `completed:validate`
+        // AND `completed:implementation-review` — actually fires, so `validate`
+        // does not re-run (re-test / re-mark-ready / re-wait-CI). This is the one
+        // gate where `completed:<phase>` is granted at pause; every other gate
+        // keeps the #958 FR-008 ordering (granted only after all gates skip)
+        // because their phase has NOT completed. Order matters: onPhaseComplete
+        // removes `phase:validate` + adds `completed:validate`, then onGateHit
+        // adds the pause pair — end state is completed:validate +
+        // waiting-for:implementation-review + agent:paused.
+        if (gate.condition === 'on-ci-green') {
+          await labelManager.onPhaseComplete(phase);
+        }
 
         await labelManager.onGateHit(phase, gate.gateLabel);
 
@@ -1511,6 +1696,169 @@ export class PhaseLoop {
    */
   private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
     return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
+  }
+
+  /**
+   * #1134 (US2 / FR-009): classify the branch diff and compute the effective
+   * validate command for a speckit-bugfix run. Only the built-in default command
+   * is rewritten (Q1=B) — a custom `validateCommand` runs verbatim, but the
+   * classification is still computed and logged for observability. Emits exactly
+   * one `targeted-validate` log line per validate entry describing the decision.
+   *
+   * Built-in-default detection compares against the RESOLVED per-workflow
+   * validate command (workflow → repo → cluster), not the raw
+   * `config.validateCommand`, so an operator who sets
+   * `settings.workflows['speckit-bugfix'].validateCommand` while leaving the
+   * cluster default untouched still gets their custom command run verbatim (Q1=B).
+   *
+   * Diff resolution (`resolveBaseRef` network call + `getFilesChangedBetween`
+   * `git diff base...HEAD`, which throws on a non-zero exit — e.g. `origin/<base>`
+   * not fetched locally) is wrapped in try/catch: any failure falls back to the
+   * plain resolved command so speckit-bugfix validate stays byte-identical to its
+   * pre-#1134 behavior when the diff can't be computed (FR-013).
+   */
+  private async resolveTargetedValidate(
+    context: WorkerContext,
+    prManager: PrManager,
+    config: WorkerConfig,
+    settings: OrchestratorSettings | null | undefined,
+  ): Promise<TargetedValidateDecision> {
+    const resolvedValidateCommand = resolveWorkflowOverrides(
+      config,
+      settings,
+      context.item.workflowName,
+    ).validateCommand;
+    const isBuiltInDefault = resolvedValidateCommand === DEFAULT_VALIDATE_COMMAND;
+
+    let baseRef: string;
+    let base: string;
+    let changedFiles: string[];
+    let classification: Classification;
+    try {
+      baseRef = await resolveBaseRef(
+        context.github,
+        prManager,
+        context.item.owner,
+        context.item.repo,
+      );
+      base = baseRef.startsWith('origin/') ? baseRef.slice('origin/'.length) : baseRef;
+      changedFiles = await context.github.getFilesChangedBetween(baseRef, 'HEAD');
+      const isWorkspace = existsSync(join(context.checkoutPath, 'pnpm-workspace.yaml'));
+      classification = classifyDiff({ changedFiles, isWorkspace });
+    } catch (error) {
+      this.logger.warn(
+        { event: 'targeted-validate', error: String(error) },
+        '#1134: targeted-validate diff resolution failed — falling back to plain validate command',
+      );
+      return {
+        effectiveCommand: resolvedValidateCommand,
+        baseRef: '',
+        base: '',
+        changedFiles: [],
+        classification: { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+      };
+    }
+
+    const effectiveCommand = this.computeEffectiveValidateCommand(
+      classification,
+      resolvedValidateCommand,
+      base,
+      isBuiltInDefault,
+    );
+
+    this.logger.info(
+      {
+        event: 'targeted-validate',
+        classification: classification.kind,
+        isBuiltInDefault,
+        base,
+        effectiveCommand,
+      },
+      '#1134: targeted-validate decision',
+    );
+
+    return { effectiveCommand, baseRef, base, changedFiles, classification };
+  }
+
+  /**
+   * #1134 (US2): pure resolution of the effective validate command from the
+   * classification (see `data-model.md` resolution table). Custom commands run
+   * verbatim; only the built-in default is narrowed.
+   */
+  private computeEffectiveValidateCommand(
+    classification: Classification,
+    validateCommand: string,
+    base: string,
+    isBuiltInDefault: boolean,
+  ): string {
+    if (!isBuiltInDefault) {
+      return validateCommand;
+    }
+    const filter = `"...[origin/${base}]"`;
+    switch (classification.kind) {
+      case 'targeted':
+        return `pnpm --filter ${filter} build && pnpm --filter ${filter} test`;
+      case 'docs-only-skip-tests':
+        return `pnpm --filter ${filter} build`;
+      case 'test-only':
+        return `pnpm vitest run ${classification.testFiles.join(' ')}`;
+      case 'single-package-plain':
+      case 'full-fallback':
+        return validateCommand;
+    }
+  }
+
+  /**
+   * #1134 (US3 / FR-011): opt-in fail-then-pass regression proof. Computes the
+   * changed test-file set (diff ∩ test globs) and, when non-empty, verifies the
+   * files fail on the base ref and pass on the branch. Returns a failing
+   * `PhaseResult` (surfacing the evidence) when the proof does not hold, or
+   * `undefined` to let the normal validate run proceed.
+   */
+  private async runFailThenPassCheck(
+    context: WorkerContext,
+    targetedValidate: TargetedValidateDecision,
+  ): Promise<PhaseResult | undefined> {
+    const changedTestFiles = targetedValidate.changedFiles.filter(isTestFile);
+    const outcome = await runFailThenPass({
+      checkoutPath: context.checkoutPath,
+      baseRef: targetedValidate.baseRef,
+      changedTestFiles,
+      signal: context.signal,
+    });
+
+    if (outcome.kind === 'fail') {
+      this.logger.warn(
+        { event: 'fail-then-pass', reason: outcome.reason },
+        '#1134: fail-then-pass regression proof failed',
+      );
+      return {
+        phase: 'validate',
+        success: false,
+        exitCode: 1,
+        durationMs: 0,
+        output: [],
+        capturedStdout: outcome.evidence,
+        error: {
+          message: `fail-then-pass: ${outcome.reason}`,
+          output: outcome.evidence,
+          phase: 'validate',
+        },
+      };
+    }
+
+    if (outcome.kind === 'skip') {
+      // Base env couldn't be prepared (e.g. dependency install failed). Do not
+      // block validate on an infrastructure failure — proceed to normal validate.
+      this.logger.warn(
+        { event: 'fail-then-pass', outcome: 'skip', reason: outcome.reason },
+        '#1134: fail-then-pass regression proof skipped',
+      );
+      return undefined;
+    }
+
+    // noop / pass → let the normal validate run proceed.
+    return undefined;
   }
 
   /**

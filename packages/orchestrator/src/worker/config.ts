@@ -15,6 +15,15 @@ export const DEFAULT_REVIEW = {
 } as const;
 
 /**
+ * Built-in default validate command (#1134 Decision 2 / Q1=B). The schema
+ * `.default(...)` references this constant so the built-in-default detector in
+ * the targeted-validate wiring (`config.validateCommand === DEFAULT_VALIDATE_COMMAND`)
+ * stays in sync with the schema by construction. Only the built-in default is
+ * rewritten to the pnpm filter form; operator-set custom commands run verbatim.
+ */
+export const DEFAULT_VALIDATE_COMMAND = 'pnpm test && pnpm build';
+
+/**
  * Built-in per-workflow `maxRemediations` default: `speckit-bugfix` → 2,
  * `speckit-feature` and every other workflow name → 3 (Q3).
  */
@@ -88,7 +97,7 @@ export const GateDefinitionSchema = z.object({
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
-  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review', 'on-merge-conflict', 'on-remediation-limit']),
+  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review', 'on-merge-conflict', 'on-remediation-limit', 'on-ci-green']),
 });
 
 /**
@@ -132,6 +141,20 @@ export const WorkerConfigSchema = z.object({
    * observable behavior byte-identical. Wired from `WORKER_REVIEW_PHASE_ENABLED`.
    */
   reviewPhaseEnabled: z.boolean().default(false),
+  /**
+   * Feature flag for CI-aware merge readiness (#1133). Default false: the
+   * `implementation-review` gate stays on `implement` completion and no CI
+   * readout runs, keeping observable behavior byte-identical. When true, the
+   * gate relocates to fire on `validate` completion only once CI is green.
+   * Wired from `WORKER_CI_MERGE_GATE_ENABLED`.
+   */
+  ciMergeGateEnabled: z.boolean().default(false),
+  /**
+   * Max wall-clock (ms) to wait for CI to resolve to green/not-passed on the
+   * ready PR before pausing with `waiting-for:ci` (#1133, Q1-C). Default 15 min.
+   * Per-workflow-overridable, mirrors `phaseTimeoutMs`.
+   */
+  ciWaitTimeoutMs: z.number().int().min(30_000).default(900_000),
   /** Per-phase timeout overrides keyed by phase name */
   phaseTimeoutOverrides: PhaseTimeoutOverridesSchema,
   /** Base directory for repo checkouts */
@@ -139,7 +162,7 @@ export const WorkerConfigSchema = z.object({
   /** Grace period for shutdown in milliseconds */
   shutdownGracePeriodMs: z.number().int().min(1000).default(5000),
   /** Command to run during the validate phase */
-  validateCommand: z.string().default('pnpm test && pnpm build'),
+  validateCommand: z.string().default(DEFAULT_VALIDATE_COMMAND),
   /** Command to run before validation to install dependencies (empty string to skip) */
   preValidateCommand: z
     .string()
@@ -184,6 +207,24 @@ export const WorkerConfigSchema = z.object({
       { phase: 'tasks', gateLabel: 'waiting-for:tasks-review', condition: 'always' },
     ],
   }),
+}).transform((cfg) => {
+  // #1133 flag-conditional gate relocation. When ciMergeGateEnabled is false
+  // this is a no-op — the returned gates are byte-identical to today (SC-006).
+  // When true, every `waiting-for:implementation-review` gate moves off
+  // `implement` completion onto `validate` completion and fires only once CI
+  // is confirmed green (`on-ci-green`), per contracts/gate-and-flag.md.
+  if (!cfg.ciMergeGateEnabled) return cfg;
+  const relocated = Object.fromEntries(
+    Object.entries(cfg.gates).map(([label, defs]) => [
+      label,
+      defs.map((gate) =>
+        gate.gateLabel === 'waiting-for:implementation-review'
+          ? { ...gate, phase: 'validate' as const, condition: 'on-ci-green' as const }
+          : gate,
+      ),
+    ]),
+  );
+  return { ...cfg, gates: relocated };
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

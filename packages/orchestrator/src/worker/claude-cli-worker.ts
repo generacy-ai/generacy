@@ -465,6 +465,7 @@ export class ClaudeCliWorker {
             item.command as 'process' | 'continue',
             item.workflowName,
             this.config.reviewPhaseEnabled,
+            this.config.ciMergeGateEnabled,
           );
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
 
