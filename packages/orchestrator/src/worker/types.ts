@@ -2,6 +2,7 @@ import type { QueueItem } from '../types/index.js';
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import type { Effort } from '@generacy-ai/config';
 import type { PushGuardDecision } from './push-guard.js';
+import type { ReviewScope } from './handler-outcome.js';
 
 /**
  * Workflow phases in execution order
@@ -497,13 +498,25 @@ export interface WorkerContext {
   /** PRs opened in sibling repos during cross-repo fan-out (from WorkflowState) */
   linkedPRs?: LinkedPR[];
   /**
-   * Why the worker was resumed (#892). Set by the resume path when the
-   * base-advance monitor enqueued the re-run. Gates ValidateFixHandler
-   * invocation in PhaseLoop's validate `catch` block (D7 ordering invariant).
+   * Why the worker was resumed. Set by the resume path.
+   * - `'base-advance'` (#892): the base-advance monitor enqueued the re-run.
+   *   Gates ValidateFixHandler invocation in PhaseLoop's validate `catch` block
+   *   (D7 ordering invariant).
+   * - `'merge-conflict-resolved'` (#1131): a successful merge-conflict
+   *   resolution re-armed a resolution-scoped `review`. Gates the explicit
+   *   start-phase override in the context-build seam.
    */
-  resumeReason?: 'base-advance';
+  resumeReason?: 'base-advance' | 'merge-conflict-resolved';
   /** Base branch SHA that triggered the resume (#892). Surfaces in logs. */
   baseSha?: string;
+  /**
+   * Resolution-scoped review window (#1131). Set only on the
+   * `merge-conflict-resolved` resume path when the re-arm carried a scope.
+   * `undefined` ⇒ whole-PR review (FR-010 whole-branch fallback); a
+   * defined-but-empty window ⇒ the executor short-circuits to `validate`
+   * (FR-011).
+   */
+  reviewScope?: ReviewScope;
 }
 
 /**

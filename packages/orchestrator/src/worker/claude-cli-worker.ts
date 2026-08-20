@@ -7,7 +7,7 @@ import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSett
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem, PhaseTracker } from '../types/index.js';
-import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
+import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter, WorkflowPhase } from './types.js';
 import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -29,7 +29,7 @@ import { ReviewPoster } from './review-poster.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { MergeConflictHandler } from './merge-conflict-handler.js';
 import { readPauseContext, clearPauseContext } from './pause-context.js';
-import type { HandlerOutcome } from './handler-outcome.js';
+import type { HandlerOutcome, ReviewScope } from './handler-outcome.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { createAgentLauncher } from '../launcher/launcher-setup.js';
@@ -391,6 +391,10 @@ export class ClaudeCliWorker {
             metadata: {
               startPhase: outcome.startPhase,
               resumeReason: 'merge-conflict-resolved',
+              // #1131: transport the resolution scope to the review executor via
+              // the queue item (the pause-context sidecar is cleared just below).
+              // `undefined` for the whole-branch fallback / flag-OFF re-arm.
+              reviewScope: outcome.reviewScope,
             },
           };
 
@@ -517,14 +521,35 @@ export class ClaudeCliWorker {
       // #892: surface resume identity so PhaseLoop's validate `catch` can gate
       // the ValidateFixHandler on the base-advance path.
       const md = (item.metadata ?? {}) as Record<string, unknown>;
-      const resumeReason = md['resumeReason'] === 'base-advance' ? 'base-advance' as const : undefined;
+      const rawResumeReason = md['resumeReason'];
+      const resumeReason =
+        rawResumeReason === 'base-advance'
+          ? ('base-advance' as const)
+          : rawResumeReason === 'merge-conflict-resolved'
+            ? ('merge-conflict-resolved' as const)
+            : undefined;
       const baseSha = typeof md['baseSha'] === 'string' ? (md['baseSha'] as string) : undefined;
+
+      // #1131: explicit start-phase override on the merge-conflict resume path.
+      // Labels do NOT reliably resolve to `review` after a resolution (a conflict
+      // during `validate`, after `review` already ran, carries `completed:review`
+      // and would resolve straight back to `validate`). So when the re-arm was a
+      // scoped-`review` re-arm, honor its `startPhase` directly, bypassing the
+      // label-derived result. Any other resumeReason/startPhase → label-derived.
+      const effectiveStartPhase: WorkflowPhase =
+        resumeReason === 'merge-conflict-resolved' && md['startPhase'] === 'review'
+          ? 'review'
+          : startPhase;
+      const reviewScope =
+        resumeReason === 'merge-conflict-resolved'
+          ? (md['reviewScope'] as ReviewScope | undefined)
+          : undefined;
 
       const context: WorkerContext = {
         workerId,
         jobId,
         item,
-        startPhase,
+        startPhase: effectiveStartPhase,
         github,
         logger: workerLogger,
         signal: abortController.signal,
@@ -535,6 +560,7 @@ export class ClaudeCliWorker {
         siblingWorkdirs,
         ...(resumeReason ? { resumeReason } : {}),
         ...(baseSha ? { baseSha } : {}),
+        ...(reviewScope ? { reviewScope } : {}),
       };
 
       // Helper to build job event base payload

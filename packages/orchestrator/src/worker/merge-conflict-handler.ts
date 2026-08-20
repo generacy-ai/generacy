@@ -36,7 +36,7 @@ import type { WorkerConfig } from './config.js';
 import { resolveAgentForPhase } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
-import type { HandlerOutcome } from './handler-outcome.js';
+import type { HandlerOutcome, ReviewScope } from './handler-outcome.js';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PrLinker, type PrLinkInput } from './pr-linker.js';
@@ -229,7 +229,7 @@ export class MergeConflictHandler {
         { owner, repo, issueNumber, baseRef, branch: branchName },
         'MergeConflictHandler: no-op merge (branch already up to date) — clearing labels',
       );
-      return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath);
+      return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath, true);
     }
 
     // Step 7: git merge origin/<base>. Retry ONLY on env classes (index.lock,
@@ -613,7 +613,7 @@ export class MergeConflictHandler {
       return { outcome: 'failed', evidence };
     }
 
-    return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath);
+    return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath, false);
   }
 
   /**
@@ -636,8 +636,11 @@ export class MergeConflictHandler {
     metadata: ResolveMergeConflictsMetadata | undefined,
     baseRef: string,
     checkoutPath: string,
+    isNoOp: boolean,
   ): Promise<HandlerOutcome> {
     // FR-004: fail-loud if pause-context is missing. Never re-derive from labels.
+    // `metadata.phase` stays required for this guard AND the flag-OFF fallback
+    // below (FR-010), even though the flag-ON path re-arms `review`.
     if (!metadata?.phase) {
       const evidence: BlockedStuckMergeConflictsEvidence = {
         unresolvedPaths: [],
@@ -656,7 +659,22 @@ export class MergeConflictHandler {
     }
 
     await this.applySuccessDisposition(github, owner, repo, issueNumber);
-    return { outcome: 're-armed', startPhase: metadata.phase };
+
+    // FR-009: gate the scoped-`review` re-arm on `reviewPhaseEnabled`. When the
+    // flag is OFF, `review` is filtered out of the effective sequence, so
+    // re-arming it would crash with `Unknown starting phase: review`. Fall back
+    // to today's `startPhase: metadata.phase` re-arm (byte-identical to pre-#1131).
+    if (!this.config.reviewPhaseEnabled) {
+      return { outcome: 're-armed', startPhase: metadata.phase };
+    }
+
+    // FR-001/FR-002/FR-010: re-arm into a resolution-scoped `review`. When the
+    // SHAs can't be determined, `getResolutionScope` returns `undefined` and we
+    // re-arm `review` anyway with the whole-branch fallback (reviewScope omitted).
+    const reviewScope = await this.getResolutionScope(checkoutPath, isNoOp);
+    return reviewScope
+      ? { outcome: 're-armed', startPhase: 'review', reviewScope }
+      : { outcome: 're-armed', startPhase: 'review' };
   }
 
   /**
@@ -903,6 +921,42 @@ export class MergeConflictHandler {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Resolution scope for the scoped `review` re-arm (#1131 T005 / FR-002).
+   *
+   * Returns the `baseSha..headSha` window the scoped review must inspect:
+   *  - Normal `--no-ff` merge path: `{ baseSha: HEAD^1, headSha: HEAD }` — the
+   *    pre-merge branch tip (first parent) → the merge commit.
+   *  - No-op path (`isNoOp: true`, branch already up to date): `{ baseSha: HEAD,
+   *    headSha: HEAD }` — a deliberately empty window that short-circuits the
+   *    review executor to `validate` (FR-011).
+   *  - Either SHA undeterminable: `undefined` — the caller re-arms `review`
+   *    anyway with the whole-branch fallback (FR-010, do NOT fail loud).
+   *
+   * Short SHAs via `git rev-parse --short`, consistent with `getBranchTipSha`.
+   */
+  private async getResolutionScope(
+    checkoutPath: string,
+    isNoOp: boolean,
+  ): Promise<ReviewScope | undefined> {
+    const head = await this.getBranchTipSha(checkoutPath);
+    if (!head) return undefined;
+    if (isNoOp) return { baseSha: head, headSha: head };
+    let base = '';
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['rev-parse', '--short', 'HEAD^1'],
+        { cwd: checkoutPath },
+      );
+      base = stdout.trim();
+    } catch {
+      base = '';
+    }
+    if (!base) return undefined;
+    return { baseSha: base, headSha: head };
   }
 
   private sleep(ms: number): Promise<void> {
