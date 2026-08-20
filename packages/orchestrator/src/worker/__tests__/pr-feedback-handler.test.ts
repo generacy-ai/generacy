@@ -381,7 +381,9 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #883: blocked:stuck-feedback-loop is added
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+      // stop — blocked:stuck-feedback-loop is added so the monitor pauses
+      // re-enqueue until an operator clears it.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
@@ -723,7 +725,7 @@ describe('PrFeedbackHandler', () => {
       });
     });
 
-    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → blocked:stuck-feedback-loop (preserved)', () => {
+    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → blocked:stuck-feedback-loop (legacy-path stop)', () => {
       it('B1 (success && !hasChanges): no-diff clean exit → blocked:stuck-feedback-loop', async () => {
         const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
         const checkoutPath = '/tmp/workspace/test-owner/test-repo';
@@ -741,6 +743,8 @@ describe('PrFeedbackHandler', () => {
 
         await handler.handle(item, checkoutPath);
 
+        // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+        // stop — blocked:stuck-feedback-loop is applied on the no-diff cycle.
         expect(mockGitHub.addLabels).toHaveBeenCalledWith(
           'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
         );
@@ -778,6 +782,7 @@ describe('PrFeedbackHandler', () => {
 
         await handler.handle(item, checkoutPath);
 
+        // #1130 (PR #1145 review): legacy-path bounded stop applied.
         expect(mockGitHub.addLabels).toHaveBeenCalledWith(
           'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
         );
@@ -920,7 +925,7 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #883: blocked:stuck-feedback-loop is added
+      // #1130 (PR #1145 review): legacy-path bounded stop applied.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
@@ -1110,7 +1115,7 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // Should add blocked label
+      // #1130 (PR #1145 review): legacy-path bounded stop applied.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
@@ -1671,7 +1676,9 @@ describe('PrFeedbackHandler', () => {
       const removed = collectRemovedLabels();
       expect(removed).not.toContain('waiting-for:address-pr-feedback');
       expect(removed).toContain('agent:in-progress');
-      // `blocked:stuck-feedback-loop` was added, not removed — assert the add.
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+      // stop — waiting-for is retained (trigger persists) AND
+      // blocked:stuck-feedback-loop is applied.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',

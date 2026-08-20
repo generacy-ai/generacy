@@ -1699,6 +1699,167 @@ describe('PrFeedbackMonitorService', () => {
   });
 
   // ==========================================================================
+  // #1130 / FR-010 (Q4→A): engine-authored review-thread exclusion.
+  // A thread is dropped from the trusted-unresolved count iff EVERY comment
+  // carries an engine-authored marker. The match rule (column-0, case-sensitive,
+  // `> `-quoted excluded) is owned by commentCarriesEngineAuthoredReviewMarker.
+  // ==========================================================================
+
+  describe('#1130 engine-authored thread exclusion', () => {
+    it('SC-001/SC-003: an all-engine-authored thread contributes 0 and does NOT enqueue', async () => {
+      // Single unresolved thread whose only comment is an engine review body.
+      // Author is a trusted MEMBER — proving exclusion is by MARKER, not trust:
+      // the thread would enqueue on trust alone, but the marker drops it.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 501,
+          isResolved: false,
+          comments: [
+            {
+              id: 501,
+              body: '<!-- generacy-engine-review round=1 -->\n\nEngine finding text',
+              author: 'cluster-bot',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('finding #3: an all-engine PR skips WITHOUT posting the untrusted notice', async () => {
+      // Every unresolved thread is engine-authored (all excluded by FR-010).
+      // Before the fix this fell through to Case B and posted the false
+      // "⚠️ every comment author is untrusted" notice — the authors are
+      // trusted-engine, just excluded. Now it must skip silently.
+      const postPrComment = vi.fn().mockResolvedValue(undefined);
+      const listPrCommentBodies = vi.fn().mockResolvedValue([]);
+      (mockClient as unknown as { postPrComment: unknown }).postPrComment = postPrComment;
+      (mockClient as unknown as { listPrCommentBodies: unknown }).listPrCommentBodies =
+        listPrCommentBodies;
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 511,
+          isResolved: false,
+          comments: [
+            {
+              id: 511,
+              body: '<!-- generacy-engine-review round=1 -->\n\nEngine finding',
+              author: 'cluster-bot',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+        {
+          rootCommentId: 512,
+          isResolved: false,
+          comments: [
+            {
+              id: 512,
+              body: '<!-- generacy-finding:xyz -->\n\nEngine inline finding',
+              author: 'cluster-bot',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      // No untrusted notice posted (would be factually false).
+      expect(postPrComment).not.toHaveBeenCalled();
+      // The Case B "every comment author is untrusted" warn is NOT emitted.
+      const untrustedWarn = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) =>
+          typeof c[1] === 'string' && c[1].includes('every comment author is untrusted'),
+      );
+      expect(untrustedWarn).toBeUndefined();
+    });
+
+    it('FR-010: a mixed thread with ≥1 external trusted comment still enqueues', async () => {
+      // Thread carries an engine-authored comment AND an external MEMBER
+      // comment → not all-engine → stays live → enqueues as today.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 601,
+          isResolved: false,
+          comments: [
+            {
+              id: 601,
+              body: '<!-- generacy-finding:abc123 -->\n\nEngine inline finding',
+              author: 'cluster-bot',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+            {
+              id: 602,
+              body: 'Human reviewer: please also handle the null case',
+              author: 'maintainer',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'address-pr-feedback',
+          metadata: expect.objectContaining({ reviewThreadIds: [601] }),
+        }),
+      );
+    });
+
+    it('FR-001: a `> `-quoted marker does NOT exclude the thread (helper rule)', async () => {
+      // A human quoting an engine review body while replying is NOT an
+      // engine-authored comment — the quoted marker is not at column 0.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 701,
+          isResolved: false,
+          comments: [
+            {
+              id: 701,
+              body: '> <!-- generacy-finding:abc123 -->\n\nI disagree with this finding',
+              author: 'maintainer',
+              authorAssociation: 'MEMBER',
+              created_at: '',
+              updated_at: '',
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'address-pr-feedback',
+          metadata: expect.objectContaining({ reviewThreadIds: [701] }),
+        }),
+      );
+    });
+  });
+
+  // ==========================================================================
   // #879: SC-001..SC-005 + FR-009 + FR-010 regressions
   // ==========================================================================
 
@@ -1874,10 +2035,10 @@ describe('PrFeedbackMonitorService', () => {
       ];
     }
 
-    it('SC-003 skip: blocked:stuck-feedback-loop present → no enqueue, no waiting-for label', async () => {
+    it('SC-003 skip: blocked:resolve-failed present → no enqueue, no waiting-for label', async () => {
       (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
       (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        'blocked:stuck-feedback-loop',
+        'blocked:resolve-failed',
       ]);
 
       const event = createPrReviewEvent();
@@ -1897,7 +2058,7 @@ describe('PrFeedbackMonitorService', () => {
       );
       expect(infoCall).toBeDefined();
       expect(infoCall![0]).toMatchObject({
-        blockedLabel: 'blocked:stuck-feedback-loop',
+        blockedLabel: 'blocked:resolve-failed',
         reason: 'blocked-label-present',
       });
     });
@@ -1949,7 +2110,7 @@ describe('PrFeedbackMonitorService', () => {
         },
       ]);
       (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        'blocked:stuck-feedback-loop',
+        'blocked:resolve-failed',
       ]);
 
       const event = createPrReviewEvent();
@@ -1967,7 +2128,7 @@ describe('PrFeedbackMonitorService', () => {
     it('idempotent-state hygiene: lastUnresolvedThreadCount is updated on skip', async () => {
       (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
       (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        'blocked:stuck-feedback-loop',
+        'blocked:resolve-failed',
       ]);
 
       const event = createPrReviewEvent();
@@ -1982,6 +2143,69 @@ describe('PrFeedbackMonitorService', () => {
           typeof c[1] === 'string' && c[1].includes('state change'),
         );
       expect(stateChangeInfos).toHaveLength(0);
+    });
+  });
+
+  // ==========================================================================
+  // #1130 finding #1(b): waiting-for:remediation-limit is a hard skip.
+  // The shared review/remediate loop applies this gate on cap exhaustion; the
+  // monitor must not re-enqueue while it is present, otherwise the worker resets
+  // the remediation budget every poll (the cap-variant runaway).
+  // ==========================================================================
+
+  describe('#1130 finding #1(b): waiting-for:remediation-limit skip', () => {
+    function trustLiveThreads() {
+      return [
+        {
+          id: 'PRRT_901',
+          rootCommentId: 901,
+          isResolved: false,
+          comments: [{
+            id: 901, body: 'please change this', author: 'reviewer',
+            authorAssociation: 'MEMBER', created_at: '', updated_at: '',
+          }],
+        },
+      ];
+    }
+
+    it('skips enqueue while waiting-for:remediation-limit is present', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'waiting-for:remediation-limit',
+        'agent:paused',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+
+      // waiting-for:address-pr-feedback NOT added on this poll (the skip fires
+      // before the label-add step).
+      const waitingForCall = (mockClient.addLabels as ReturnType<typeof vi.fn>).mock.calls
+        .find((c: unknown[]) => Array.isArray(c[3]) && (c[3] as string[]).includes('waiting-for:address-pr-feedback'));
+      expect(waitingForCall).toBeUndefined();
+
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => typeof c[1] === 'string' && c[1].includes('waiting-for:remediation-limit gate is present'),
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({
+        gate: 'waiting-for-remediation-limit',
+        reason: 'remediation-limit-gate-present',
+      });
+    });
+
+    it('enqueues normally once the operator clears the gate', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'agent:in-progress',
+      ]);
+
+      const result = await service.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
     });
   });
 

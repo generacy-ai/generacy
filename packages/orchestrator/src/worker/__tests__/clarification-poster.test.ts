@@ -230,7 +230,7 @@ include?
 **Question**: What content shape should the shortened descriptions take?
 **Options**:
 - A: **Terse cause only, keep issue ref**. Examples:
-  - \`blocked:stuck-feedback-loop\`: \`PR-feedback loop paused.\`
+  - \`blocked:resolve-failed\`: \`PR-feedback resolve failed.\`
   - \`blocked:stuck-validate-fix\`: \`Validate-fix paused (#892).\`
 - B: **Cause only, no directive**. Slightly terser.
 - C: **Cause + issue ref only**. Very short.

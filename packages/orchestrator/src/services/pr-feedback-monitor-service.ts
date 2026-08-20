@@ -15,6 +15,7 @@ import type {
 } from '../types/monitor.js';
 import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import { PrLinker, type PrLinkInput, type PrLinkResult } from '../worker/pr-linker.js';
+import { commentCarriesEngineAuthoredReviewMarker } from '../worker/review-poster.js';
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { decideAdaptivePoll } from './adaptive-poll-controller.js';
@@ -243,6 +244,12 @@ export class PrFeedbackMonitorService {
     // FR-004 top-level notice.
     let unresolvedThreadIds: number[];
     let totalUnresolvedThreads: number;
+    // #1130 finding #3: unresolved threads carrying at least one non-engine
+    // comment. Distinct from `totalUnresolvedThreads` (which counts engine
+    // threads too) — a PR whose only unresolved threads are engine-authored has
+    // `nonEngineUnresolvedThreads === 0` and must NOT fall into the Case B
+    // untrusted-notice path (the authors are trusted-engine, just excluded).
+    let nonEngineUnresolvedThreads: number;
     let untrustedCommentSkips: Array<{
       commentId: number;
       author: string;
@@ -260,8 +267,27 @@ export class PrFeedbackMonitorService {
       const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
       const trustedIds: number[] = [];
       const skips: typeof untrustedCommentSkips = [];
+      let nonEngineCount = 0;
 
       for (const thread of unresolvedThreads) {
+        // #1130 / FR-010 (Q4→A): exclude a thread from the trusted-unresolved
+        // count when — and only when — *every* comment in it is engine-authored
+        // (marker-matched). The engine posts its own review threads (#1125),
+        // and those must never re-trigger this monitor into the remediate loop.
+        // Any single external comment keeps the thread live. The match rule
+        // (column-0, case-sensitive, `> `-quoted excluded) is owned by
+        // `commentCarriesEngineAuthoredReviewMarker` — pass the raw body (FR-001).
+        const allEngineAuthored =
+          thread.comments.length > 0 &&
+          thread.comments.every((c) => commentCarriesEngineAuthoredReviewMarker(c.body));
+        if (allEngineAuthored) {
+          continue;
+        }
+        // #1130 finding #3: this thread has ≥1 non-engine comment — it is a real
+        // external thread (trusted or not). Count it so the caller can tell an
+        // all-engine PR (no external threads at all) apart from a PR whose
+        // external threads are merely untrusted (the Case B notice path).
+        nonEngineCount++;
         let threadHasTrusted = false;
         for (const c of thread.comments) {
           const decision = isTrustedCommentAuthor(c, 'pr-feedback', {
@@ -287,6 +313,7 @@ export class PrFeedbackMonitorService {
 
       unresolvedThreadIds = trustedIds;
       untrustedCommentSkips = skips;
+      nonEngineUnresolvedThreads = nonEngineCount;
     } catch (error) {
       if (error instanceof GhAuthError) {
         if (this.githubAppCredentialId) {
@@ -345,6 +372,36 @@ export class PrFeedbackMonitorService {
       return false;
     }
 
+    // Case C2 (#1130 finding #3): unresolved threads exist, but every one is
+    // engine-authored (all excluded by the FR-010 marker filter above). There is
+    // no external author at all — trusted or untrusted — so this must NOT fall
+    // through to Case B, which would post the FR-004 "every comment author is
+    // untrusted" notice. That notice would be factually false: the authors are
+    // trusted-engine, deliberately excluded from the trigger. Skip enqueue
+    // silently (mirrors Case C for enqueue), but preserve the thread count for
+    // transition logging since the threads are not resolved.
+    if (nonEngineUnresolvedThreads === 0) {
+      const previous = this.lastUnresolvedThreadCount.get(stateKey);
+      const isTransition = previous === undefined || previous !== totalUnresolvedThreads;
+      const logFn = isTransition ? this.logger.info : this.logger.debug;
+      logFn.call(
+        this.logger,
+        {
+          owner, repo, prNumber, issueNumber,
+          totalUnresolvedThreads,
+          engineAuthoredExcluded: totalUnresolvedThreads,
+        },
+        isTransition
+          ? 'All unresolved review threads are engine-authored — skipping enqueue (no untrusted notice)'
+          : 'All unresolved review threads are engine-authored — skipping',
+      );
+      this.lastUnresolvedThreadCount.set(stateKey, totalUnresolvedThreads);
+      // Reset the zero-trusted edge so a later genuine untrusted-external episode
+      // still posts the Case B notice on its transition.
+      this.lastZeroTrustedState.set(stateKey, false);
+      return false;
+    }
+
     // Case B: unresolved threads exist, but zero of them are trust-live.
     // #869 / FR-002, FR-003, FR-004: skip enqueue, emit warn log naming the
     // untrusted skips, and post a top-level notice on the transition edge.
@@ -386,9 +443,10 @@ export class PrFeedbackMonitorService {
     this.lastZeroTrustedState.set(stateKey, false);
 
     // Case A tail (#883): before enqueue, check for any `blocked:*` label on
-    // the linked issue. The handler adds `blocked:stuck-feedback-loop` when
-    // its fix cycle can't advance; the operator removes the label to permit
-    // another attempt. Any `blocked:*` prefix is the contract — no allow-list.
+    // the linked issue. The handler can apply terminal `blocked:*` labels
+    // (e.g. `blocked:fixer-timeout-*`, `blocked:resolve-failed`) when a fix
+    // cycle can't advance; the operator removes the label to permit another
+    // attempt. Any `blocked:*` prefix is the contract — no allow-list.
     let issueLabels: string[];
     try {
       issueLabels = await client.getIssueLabels(owner, repo, issueNumber);
@@ -399,6 +457,33 @@ export class PrFeedbackMonitorService {
       );
       issueLabels = [];
     }
+
+    // #1130 finding #1(b): treat waiting-for:remediation-limit as non-re-enqueueable.
+    // The shared review/remediate loop applies this gate (+ agent:paused) when the
+    // external-feedback remediation cap is reached (FR-005). This gate — not a
+    // `blocked:*` label — is the terminal dead-end that replaced
+    // `blocked:stuck-feedback-loop` (FR-008), so the generic `blocked:*` skip
+    // below never matches it. Without this explicit skip the monitor would
+    // re-enqueue on every poll while the unresolved external threads persist; the
+    // worker would clear the review artifact (budget reset) and re-seed from
+    // round 1 each time — an infinite runaway that re-introduces the #883 loop
+    // this feature was meant to retire. The operator removes the gate to grant a
+    // fresh attempt; a genuinely NEW external review posts new threads that change
+    // the unresolved set and legitimately re-arm the trigger (FR-006).
+    if (issueLabels.includes('waiting-for:remediation-limit')) {
+      this.logger.info(
+        {
+          owner, repo, prNumber, issueNumber,
+          unresolvedThreads: unresolvedThreadIds.length,
+          gate: 'waiting-for-remediation-limit',
+          reason: 'remediation-limit-gate-present',
+        },
+        'Skipping PR-feedback enqueue while waiting-for:remediation-limit gate is present',
+      );
+      this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
+      return false;
+    }
+
     // #1070 FR-006 / D-4: retry-eligible check fires BEFORE the blocked:*
     // short-circuit. Preserves Assumption 5 — any UNRECOGNIZED blocked:*
     // label still pauses the monitor; only the specific `blocked:fixer-timeout`
