@@ -22,6 +22,9 @@ import { getPhaseSequence } from '../types.js';
 import { resolveWorkflowOverrides } from '../config.js';
 import type { WorkerConfig } from '../config.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
+import { ReviewPoster, matchEngineAuthoredReviewMarker } from '../review-poster.js';
+import type { FindingsArtifact, ReviewVerdict } from '../review-findings-artifact.js';
+import type { GitHubClient, CreateReviewInput, Review } from '@generacy-ai/workflow-engine';
 
 // ---------------------------------------------------------------------------
 // Harness — mirrors phase-loop.test.ts:42-116 (createMockDeps / createMockContext
@@ -276,5 +279,126 @@ describe('US1 — loop traverses review and remediate', () => {
     // No severity gating / gate-driven remediation: gateChecker returns [] and
     // remediate entry came purely from the injected trigger, not a gate.
     expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// US2 (#1127) — changes-required verdict routes off-sequence to remediate,
+// converts the PR back to draft, backtracks to a delta-scoped re-review, and
+// re-marks ready on the clean re-review. Exercises the REAL posting +
+// lifecycle production code (#1125) with the verdict steered — not
+// re-implemented (FR-008) — through the `readFindingsArtifact` seam.
+//
+// The trigger mirrors production: `remediateTrigger` reads the same verdict the
+// review side-effect block just observed (in prod: `readReviewArtifactSync`),
+// so round 1 (changes-required) drives one remediate round-trip and round 2
+// (clean) resumes forward.
+// ===========================================================================
+
+/** Capturing GitHubClient spy for the real ReviewPoster (body-only path). */
+function createGithubSpy(): GitHubClient {
+  return {
+    listReviews: vi.fn(async () => [] as Review[]),
+    listPullRequestFiles: vi.fn(async () => []),
+    getPRReviewThreads: vi.fn(async () => []),
+    resolveReviewThread: vi.fn(async () => undefined),
+    createReview: vi.fn(async (): Promise<Review> => ({
+      id: 1,
+      user: { login: 'generacy[bot]' },
+      body: '',
+      state: 'COMMENTED',
+      submittedAt: new Date().toISOString(),
+    })),
+  } as unknown as GitHubClient;
+}
+
+describe('US2 (#1127) — changes-required → remediate → re-review, real lifecycle', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+  let github: GitHubClient;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+    github = createGithubSpy();
+    deps.reviewPoster = new ReviewPoster({
+      github,
+      owner: 'test',
+      repo: 'repo',
+      prNumber: 42,
+      logger: mockLogger,
+    });
+
+    // Round 1 → changes-required (one blocking finding); round 2+ → clean.
+    // The trigger reads the last-observed verdict, exactly like production.
+    let lastVerdict: ReviewVerdict | null = null;
+    deps.readFindingsArtifact = vi.fn(async (_ctx, round: number): Promise<FindingsArtifact> => {
+      const artifact: FindingsArtifact =
+        round === 1
+          ? {
+              verdict: 'changes-required',
+              findings: [{ marker: 'f-block-1', text: 'must fix', severity: 'blocking' }],
+            }
+          : { verdict: 'clean', findings: [] };
+      lastVerdict = artifact.verdict;
+      return artifact;
+    });
+    deps.remediateTrigger = () => lastVerdict === 'changes-required';
+  });
+
+  // T022 — the blocking verdict routes the loop off-sequence toward remediate,
+  // not to the next linear phase.
+  it('routes the blocking verdict off-sequence to remediate, then back to review (FR-004)', async () => {
+    const context = createMockContext('speckit-feature', 'implement');
+    const config = createConfig({ reviewPhaseEnabled: true });
+    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(result.completed).toBe(true);
+    const order = phaseStartOrder(deps);
+    // implement → review(1) → remediate → review(2) → validate
+    expect(order).toEqual(['implement', 'review', 'remediate', 'review', 'validate']);
+    expect(sequence).not.toContain('remediate');
+    // T024 — after the stub remediate, control backtracks to review (delta-scoped),
+    // never to the next linear phase.
+    const remediateIdx = order.indexOf('remediate');
+    expect(order[remediateIdx + 1]).toBe('review');
+  });
+
+  // T023 — entering remediate calls the ready→draft conversion (SC-004).
+  it('converts the PR back to draft on remediate entry (ready→draft, SC-004)', async () => {
+    const context = createMockContext('speckit-feature', 'implement');
+    const config = createConfig({ reviewPhaseEnabled: true });
+    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+
+    await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(deps.prManager.convertToDraftIfEngineMarkedReady).toHaveBeenCalledTimes(1);
+  });
+
+  // T025 — the clean re-review re-marks ready and the loop resumes forward
+  // (SC-004 — exactly one round-trip). One COMMENT review per round, marker on each.
+  it('re-marks ready on the clean re-review and resumes forward (SC-004)', async () => {
+    const context = createMockContext('speckit-feature', 'implement');
+    const config = createConfig({ reviewPhaseEnabled: true });
+    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+
+    await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    // markReadyForReview fires only on the round-2 clean verdict (not round 1).
+    expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
+
+    // One COMMENT review per round (rounds 1 + 2); each body carries the marker.
+    const createReview = github.createReview as unknown as ReturnType<typeof vi.fn>;
+    expect(createReview).toHaveBeenCalledTimes(2);
+    const inputs = createReview.mock.calls.map((c) => c[3] as CreateReviewInput);
+    expect(inputs.map((i) => i.event)).toEqual(['COMMENT', 'COMMENT']);
+    for (const input of inputs) {
+      expect(matchEngineAuthoredReviewMarker(input.body)).toBeDefined();
+    }
+
+    // Loop resumed forward into validate.
+    expect(phaseStartOrder(deps)).toContain('validate');
   });
 });

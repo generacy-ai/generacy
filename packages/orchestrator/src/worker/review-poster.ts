@@ -33,6 +33,49 @@ export function findingMarker(marker: string): string {
 }
 
 /**
+ * #1127 (D-3 fallback) — engine-authored review marker family. Every review
+ * comment/thread this module authors carries one of these prefixes at column 0:
+ * the once-per-round body marker (`reviewBodyMarker`) and the per-finding inline
+ * marker (`findingMarker`). Stamped exclusively by the deterministic builders
+ * above — never by the review agent's free-text.
+ *
+ * Exported for #1130, which wires it into the PR-feedback monitor's routing to
+ * *exclude* engine-authored threads from external-feedback processing. #1127
+ * does not touch that monitor (Q4=B / SC-005); it only ships the standalone
+ * match helper.
+ *
+ * Match rule (mirrors the clarification marker family in
+ * `clarification-markers.ts`):
+ *  - Prefix substring, case-sensitive ASCII.
+ *  - Line-anchored: only fires when the marker starts at column 0 of some line.
+ *  - `> `-quoted markers therefore do NOT match — a human quoting an engine
+ *    review body while replying is not itself an engine-authored comment.
+ */
+export const ENGINE_AUTHORED_REVIEW_MARKERS: readonly string[] = [
+  `<!-- ${REVIEW_BODY_MARKER_PREFIX}`,
+  '<!-- generacy-finding:',
+] as const;
+
+/**
+ * Same semantics as the clarification match helpers; returns the specific prefix
+ * string that matched (identity from `ENGINE_AUTHORED_REVIEW_MARKERS`) or
+ * `undefined` if no line carries an engine-authored review marker at column 0.
+ */
+export function matchEngineAuthoredReviewMarker(body: string): string | undefined {
+  for (const line of body.split('\n')) {
+    for (const prefix of ENGINE_AUTHORED_REVIEW_MARKERS) {
+      if (line.startsWith(prefix)) return prefix;
+    }
+  }
+  return undefined;
+}
+
+/** True iff `body` carries an engine-authored review marker at column 0 of some line. */
+export function commentCarriesEngineAuthoredReviewMarker(body: string): boolean {
+  return matchEngineAuthoredReviewMarker(body) !== undefined;
+}
+
+/**
  * Parse unified-diff hunk headers from each file's `patch` into the set of
  * RIGHT-side (post-change) line numbers that GitHub will accept an inline
  * comment on. A `@@ -a,b +c,d @@` header means added/context lines start at `c`
