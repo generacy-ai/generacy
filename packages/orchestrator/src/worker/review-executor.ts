@@ -192,12 +192,16 @@ export class ReviewExecutor {
     // 9. Stamp the commit reviewed.
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 
-    // 10. Persist the engine-authoritative artifact atomically.
+    // 10. Persist the engine-authoritative artifact atomically. Carry forward
+    //     #1128's `remediationCount` — the review executor rewrites the artifact
+    //     each round, and dropping the field here would silently reset the
+    //     review↔remediate cap on every re-review pass.
     await writeReviewArtifact(checkoutPath, workflowId, {
       findings,
       verdict,
       round,
       lastReviewedCommitSha,
+      remediationCount: priorRound?.remediationCount ?? 0,
     });
 
     this.logger.info(
