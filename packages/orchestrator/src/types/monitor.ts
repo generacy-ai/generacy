@@ -63,6 +63,13 @@ export interface PrFeedbackMetadata {
  * them independently. `phase` (added in #902) is the interrupted phase carried
  * in-band from the phase-loop pause site — required at handler entry for the
  * re-arm path; absence triggers fail-loud per FR-004.
+ *
+ * #1131: the resolution base/head SHAs a resolution-scoped review needs do NOT
+ * live here. They travel on the re-armed outcome's `reviewScope`
+ * (`ReArmedOutcome.reviewScope` → `WorkerContext.reviewScope`), because this
+ * sidecar is cleared immediately after re-arm and would be gone by the time the
+ * review executor runs. Do not add a SHA field here. `phase` stays required for
+ * the fail-loud guard and the flag-OFF (`reviewPhaseEnabled === false`) fallback.
  */
 export interface ResolveMergeConflictsMetadata {
   /** Advisory snapshot of conflicted paths at pause time. */

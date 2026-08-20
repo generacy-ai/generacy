@@ -11,12 +11,20 @@
  * to decide `clean` vs `changes-required`; it asks only for findings.
  */
 
+import type { ReviewScope } from './handler-outcome.js';
+
 export interface ReviewCharterInput {
   profile: 'standard' | 'verification';
   /** Relative sidecar path (agent's write target), e.g. `.generacy/review-findings-<id>.json`. */
   sidecarRelPath: string;
   blockingSeverity: 'critical' | 'major' | 'minor';
   round: number;
+  /**
+   * Resolution-scoped review window (#1131). When present, the charter names the
+   * exact `baseSha..headSha` range as the review target instead of "the whole PR
+   * diff". Absent ⇒ whole-PR review, byte-identical to pre-#1131.
+   */
+  diffWindow?: ReviewScope;
 }
 
 /**
@@ -25,18 +33,30 @@ export interface ReviewCharterInput {
  * "needs verification" findings for the `validate` phase to confirm.
  */
 export function buildReviewCharter(input: ReviewCharterInput): string {
-  const { profile, sidecarRelPath, blockingSeverity, round } = input;
+  const { profile, sidecarRelPath, blockingSeverity, round, diffWindow } = input;
 
   const lines: string[] = [];
 
   lines.push(`# Code review — round ${round}`);
   lines.push('');
-  lines.push(
-    'You are performing a correctness and regression review of the changes on ' +
-      'this pull request branch. Inspect the PR diff (the commits on this branch ' +
-      'relative to its base) for defects: logic errors, regressions, broken ' +
-      'invariants, security issues, and incorrect handling of edge cases.',
-  );
+  if (diffWindow) {
+    // FR-002 (#1131) — resolution-scoped: name the exact base..head range.
+    lines.push(
+      'You are performing a correctness and regression review of a merge-conflict ' +
+        `resolution. Inspect ONLY the diff in the range \`${diffWindow.baseSha}..${diffWindow.headSha}\` ` +
+        '(the merge commit that resolved the conflict, relative to the pre-merge ' +
+        'branch tip) for defects: logic errors, regressions, broken invariants, ' +
+        'security issues, and incorrect handling of edge cases introduced by the ' +
+        'resolution. Ignore files and changes outside this range.',
+    );
+  } else {
+    lines.push(
+      'You are performing a correctness and regression review of the changes on ' +
+        'this pull request branch. Inspect the PR diff (the commits on this branch ' +
+        'relative to its base) for defects: logic errors, regressions, broken ' +
+        'invariants, security issues, and incorrect handling of edge cases.',
+    );
+  }
   lines.push('');
 
   // FR-003 — explicit prohibition on running tests or builds.

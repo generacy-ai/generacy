@@ -47,4 +47,32 @@ describe('buildReviewCharter', () => {
     expect(buildReviewCharter(BASE)).toBe(buildReviewCharter(BASE));
     expect(buildReviewCharter({ ...BASE, round: 3 })).toContain('round 3');
   });
+
+  describe('#1131 resolution-scoped diff window', () => {
+    it('names the exact baseSha..headSha range and restricts the review to it (FR-002, SC-002)', () => {
+      const charter = buildReviewCharter({
+        ...BASE,
+        diffWindow: { baseSha: 'base123', headSha: 'head456' },
+      });
+      expect(charter).toContain('`base123..head456`');
+      // The window is exclusive: the agent is told to ignore anything outside it.
+      expect(charter.toLowerCase()).toMatch(/only.*range|ignore files and changes outside/);
+      expect(charter.toLowerCase()).toContain('merge-conflict');
+    });
+
+    it('still forbids tests/builds and names the sidecar when scoped (FR-003/FR-005 unchanged)', () => {
+      const charter = buildReviewCharter({
+        ...BASE,
+        diffWindow: { baseSha: 'aaa', headSha: 'bbb' },
+      });
+      expect(charter.toLowerCase()).toMatch(/do not run the test suite/);
+      expect(charter).toContain('.generacy/review-findings-acme_widgets_42.json');
+    });
+
+    it('absent diffWindow → byte-identical to the whole-PR charter (FR-010)', () => {
+      const withUndefined = buildReviewCharter({ ...BASE, diffWindow: undefined });
+      expect(withUndefined).toBe(buildReviewCharter(BASE));
+      expect(withUndefined).not.toContain('..');
+    });
+  });
 });
