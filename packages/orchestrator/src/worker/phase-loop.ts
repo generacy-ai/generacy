@@ -15,6 +15,8 @@ import type { CliSpawner } from './cli-spawner.js';
 import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import type { ReviewPoster } from './review-poster.js';
+import type { FindingsArtifact } from './review-findings-artifact.js';
 import type { ValidateFixHandler } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
@@ -108,6 +110,19 @@ export interface PhaseLoopDeps {
    * fire-once-then-false predicate to exercise the seam.
    */
   remediateTrigger?: (context: WorkerContext) => boolean;
+  /**
+   * #1125: posts one COMMENT review per round + resolves threads on re-review.
+   * Constructed by the worker wiring (claude-cli-worker) from the PR
+   * owner/repo/number. Absent in most unit tests — the review side-effect block
+   * only runs when BOTH `reviewPoster` and `readFindingsArtifact` are present.
+   */
+  reviewPoster?: ReviewPoster;
+  /**
+   * #1125: injectable seam to read the review executor's findings artifact for
+   * a given round. Defaults undefined → the review side-effect block never runs
+   * → production-inert until #1124 lands the real executor + reader.
+   */
+  readFindingsArtifact?: (context: WorkerContext, round: number) => Promise<FindingsArtifact | null>;
   /**
    * #1124: Real review-phase executor. When injected, the `review` branch runs
    * it (spawns the CLI with an in-process charter, writes a findings sidecar,
@@ -261,6 +276,11 @@ export class PhaseLoop {
     let currentProvider: string | undefined;
     let currentModel: string | undefined;
     let implementRetryCount = 0;
+
+    // #1125: current review round. Starts at 1; incremented on each
+    // remediate→review backtrack so re-review rounds (≥ 2) resolve prior
+    // threads and dedupe by the round body marker.
+    let reviewRound = 1;
 
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
@@ -1200,16 +1220,44 @@ export class PhaseLoop {
       // Clear output buffer for next phase
       outputCapture.clear();
 
+      // #1125: review side effects. Only runs when the injectable seam is wired
+      // (production-inert until #1124). Reads the findings artifact for this
+      // round, posts one COMMENT review, resolves prior threads on re-review,
+      // and marks the PR ready when the verdict is clean (before validate by
+      // linear order). All best-effort — the poster/PR calls never throw.
+      if (
+        phase === 'review'
+        && result.success
+        && deps.readFindingsArtifact
+        && deps.reviewPoster
+      ) {
+        const artifact = await deps.readFindingsArtifact(context, reviewRound);
+        if (artifact) {
+          await deps.reviewPoster.postRound(artifact, reviewRound);
+          if (reviewRound >= 2) {
+            await deps.reviewPoster.resolveResolvedThreads(artifact);
+          }
+          if (artifact.verdict === 'clean') {
+            await prManager.markReadyForReview(context.linkedPRs);
+          }
+        }
+      }
+
       // #1121: off-sequence `remediate` seam. After `review` completes
       // successfully, an injected trigger may drive a `remediate` pass that then
       // re-enters `review`. Defaults undefined → dead in production (FR-007/D-5).
       if (phase === 'review' && result.success && deps.remediateTrigger?.(context)) {
         this.logger.info('review complete — remediateTrigger fired; running off-sequence remediate');
+        // #1125 FR-006: if the engine previously marked this PR ready, convert
+        // it back to draft before remediating. No-op unless the engine holds it
+        // ready (never demotes a human-marked-ready PR).
+        await prManager.convertToDraftIfEngineMarkedReady(context.linkedPRs);
         await labelManager.onPhaseStart('remediate');
         const remediateResult = this.runStubPhase('remediate');
         await labelManager.onPhaseComplete('remediate');
         results.push(remediateResult);
         outputCapture.clear();
+        reviewRound++; // #1125: next review pass is a re-review round
         i--; // Re-enter the review phase
         continue;
       }
