@@ -11,6 +11,8 @@ import type {
   ConflictInfo,
   Review,
   ReviewThread,
+  CreateReviewInput,
+  PullRequestFile,
 } from '../../../types/github.js';
 
 /**
@@ -232,6 +234,51 @@ export interface GitHubClient {
    * @throws Error on any other non-zero exit.
    */
   listReviews(owner: string, repo: string, prNumber: number): Promise<Review[]>;
+
+  /**
+   * Submit one PR review via
+   * `POST /repos/{owner}/{repo}/pulls/{prNumber}/reviews`.
+   *
+   * One atomic submission carrying the `event`, a top-level `body`, and
+   * optional inline `comments[]`. Every inline comment MUST anchor to a
+   * diffable line — a non-diffable `line` 422s the entire submission
+   * (the caller pre-checks diffability via `listPullRequestFiles`). No
+   * internal retry for a 422 (it is a caller payload bug, not transient).
+   *
+   * @throws Error with the upstream stderr on non-zero exit.
+   */
+  createReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    input: CreateReviewInput,
+  ): Promise<Review>;
+
+  /**
+   * Convert a ready PR back to draft via the GraphQL
+   * `convertPullRequestToDraft` mutation.
+   *
+   * Two steps: resolve the PR node id + `isDraft` (short-circuits when the
+   * PR is already a draft), then run the mutation. Mirrors
+   * `resolveReviewThread`'s retry/auth handling — 3× backoff, `GhAuthError`
+   * rethrown, GraphQL `errors[]` terminal.
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on terminal failure.
+   */
+  convertPullRequestToDraft(owner: string, repo: string, prNumber: number): Promise<void>;
+
+  /**
+   * List the files changed in a PR via
+   * `GET /repos/{owner}/{repo}/pulls/{prNumber}/files` (paginated).
+   *
+   * Each entry carries `filename`, `status`, and an optional `patch`
+   * (unified-diff hunks; absent for binary/too-large files). Used to
+   * compute the set of diffable lines for inline review anchoring.
+   *
+   * @throws Error with the upstream stderr on non-zero exit.
+   */
+  listPullRequestFiles(owner: string, repo: string, prNumber: number): Promise<PullRequestFile[]>;
 
   /**
    * Reply to a PR comment

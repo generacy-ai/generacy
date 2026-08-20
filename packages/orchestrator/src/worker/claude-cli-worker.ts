@@ -21,7 +21,10 @@ import { OutputCapture } from './output-capture.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
+import { ReviewExecutor } from './review-executor.js';
+import { readReviewArtifactSync } from './review-artifact.js';
 import { PrManager } from './pr-manager.js';
+import { ReviewPoster } from './review-poster.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { MergeConflictHandler } from './merge-conflict-handler.js';
 import { readPauseContext, clearPauseContext } from './pause-context.js';
@@ -595,6 +598,19 @@ export class ClaudeCliWorker {
         checkoutPath, // #1051 FR-002: cwd for the pre-push guard's git ls-remote
       );
 
+      // #1125: ReviewPoster is wired into the phase loop but stays production-inert
+      // until #1124 lands the findings-artifact reader (PhaseLoopDeps.readFindingsArtifact,
+      // left undefined here). The review side-effect block only fires when BOTH the
+      // reader and this poster are present, so postRound never runs today. #1124 will
+      // supply the reader and resolve the live PR number at that point.
+      const reviewPoster = new ReviewPoster({
+        github,
+        owner: item.owner,
+        repo: item.repo,
+        prNumber: prManager.getPrNumber() ?? 0,
+        logger: workerLogger,
+      });
+
       // 7b. On resume, clean up gate labels before starting the phase loop
       if (item.command === 'continue') {
         await labelManager.onResumeStart();
@@ -666,6 +682,19 @@ export class ClaudeCliWorker {
           )
         : undefined;
 
+      // #1124: real review-phase executor. Spawns the CLI with an in-process
+      // charter prompt, reads the agent-written findings sidecar, recomputes the
+      // verdict engine-side, and persists the review artifact. The synchronous
+      // remediateTrigger reads that artifact's verdict to drive the review↔remediate
+      // seam in phase-loop. Inert when reviewPhaseEnabled is off (review is absent
+      // from the effective sequence).
+      const reviewExecutor = new ReviewExecutor({
+        agentLauncher: this.agentLauncher,
+        config: effectiveConfig,
+        settings: orchSettings,
+        logger: workerLogger,
+      });
+
       const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
@@ -675,9 +704,17 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
+        reviewExecutor,
+        settings: orchSettings,
+        remediateTrigger: (ctx) =>
+          readReviewArtifactSync(
+            ctx.checkoutPath,
+            `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
+          )?.verdict === 'changes-required',
         ...(validateFixHandler ? { validateFixHandler } : {}),
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
         ...(this.phaseTracker ? { phaseTracker: this.phaseTracker } : {}),
+        reviewPoster,
         phaseAfterHandlers: [
           // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
           async () => {

@@ -5,6 +5,7 @@ import type {
   PrFeedbackIntent,
   ValidateFixIntent,
   MergeConflictIntent,
+  ReviewIntent,
   ConversationTurnIntent,
   InvokeIntent,
 } from './types.js';
@@ -51,7 +52,7 @@ let effortMechanismCache: boolean | undefined = undefined;
 export class ClaudeCodeLaunchPlugin {
   readonly pluginId = 'claude-code';
   readonly provider = 'claude-code';
-  readonly supportedKinds = ['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'conversation-turn', 'invoke'] as const;
+  readonly supportedKinds = ['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'review', 'conversation-turn', 'invoke'] as const;
 
   /**
    * Whether the installed CLI supports a delivery mechanism for reasoning effort.
@@ -106,6 +107,8 @@ export class ClaudeCodeLaunchPlugin {
         return this.buildValidateFixLaunch(intent);
       case 'merge-conflict':
         return this.buildMergeConflictLaunch(intent);
+      case 'review':
+        return this.buildReviewLaunch(intent);
       case 'conversation-turn':
         return this.buildConversationTurnLaunch(intent);
       case 'invoke':
@@ -215,6 +218,36 @@ export class ClaudeCodeLaunchPlugin {
     // Same shape as pr-feedback / validate-fix — one bounded agent turn with
     // a prepared prompt. See specs/898-found-during-cockpit-v1/contracts/
     // handler-contract.md §"Sibling-owned path constraint".
+    const args = [
+      '-p',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
+    ];
+
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
+    if (intent.effort) {
+      args.push('--effort', intent.effort);
+    }
+
+    args.push(intent.prompt);
+
+    return {
+      command: 'claude',
+      args,
+      stdioProfile: 'default',
+    };
+  }
+
+  private buildReviewLaunch(intent: ReviewIntent): LaunchSpec {
+    // Same shape as pr-feedback / validate-fix / merge-conflict — one bounded
+    // agent turn with an engine-built charter prompt (#1124). The charter is
+    // constructed in-process by the ReviewExecutor (Q4→B — no /speckit:review
+    // slash command). See specs/1124-context-new-review-phase/contracts/
+    // review-executor.md.
     const args = [
       '-p',
       '--output-format', 'stream-json',
