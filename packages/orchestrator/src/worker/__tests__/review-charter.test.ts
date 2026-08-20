@@ -43,6 +43,44 @@ describe('buildReviewCharter', () => {
     expect(verification.toLowerCase()).toContain('needs verification');
   });
 
+  describe('#1134 verification charter — four bugfix questions (SC-002)', () => {
+    const verification = buildReviewCharter({ ...BASE, profile: 'verification' });
+
+    it('renders all four delineated bugfix questions', () => {
+      const lower = verification.toLowerCase();
+      expect(lower).toContain('root cause vs symptom');
+      expect(lower).toContain('regression test present that fails without the fix');
+      expect(lower).toContain('scope creep');
+      expect(lower).toContain('regression risk in changed lines');
+    });
+
+    it('numbers the four questions', () => {
+      expect(verification).toContain('### 1. Root cause vs symptom');
+      expect(verification).toContain('### 2. Regression test present that fails without the fix');
+      expect(verification).toContain('### 3. Scope creep');
+      expect(verification).toContain('### 4. Regression risk in changed lines');
+    });
+
+    it('leaves the standard branch byte-identical to a pre-change snapshot', () => {
+      // Pre-#1134 standard charter never mentioned the bugfix questions; capturing
+      // the standard output and asserting it lacks any verification-branch content
+      // proves the change is isolated to the verification branch (FR-002).
+      const standard = buildReviewCharter({ ...BASE, profile: 'standard' });
+      expect(standard).not.toContain('Bugfix verification');
+      expect(standard).not.toContain('Root cause vs symptom');
+      expect(standard.toLowerCase()).not.toContain('needs verification');
+    });
+
+    it('both profiles still contain the "do NOT run tests" and sidecar-write sections', () => {
+      const standard = buildReviewCharter({ ...BASE, profile: 'standard' });
+      for (const charter of [standard, verification]) {
+        expect(charter).toContain('## Do NOT run tests or builds');
+        expect(charter).toContain('## Write your findings');
+        expect(charter).toContain('.generacy/review-findings-acme_widgets_42.json');
+      }
+    });
+  });
+
   it('is deterministic and includes the round number', () => {
     expect(buildReviewCharter(BASE)).toBe(buildReviewCharter(BASE));
     expect(buildReviewCharter({ ...BASE, round: 3 })).toContain('round 3');
