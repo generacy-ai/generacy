@@ -103,14 +103,14 @@ only backstop.
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | After a scoped review round, the scope MUST NOT persist unchanged into the next round when remediation commits were pushed — the window is either cleared or extended to include the remediation commits. | P1 | Defect 1. Prevents invisible fix commits. |
+| FR-001 | After the first scoped review round, the scope MUST be cleared so the re-review falls back to the standard #1126 delta (`lastReviewedCommitSha`..HEAD), which includes the remediation commits. | P1 | Defect 1. Clarified Q1→A (clear, not extend). Prevents invisible fix commits and avoids re-pinning the parent-1 base delta. |
 | FR-002 | A scoped re-review MUST evaluate the remediation commits pushed since the prior scoped round. | P1 | Defect 1 outcome. |
-| FR-003 | The resolution-scoped review window MUST be limited to the conflict-resolution changes and MUST NOT include changes that originate solely from the merged-in base branch. | P1 | Defect 2. Scope to conflict-touched files. |
+| FR-003 | The resolution-scoped review window MUST be limited to the conflicted file paths captured at resolution time (`git diff --name-only --diff-filter=U`, already carried as `mergeConflict.conflictedPaths`), passed as an explicit path allowlist, and MUST NOT include changes that originate solely from the merged-in base branch. | P1 | Defect 2. Clarified Q2→A (conflicted-path allowlist, not merge-base three-dot). |
 | FR-004 | The "empty or trivial diff → blocking finding" charter instruction MUST be suppressed for resolution-scoped (windowed) reviews. | P1 | Defect 3. |
 | FR-005 | A small, valid conflict resolution MUST be able to pass a scoped review without a `changes-required` verdict arising solely from the trivial-diff rule. | P1 | Defect 3 outcome. |
 | FR-006 | With `ciMergeGateEnabled=true` and `reviewPhaseEnabled=false`, a post-resolution `continue` MUST run `validate` on the post-merge tree before the PR is marked ready. | P1 | Defect 4. Closes the validate bypass. |
-| FR-007 | The terminal short-circuit MUST NOT mark a PR ready based on `completed:*` labels granted before the tree changed by a subsequent conflict resolution. | P1 | Defect 4. |
-| FR-008 | The re-arm sequence MUST NOT leave an issue silently stalled if a crash occurs between clearing ownership labels and enqueuing the re-arm item. | P2 | Defect 4 crash window. Ordering / idempotency. |
+| FR-007 | The post-resolution re-arm MUST clear the `completed:validate` (and, if needed, `completed:implementation-review`) label(s) so the #1133 terminal short-circuit no longer fires on labels granted before the tree changed. | P1 | Defect 4. Clarified Q3→A (label invalidation on re-arm, not tree-aware SHA state — keeps to existing machinery). |
+| FR-008 | The re-arm sequence MUST enqueue the re-arm item before clearing the ownership (`agent:*`) labels, so a crash in that window leaves queued work rather than a silently stalled issue. | P2 | Defect 4 crash window. Clarified Q4→A (reorder, not durable-marker recovery monitor). |
 | FR-009 | Changes MUST preserve existing behavior for non-merge-conflict reviews and for the flag-ON review path (no regression to whole-PR reviews). | P1 | Guard rails. |
 
 ## Success Criteria
