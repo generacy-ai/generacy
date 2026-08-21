@@ -18,7 +18,7 @@ whole-PR review each round?
 - A: Activate — wire delta-scoping (round ≥ 2 scoped to `lastReviewedCommitSha`), still-open-finding enumeration, blocking-severity-only new findings, and engine-side monotonic status transitions into the live charter + executor.
 - B: Delete — remove the convergence scaffolding; the live path stays a stateless whole-PR review each round, and the acceptance criteria that assume convergence are re-scoped to documented whole-PR semantics.
 
-**Answer**: *Pending*
+**Answer**: A — Activate. Wire delta-scoping (round ≥ 2 scoped to `lastReviewedCommitSha`), still-open-finding enumeration, blocking-severity-only new findings, and engine-side monotonic status transitions into the live charter + executor. The #1126 engine is fully built/unit-tested but disconnected (`runReviewConvergence` calls `advanceArtifact` with empty inputs and discards the verification prompt, `phase-loop.ts:606-615,1933-1939`) — this is unfinished #1127-bridge wiring, not a deliberate stateless choice. Delta-scoped convergence is the mechanism for the epic's churn-reduction goal with the groundwork already shipped.
 
 ### Q2: speckit-feature default blockingSeverity (D3)
 **Context**: `DEFAULT_REVIEW.blockingSeverity` is `critical` for all workflows in
@@ -30,7 +30,7 @@ require the constant and the docs to agree; this decides which one moves.
 - A: `major` — restore the epic's intended default; update the code constant and the docs to `major` (bugfix/other workflows unchanged unless specified).
 - B: `critical` — keep the shipped default; the epic-design note was superseded, and only the rationale record needs updating.
 
-**Answer**: *Pending*
+**Answer**: A — `major`. Restore the epic's intended default; update the code constant and the docs to `major` (bugfix/other workflows unchanged unless specified). The shipped default is `critical` but the epic intended `major` for speckit-feature; under the activation posture (Q1=A) restoring the epic-intended default is consistent, and `major` is only meaningful under the `critical|major|minor` vocabulary (Q3=A).
 
 ### Q3: Canonical severity vocabulary (D2)
 **Context**: The three schemas disagree on severity naming: the live
@@ -42,7 +42,7 @@ D3/Q2 presumes a graded scale (`major` is only meaningful under `critical|major|
 - A: `critical|major|minor` (the live `review-artifact.ts` vocabulary; consistent with a `major` default).
 - B: `blocking|advisory` (the #1125 vocabulary; would require re-expressing the `blockingSeverity` default as a boolean split).
 
-**Answer**: *Pending*
+**Answer**: A — `critical|major|minor` (the live `review-artifact.ts` vocabulary; consistent with a `major` default). It is shared by BOTH surviving schemas (live #1124 sidecar + #1126 convergence seam), while `blocking|advisory` exists only in `review-findings-artifact.ts`, which is self-documented as a temporary local copy to delete once #1124 lands; collapsing onto the doomed copy's vocabulary would be backwards.
 
 ### Q4: Canonical status model & per-finding identity (D2)
 **Context**: If Q1 = activate, cross-round matching and monotonic status transitions
@@ -55,4 +55,4 @@ and whether back-compat parsing must default-fill new fields on in-flight sideca
 - A: Convergence-capable — stable per-finding id, engine-owned monotonic `open|resolved` status, `lastReviewedCommitSha`, and `round` (choose only if Q1 = activate).
 - B: Minimal — keep the live `review-artifact.ts` shape (`open|resolved`, no per-finding id); drop or reserve `lastReviewedCommitSha` (choose only if Q1 = delete).
 
-**Answer**: *Pending*
+**Answer**: A — Convergence-capable: stable per-finding id, engine-owned monotonic `open|resolved` status, `lastReviewedCommitSha`, and `round` (Q1=activate). Activation requires the field set the convergence engine keys on — `advanceArtifact` resolves findings by matching id within the delta and enforces resolved-is-terminal, using `lastReviewedSha` + `round` for delta scoping (`findings-advance.ts:89-99`); the live schema lacks a per-finding id, so the canonical schema adopts the convergence seam's superset shape.

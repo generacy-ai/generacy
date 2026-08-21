@@ -79,7 +79,7 @@ re-litigating the whole PR each time.
 - [ ] A finding raised in round 1 and left unaddressed is still `open` after round 2
       without the agent having to re-emit it; the verdict stays `changes-required`.
 - [ ] On round ≥ 2 the review is scoped to the delta since `lastReviewedCommitSha`
-      (or the field/engine is removed and the scope is explicitly whole-PR by design).
+      (D1 = activate: `lastReviewedCommitSha` is read by the delta-scoping logic).
 - [ ] A resolved finding is never silently reopened; status transitions are monotonic
       and engine-owned.
 
@@ -123,22 +123,28 @@ agree on `clean` vs `changes-required` for a given PR.
       state the same value for each workflow.
 - [ ] The decision (feature = `major` vs `critical`) is recorded with rationale.
 
-## Open Decisions (resolve in `/speckit:clarify`)
+## Resolved Decisions (via `/speckit:clarify`, 2026-08-21)
 
-- **D1 — Activate or delete the #1126 convergence engine?** The engine
-  (`runReviewConvergence`, `advanceArtifact`, `findings-advance.ts`, `verification-input.ts`,
-  `review-delta.ts`) is fully built but disconnected. Either (a) wire its
-  delta-scoping + monotonic status transitions + `filterNewFindings` into the live
-  review charter and executor end-to-end, or (b) delete it and keep the live path a
-  deliberate stateless whole-PR review each round. This is the load-bearing choice
-  that determines whether the churn-reduction goal is met. [NEEDS CLARIFICATION: D1]
-- **D2 — Canonical schema shape.** If D1 = activate, the surviving schema must carry
-  the fields convergence needs (per-finding stable identity for cross-round matching,
-  `lastReviewedCommitSha`/`lastReviewedSha`, round). If D1 = delete, the live
-  `review-artifact.ts` schema survives as-is. Which severity vocabulary and status
-  model is canonical? [NEEDS CLARIFICATION: D2]
-- **D3 — `speckit-feature` default `blockingSeverity`: `major` or `critical`?** Epic
-  design said `major`; shipped code + docs say `critical`. [NEEDS CLARIFICATION: D3]
+- **D1 — Activate the #1126 convergence engine.** Wire its delta-scoping
+  (round ≥ 2 scoped to `lastReviewedCommitSha`), still-open-finding enumeration,
+  blocking-severity-only new findings, and engine-side monotonic status transitions
+  into the live review charter + executor end-to-end. The engine is fully
+  built/unit-tested but disconnected (`runReviewConvergence` calls `advanceArtifact`
+  with empty inputs and discards the verification prompt) — unfinished #1127-bridge
+  wiring, not a deliberate stateless choice. This is the mechanism that meets the
+  churn-reduction goal.
+- **D2 — Canonical schema shape.** Severity vocabulary is `critical|major|minor` (the
+  live `review-artifact.ts` vocabulary, shared by both surviving schemas). The single
+  canonical schema is **convergence-capable**: a stable per-finding id, engine-owned
+  monotonic `open|resolved` status, `lastReviewedCommitSha`, and `round`. This is the
+  superset the convergence engine keys on (`advanceArtifact` matches findings by id
+  within the delta and enforces resolved-is-terminal). Back-compat parsing
+  default-fills the new fields on in-flight sidecars written by the shipped code.
+- **D3 — `speckit-feature` default `blockingSeverity` = `major`.** Restore the epic's
+  intended default; update both the code constant (`DEFAULT_REVIEW.blockingSeverity`)
+  and `docs/docs/reference/review-artifacts.md` to `major`. Bugfix/other workflows
+  unchanged unless separately specified. `major` is only meaningful under the
+  `critical|major|minor` vocabulary (D2).
 
 ## Functional Requirements
 
@@ -148,9 +154,9 @@ agree on `clean` vs `changes-required` for a given PR.
 | FR-002 | Collapse to exactly one `computeVerdict` implementation, imported by all consumers. | P1 | |
 | FR-003 | Collapse to exactly one severity-rank table, imported by review executor, remediate executor, and any convergence step. | P1 | |
 | FR-004 | Every verdict-relevant consumer resolves `blockingSeverity` through the same code path with the same `settings`; remove the `settings = null` resolution in the convergence/review-loop path. | P1 | |
-| FR-005 | Resolve D1: either activate the delta/verification convergence path end-to-end (live charter scopes round ≥ 2 to the delta, enumerates still-open findings, restricts new findings to blocking severity, and applies engine-side monotonic status transitions) or delete the scaffolding entirely. No half-wired middle state may remain. | P1 | |
-| FR-006 | Eliminate the drifting round counter: the sidecar `round` is the single source of round truth; no separate PhaseTracker round key that advances independently (and advances even when the CLI review fails). | P1 | If D1=activate, round advances only on a successful review; if D1=delete, the extra key is removed. |
-| FR-007 | If D1 = delete, remove `lastReviewedCommitSha` (write-only, no reader) or document it as reserved; if D1 = activate, it must be read by the delta-scoping logic. | P1 | No write-only fields left dangling |
+| FR-005 | Activate the delta/verification convergence path end-to-end (D1): the live charter scopes round ≥ 2 to the delta, enumerates still-open findings, restricts new findings to blocking severity, and applies engine-side monotonic status transitions. No half-wired middle state may remain (no computed-then-discarded verification prompt, no `advanceArtifact` call with empty inputs). | P1 | D1 = activate |
+| FR-006 | Eliminate the drifting round counter: the sidecar `round` is the single source of round truth; no separate PhaseTracker round key that advances independently (and advances even when the CLI review fails). Round advances only on a successful review. | P1 | D1 = activate |
+| FR-007 | `lastReviewedCommitSha` must be read by the delta-scoping logic; no write-only fields left dangling. | P1 | D1 = activate |
 | FR-008 | Reconcile `DEFAULT_REVIEW.blockingSeverity` and `docs/docs/reference/review-artifacts.md` to the D3 decision. | P1 | |
 | FR-009 | Preserve existing behavior for callers not touched by the collapse: PR review posting/lifecycle (#1156), remediate executor cap (#1128), resume-gate handling (#1154) continue to pass their tests. | P1 | Regression guard |
 
@@ -162,7 +168,7 @@ agree on `clean` vs `changes-required` for a given PR.
 | SC-002 | Distinct `computeVerdict` implementations | 1 | grep audit |
 | SC-003 | Distinct severity-rank tables | 1 | grep audit |
 | SC-004 | Verdict-relevant call sites resolving `blockingSeverity` with `settings = null` | 0 | grep audit + test asserting override parity |
-| SC-005 | Findings that silently vanish across rounds (raised-then-forgotten) | 0 | convergence test: round-2 agent omits a round-1 finding → still `open` (if D1=activate) or documented whole-PR semantics (if D1=delete) |
+| SC-005 | Findings that silently vanish across rounds (raised-then-forgotten) | 0 | convergence test: round-2 agent omits a round-1 finding → still `open` (D1=activate) |
 | SC-006 | Round counters that can disagree for one review | 0 | single-source-of-round test |
 | SC-007 | Docs vs code default `blockingSeverity` mismatch | 0 | assertion/test comparing constant to doc |
 | SC-008 | Pre-existing review/remediate/lifecycle test suites | all green | `pnpm --filter @generacy-ai/orchestrator test` |
