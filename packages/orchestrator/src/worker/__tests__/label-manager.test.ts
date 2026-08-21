@@ -218,7 +218,7 @@ describe('LabelManager', () => {
   });
 
   describe('onResumeStart', () => {
-    it('removes waiting-for:*, corresponding completed:*, and agent:paused labels when present', async () => {
+    it('removes waiting-for:* and agent:paused but retains human-gate completed:* (#1154 FR-001)', async () => {
       const lm = createLabelManager();
       mockGithub.getIssue.mockResolvedValue({
         labels: [
@@ -233,10 +233,12 @@ describe('LabelManager', () => {
       await lm.onResumeStart();
 
       expect(mockGithub.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
+      // #1154 FR-001: `clarification` is a human-gate suffix, so
+      // `completed:clarification` MUST survive the resume strip. Only the stale
+      // `waiting-for:*` and `agent:paused` labels are removed.
       expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'waiting-for:clarification',
         'agent:paused',
-        'completed:clarification',
       ]);
       expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, ['agent:in-progress']);
     });

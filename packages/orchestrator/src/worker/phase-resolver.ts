@@ -15,6 +15,11 @@ export const GATE_MAPPING: Record<string, { phase: WorkflowPhase; resumeFrom: Wo
   'implementation-review':  { phase: 'implement',  resumeFrom: 'validate' },
   'manual-validation':      { phase: 'validate',   resumeFrom: 'validate' },
   'remediation-limit':      { phase: 'review',     resumeFrom: 'review' },
+  // #1154 FR-004: `waiting-for:ci` is raised during `validate` (CI wait-timeout),
+  // so resume re-runs `validate` to re-verify CI is green on the new head. This
+  // entry also auto-includes `ci` in the derived `HUMAN_GATE_SUFFIXES`, giving
+  // `completed:ci` the same resume-strip exemption as every other gate.
+  'ci':                     { phase: 'validate',   resumeFrom: 'validate' },
 };
 
 /**
