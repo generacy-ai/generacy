@@ -8,9 +8,11 @@
  *
  * Pins: sidecars are never staged/committed (SC-001); genuine product edits —
  * modify, add, delete — are still staged and committed (SC-004, G2); a
- * sidecar-only phase produces no commit at all (G3, no empty commits); and a
+ * sidecar-only phase produces no commit at all (G3, no empty commits); a
  * legitimately-tracked `.generacy/config.yaml` edit is staged and committed
- * (G4).
+ * (G4); an index-only (already-staged) product change is not stranded (G5); and
+ * a sidecar someone else pre-staged into the index is excluded from the commit
+ * pathspec, so the whole-index `git commit` can never fold it in (G6).
  */
 import { vi, describe, it, expect } from 'vitest';
 import type { GitHubClient, GitStatus } from '@generacy-ai/workflow-engine';
@@ -97,6 +99,22 @@ describe('PrManager staging filter (#1162 FR-001)', () => {
     expect(staged).not.toContain('.generacy/review-candidate-o_r_42.json');
     expect(staged).not.toContain('.generacy/pause-context-o_r_42.json');
     expect(commit).toHaveBeenCalledTimes(1);
+    // The commit is scoped to the filtered pathspec (never the whole index),
+    // so a sidecar can never be folded in even if pre-staged (#1162 FR-001).
+    expect(commit).toHaveBeenCalledWith(expect.any(String), ['packages/x/y.ts', 'README.md']);
+  });
+
+  it('SC-001: excludes external-feedback and workflow-state sidecars too', async () => {
+    const status = makeStatus({
+      unstaged: ['src/a.ts', '.generacy/external-feedback-o_r_42.json'],
+      untracked: ['.generacy/workflow-state-o_r_42.json'],
+    });
+    const { github, stageFiles, commit } = makeGithub(status);
+
+    await commitAndPush(makeManager(github));
+
+    expect(stageFiles).toHaveBeenCalledWith(['src/a.ts']);
+    expect(commit).toHaveBeenCalledWith(expect.any(String), ['src/a.ts']);
   });
 
   it('SC-004 / G2: stages genuine product edits — modify, add, delete', async () => {
@@ -139,5 +157,36 @@ describe('PrManager staging filter (#1162 FR-001)', () => {
 
     expect(stageFiles).toHaveBeenCalledWith(['.generacy/config.yaml']);
     expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('G5: an index-only (already-staged) product change is committed, not stranded', async () => {
+    // The file is in the index with no further working-tree diff — it appears
+    // only in `status.staged`. The old filter looked at unstaged+untracked only,
+    // skipped the commit, and stranded the staged product work.
+    const status = makeStatus({ staged: ['src/staged-only.ts'] });
+    const { github, stageFiles, commit } = makeGithub(status);
+
+    await commitAndPush(makeManager(github));
+
+    expect(stageFiles).toHaveBeenCalledWith(['src/staged-only.ts']);
+    expect(commit).toHaveBeenCalledWith(expect.any(String), ['src/staged-only.ts']);
+  });
+
+  it('G6: a pre-staged sidecar in the index is excluded from the commit pathspec', async () => {
+    // Some other actor (e.g. an implement agent running `git add -A`) left a
+    // sidecar staged in the index. The whole-index `git commit` would fold it
+    // in; the explicit pathspec must exclude it.
+    const status = makeStatus({
+      staged: ['.generacy/review-findings-o_r_42.json'],
+      unstaged: ['src/product.ts'],
+    });
+    const { github, stageFiles, commit } = makeGithub(status);
+
+    await commitAndPush(makeManager(github));
+
+    expect(stageFiles).toHaveBeenCalledWith(['src/product.ts']);
+    const pathspec = commit.mock.calls[0][1] as string[];
+    expect(pathspec).toEqual(['src/product.ts']);
+    expect(pathspec).not.toContain('.generacy/review-findings-o_r_42.json');
   });
 });

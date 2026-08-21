@@ -13,24 +13,28 @@ import {
 } from '../product-diff.js';
 
 describe('EXCLUDED_PATH_PREFIXES', () => {
-  it('contains specs/ plus the three engine-sidecar prefixes (#1162)', () => {
+  it('contains specs/ plus every engine-sidecar prefix (#1162)', () => {
     expect(EXCLUDED_PATH_PREFIXES).toEqual([
       'specs/',
       '.generacy/review-findings-',
       '.generacy/review-candidate-',
       '.generacy/pause-context-',
+      '.generacy/external-feedback-',
+      '.generacy/workflow-state-',
     ]);
   });
 });
 
-// #1162 SC-002: the three sidecar prefixes are a single source of truth shared
-// by the staging filter (FR-001) and the product-diff exclusion (FR-004).
+// #1162 SC-002: the sidecar prefixes are a single source of truth shared by the
+// staging filter (FR-001) and the product-diff exclusion (FR-004).
 describe('ENGINE_SIDECAR_PREFIXES / isEngineSidecar', () => {
-  it('lists exactly the three engine bookkeeping prefixes', () => {
+  it('lists exactly the engine bookkeeping prefixes', () => {
     expect(ENGINE_SIDECAR_PREFIXES).toEqual([
       '.generacy/review-findings-',
       '.generacy/review-candidate-',
       '.generacy/pause-context-',
+      '.generacy/external-feedback-',
+      '.generacy/workflow-state-',
     ]);
   });
 
@@ -38,6 +42,8 @@ describe('ENGINE_SIDECAR_PREFIXES / isEngineSidecar', () => {
     expect(isEngineSidecar('.generacy/review-findings-generacy-ai_generacy_1162.json')).toBe(true);
     expect(isEngineSidecar('.generacy/review-candidate-generacy-ai_generacy_1162.json')).toBe(true);
     expect(isEngineSidecar('.generacy/pause-context-generacy-ai_generacy_1162.json')).toBe(true);
+    expect(isEngineSidecar('.generacy/external-feedback-generacy-ai_generacy_1162.json')).toBe(true);
+    expect(isEngineSidecar('.generacy/workflow-state-generacy-ai_generacy_1162.json')).toBe(true);
   });
 
   it('does NOT match legitimately tracked .generacy product files (Q3)', () => {

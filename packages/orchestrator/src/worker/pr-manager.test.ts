@@ -416,8 +416,10 @@ describe('PrManager', () => {
 
       await prManager.commitPushAndEnsurePr('implement');
 
+      // #1162: commit is scoped to an explicit pathspec of the filtered set.
       expect(github.commit).toHaveBeenCalledWith(
         `chore(speckit): complete implement phase for #${issueNumber}`,
+        ['src/x.ts'],
       );
     });
 
@@ -430,7 +432,7 @@ describe('PrManager', () => {
 
       await prManager.commitPushAndEnsurePr('implement', { message: customMessage });
 
-      expect(github.commit).toHaveBeenCalledWith(customMessage);
+      expect(github.commit).toHaveBeenCalledWith(customMessage, ['src/x.ts']);
     });
 
     it('existing callers without options still work (backward compatibility)', async () => {
@@ -445,6 +447,7 @@ describe('PrManager', () => {
       expect(result.hasChanges).toBe(true);
       expect(github.commit).toHaveBeenCalledWith(
         `chore(speckit): complete specify phase for #${issueNumber}`,
+        ['src/x.ts'],
       );
     });
   });
