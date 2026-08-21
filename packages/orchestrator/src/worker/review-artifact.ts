@@ -250,10 +250,10 @@ function parseArtifact(content: string): ReviewArtifact | null {
     return null;
   }
 
-  // #1161 (INV-5): default-fill `id` on any finding lacking it BEFORE Zod, so a
-  // sidecar written before this field never fails `z.string().min(1)`. The fill
-  // uses the same `(file, title)` derivation, so a re-parse is idempotent.
-  backfillFindingIds(raw);
+  // #1161 (INV-5): repair pre-#1161 finding fields BEFORE Zod, so an older
+  // on-disk sidecar never fails the tightened schema (fills a missing `id`;
+  // normalizes `round: 0` → `1`). Idempotent — a re-parse changes nothing.
+  backfillFindingFields(raw);
 
   const parsed = ReviewArtifactSchema.safeParse(raw);
   if (!parsed.success) {
@@ -263,12 +263,20 @@ function parseArtifact(content: string): ReviewArtifact | null {
 }
 
 /**
- * #1161 (INV-5): mutate `raw.findings[]` in place, filling a deterministic `id`
- * on any finding that lacks a non-empty one. Tolerates arbitrary shapes (only
- * acts when `file` + `title` are strings); malformed entries are left for Zod to
- * reject.
+ * #1161 (INV-5): mutate `raw.findings[]` in place, repairing fields a pre-#1161
+ * sidecar may lack or carry in an old shape, BEFORE Zod validation:
+ *  - fill a deterministic `id` on any finding lacking a non-empty one (uses the
+ *    same `(file, title)` derivation, so a re-parse is idempotent);
+ *  - normalize `round: 0` → `1`. The pre-#1161 `SeedAwareReviewExecutor`
+ *    persisted external-feedback findings with `round: 0`; `round` is now
+ *    `z.number().int().positive()`, so an un-normalized 0 would reject the whole
+ *    artifact — silently discarding all prior review state (round reset,
+ *    `lastReviewedCommitSha` and open findings lost, budget reset) on a mid-issue
+ *    upgrade.
+ * Tolerates arbitrary shapes (only acts on recognizable fields); malformed
+ * entries are left for Zod to reject.
  */
-function backfillFindingIds(raw: unknown): void {
+function backfillFindingFields(raw: unknown): void {
   if (typeof raw !== 'object' || raw === null) {
     return;
   }
@@ -280,12 +288,14 @@ function backfillFindingIds(raw: unknown): void {
     if (typeof finding !== 'object' || finding === null) {
       continue;
     }
-    const f = finding as { id?: unknown; file?: unknown; title?: unknown };
-    if (typeof f.id === 'string' && f.id.length > 0) {
-      continue;
+    const f = finding as { id?: unknown; file?: unknown; title?: unknown; round?: unknown };
+    if (!(typeof f.id === 'string' && f.id.length > 0)) {
+      if (typeof f.file === 'string' && typeof f.title === 'string') {
+        f.id = deriveFindingId(f.file, f.title);
+      }
     }
-    if (typeof f.file === 'string' && typeof f.title === 'string') {
-      f.id = deriveFindingId(f.file, f.title);
+    if (f.round === 0) {
+      f.round = 1;
     }
   }
 }

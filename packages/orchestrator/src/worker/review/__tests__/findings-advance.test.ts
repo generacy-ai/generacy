@@ -189,4 +189,40 @@ describe('advanceArtifact (FR-006 / SC-002 / SC-004)', () => {
     );
     expect(merged.map((f) => f.id)).toEqual(['fresh']);
   });
+
+  it('de-dupes a re-emitted unaddressed finding against its carried-forward prior (id-uniqueness)', () => {
+    // Round 1 persisted an open critical finding X; round 2 does not address it,
+    // so the agent re-emits the identical file+title (same deterministic id X) as
+    // an "open" new finding. The prior is carried forward AND the re-emission
+    // survives filterNewFindings — appending both would duplicate id X.
+    const prior = artifact({
+      round: 1,
+      findings: [finding({ id: 'X', file: 'src/a.ts', status: 'open', round: 1 })],
+    });
+    const merged = advanceArtifact(
+      prior,
+      delta({ round: 2, files: ['src/b.ts'] }),
+      [],
+      [finding({ id: 'X', file: 'src/a.ts', status: 'open', severity: 'critical' })],
+      'critical',
+    );
+    expect(merged.filter((f) => f.id === 'X')).toHaveLength(1);
+    // The carried-forward instance wins — its original round is preserved.
+    expect(merged[0]?.round).toBe(1);
+    expect(merged[0]?.status).toBe('open');
+  });
+
+  it('de-dupes duplicate ids within a single round of new findings', () => {
+    const merged = advanceArtifact(
+      null,
+      delta({ round: 2 }),
+      [],
+      [
+        finding({ id: 'dup', file: 'src/a.ts', severity: 'critical' }),
+        finding({ id: 'dup', file: 'src/a.ts', severity: 'critical' }),
+      ],
+      'critical',
+    );
+    expect(merged.filter((f) => f.id === 'dup')).toHaveLength(1);
+  });
 });

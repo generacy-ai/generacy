@@ -100,4 +100,38 @@ describe('#1161 back-compat id fill (INV-4 / INV-5)', () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.findings[0]!.id).toBe(deriveFindingId('src/a.ts', 'Missing null check'));
   });
+
+  it('parses a pre-#1161 sidecar with round:0 findings and normalizes round to 1', async () => {
+    // The pre-#1161 SeedAwareReviewExecutor persisted external-feedback findings
+    // with `round: 0`. `ReviewFindingSchema.round` is now `positive()`, so the
+    // backfill pass must normalize 0 -> 1 or the whole artifact is rejected and
+    // all prior review state is silently discarded on a mid-issue upgrade.
+    const legacy = {
+      findings: [
+        {
+          id: 'existing-id',
+          severity: 'critical',
+          file: 'src/a.ts',
+          title: 'External reviewer finding',
+          detail: 'Seeded from a human PR comment.',
+          round: 0,
+          status: 'open',
+        },
+      ],
+      verdict: 'changes-required',
+      round: 1,
+      lastReviewedCommitSha: 'abc123',
+      remediationCount: 0,
+    };
+    const filePath = getReviewArtifactPath(checkoutPath, workflowId);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, JSON.stringify(legacy), 'utf-8');
+
+    const parsed = await readReviewArtifact(checkoutPath, workflowId);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed!.findings[0]!.round).toBe(1);
+    expect(parsed!.findings[0]!.status).toBe('open');
+    expect(parsed!.lastReviewedCommitSha).toBe('abc123');
+  });
 });

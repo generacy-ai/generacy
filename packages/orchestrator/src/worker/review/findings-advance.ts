@@ -29,8 +29,9 @@ export function filterNewFindings(
  * 2. `open` findings not in the delta ⇒ unchanged (Q2 — evidence-based;
  *    anti-vanish carry-forward, SC-005).
  * 3. `resolved` findings ⇒ never touched (Q1 — terminal).
- * 4. New findings ⇒ `filterNewFindings` first; survivors appended with
- *    `round = delta.round`.
+ * 4. New findings ⇒ `filterNewFindings` first; survivors de-duped by id against
+ *    carried-forward priors (a re-emitted unaddressed finding shares its prior's
+ *    deterministic id) before being appended with `round = delta.round`.
  */
 export function advanceArtifact(
   prior: ReviewArtifact | null,
@@ -52,7 +53,24 @@ export function advanceArtifact(
   });
 
   const kept = filterNewFindings(reviewerNewFindings, delta.round, blockingSeverity);
-  const appended: ReviewFinding[] = kept.map((f) => ({ ...f, round: delta.round }));
+
+  // De-dupe re-emitted findings by id against carried-forward priors (and against
+  // each other). The verification charter tells the agent to re-emit an
+  // unaddressed finding as `open` "when in doubt"; that re-emission shares the
+  // deterministic id (`sha256(file, title)`) of the prior copy already carried
+  // forward in `transitioned`. Appending both would put two findings with the
+  // same id in the artifact, breaking the id-uniqueness invariant ReviewPoster's
+  // inline thread marker relies on — it would re-post duplicate comments each
+  // round. Prefer the carried-forward instance; drop the re-emitted duplicate.
+  const seenIds = new Set(transitioned.map((f) => f.id));
+  const appended: ReviewFinding[] = [];
+  for (const f of kept) {
+    if (seenIds.has(f.id)) {
+      continue;
+    }
+    seenIds.add(f.id);
+    appended.push({ ...f, round: delta.round });
+  }
 
   return [...transitioned, ...appended];
 }
