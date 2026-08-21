@@ -21,18 +21,19 @@ describe('resolveWorkflowOverrides (issue #1122)', () => {
     expect(feature.validateCommand).toBe(CLUSTER_VALIDATE);
     expect(feature.preValidateCommand).toBe(config.preValidateCommand);
     expect(feature.maxRemediations).toBe(3);
-    expect(feature.review).toEqual(DEFAULT_REVIEW);
+    // speckit-feature is held to the stricter `major` blocking bar (#1161 D3).
+    expect(feature.review).toEqual({ ...DEFAULT_REVIEW, blockingSeverity: 'major' });
 
     const bugfix = resolveWorkflowOverrides(config, undefined, 'speckit-bugfix');
     expect(bugfix.maxRemediations).toBe(2);
-    expect(bugfix.review).toEqual(DEFAULT_REVIEW);
+    expect(bugfix.review).toEqual({ ...DEFAULT_REVIEW, blockingSeverity: 'critical' });
 
     // No workflows block present on settings behaves identically.
     const settings: OrchestratorSettings = { validateCommand: undefined };
     const noWorkflows = resolveWorkflowOverrides(config, settings, 'speckit-feature');
     expect(noWorkflows.validateCommand).toBe(CLUSTER_VALIDATE);
     expect(noWorkflows.maxRemediations).toBe(3);
-    expect(noWorkflows.review).toEqual(DEFAULT_REVIEW);
+    expect(noWorkflows.review).toEqual({ ...DEFAULT_REVIEW, blockingSeverity: 'major' });
   });
 
   it('SC-002: repo-level validateCommand (no workflow entry) wins over cluster default', () => {
@@ -46,7 +47,7 @@ describe('resolveWorkflowOverrides (issue #1122)', () => {
     expect(resolved.preValidateCommand).toBe('npm ci');
     // maxRemediations / review have no repo tier → built-in defaults (Q2).
     expect(resolved.maxRemediations).toBe(3);
-    expect(resolved.review).toEqual(DEFAULT_REVIEW);
+    expect(resolved.review).toEqual({ ...DEFAULT_REVIEW, blockingSeverity: 'major' });
   });
 
   it('SC-003: workflow-level wins over repo + cluster; partial review inherits; "" and 0 preserved', () => {

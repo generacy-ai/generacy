@@ -64,6 +64,8 @@ export function deriveFindingId(file: string, title: string): string {
 
 const VerdictSchema = z.enum(['clean', 'changes-required']);
 
+export type Verdict = z.infer<typeof VerdictSchema>;
+
 export const ReviewArtifactSchema = z.object({
   findings: z.array(ReviewFindingSchema),
   verdict: VerdictSchema,

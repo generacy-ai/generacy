@@ -1,13 +1,17 @@
 /**
  * ReviewPoster — posts one COMMENT-event review per round and resolves threads
- * on re-review (#1125 T011–T013).
+ * on re-review (#1125 T011–T013; #1161 canonical-input re-home).
  *
- * Consumes a FindingsArtifact (the #1124 consuming contract) and turns it into a
- * single GitHub review submission via `GitHubClient.createReview`. Diffable
- * anchors become inline comments; everything else (absent or non-diffable
- * anchor) falls back to the review body so no finding is dropped (FR-002/002a).
+ * Consumes the canonical `ReviewFinding[]` directly (#1161 — the
+ * `review-findings-bridge.ts` intermediary and the #1125 `FindingsArtifact` /
+ * `blocking|advisory` vocabulary are deleted). Each canonical finding is
+ * projected to a `RenderFinding` at post time (blocking/advisory derived from
+ * `SEVERITY_RANK`, INV-P1) and turned into a single GitHub review submission via
+ * `GitHubClient.createReview`. Diffable anchors become inline comments;
+ * everything else (absent or non-diffable anchor) falls back to the review body
+ * so no finding is dropped (FR-002/002a).
  *
- * See contracts/review-poster.md.
+ * See contracts/poster-input.md.
  */
 import type {
   GitHubClient,
@@ -17,7 +21,41 @@ import type {
   Review,
 } from '@generacy-ai/workflow-engine';
 import type { Logger } from './types.js';
-import type { FindingsArtifact, ReviewFinding } from './review-findings-artifact.js';
+import { SEVERITY_RANK, type ReviewFinding, type Severity } from './review-artifact.js';
+
+/**
+ * Internal render shape (#1161). Canonical `ReviewFinding` carries `id` / `title`
+ * / `detail` / `file` / `line?` / `severity` (critical|major|minor) / `status`;
+ * the render layer works in the projected vocabulary (`marker` / `text` /
+ * `anchor` / `blocking|advisory` / `resolved`) so the #1156 posting output stays
+ * byte-for-byte identical (INV-P3).
+ */
+export interface RenderFinding {
+  marker: string;
+  text: string;
+  anchor?: { file: string; line: number };
+  severity: 'blocking' | 'advisory';
+  resolved: boolean;
+}
+
+/**
+ * Project a canonical `ReviewFinding` to the render vocabulary (contracts/
+ * poster-input.md "Render projection"). blocking/advisory is derived here via
+ * `SEVERITY_RANK` — never stored (INV-P1).
+ */
+export function projectFinding(
+  finding: ReviewFinding,
+  blockingSeverity: Severity,
+): RenderFinding {
+  const isBlocking = SEVERITY_RANK[finding.severity] >= SEVERITY_RANK[blockingSeverity];
+  return {
+    marker: finding.id,
+    text: `${finding.title}\n\n${finding.detail}`,
+    anchor: finding.line !== undefined ? { file: finding.file, line: finding.line } : undefined,
+    severity: isBlocking ? 'blocking' : 'advisory',
+    resolved: finding.status === 'resolved',
+  };
+}
 
 /** Stable prefix for the once-per-review body marker (FR-003; #1130 exclusion). */
 export const REVIEW_BODY_MARKER_PREFIX = 'generacy-engine-review';
@@ -127,11 +165,11 @@ export function computeDiffableLines(files: PullRequestFile[]): Map<string, Set<
  * finding is dropped (FR-002a).
  */
 export function partitionFindings(
-  findings: ReviewFinding[],
+  findings: RenderFinding[],
   diffable: Map<string, Set<number>>,
-): { inline: ReviewFinding[]; body: ReviewFinding[] } {
-  const inline: ReviewFinding[] = [];
-  const body: ReviewFinding[] = [];
+): { inline: RenderFinding[]; body: RenderFinding[] } {
+  const inline: RenderFinding[] = [];
+  const body: RenderFinding[] = [];
 
   for (const finding of findings) {
     const anchor = finding.anchor;
@@ -146,7 +184,7 @@ export function partitionFindings(
 }
 
 /** Human severity tag; advisory is rendered visually distinct from blocking (FR-004). */
-function severityTag(finding: ReviewFinding): string {
+function severityTag(finding: RenderFinding): string {
   return finding.severity === 'advisory' ? '🔵 Advisory (non-blocking)' : '🔴 Blocking';
 }
 
@@ -155,7 +193,7 @@ function severityTag(finding: ReviewFinding): string {
  * body-fallback finding rendered with its severity tag. Body-fallback findings
  * reference their intended `file:line` when an anchor is present (FR-002a).
  */
-export function buildReviewBody(bodyFindings: ReviewFinding[], round: number): string {
+export function buildReviewBody(bodyFindings: RenderFinding[], round: number): string {
   const parts: string[] = [reviewBodyMarker(round), '', `## Engine review — Round ${round}`, ''];
 
   if (bodyFindings.length === 0) {
@@ -175,7 +213,7 @@ export function buildReviewBody(bodyFindings: ReviewFinding[], round: number): s
  * carries the per-finding marker (cross-round match, FR-009), the finding text,
  * and a severity tag. `side` is hardcoded RIGHT — anchors are post-change lines.
  */
-export function buildInlineComment(finding: ReviewFinding): CreateReviewComment {
+export function buildInlineComment(finding: RenderFinding): CreateReviewComment {
   const anchor = finding.anchor!;
   return {
     path: anchor.file,
@@ -223,7 +261,11 @@ export class ReviewPoster {
    * worker restart does not double-post. Best-effort: any failure is logged and
    * swallowed — the review post must never fail the workflow (FR-008).
    */
-  async postRound(artifact: FindingsArtifact, round: number): Promise<void> {
+  async postRound(
+    findings: ReviewFinding[],
+    round: number,
+    blockingSeverity: Severity,
+  ): Promise<void> {
     const prNumber = this.getPrNumber();
     if (prNumber === undefined) {
       this.logger.debug(
@@ -243,10 +285,13 @@ export class ReviewPoster {
         return;
       }
 
+      // #1161: project canonical findings to the render vocabulary (INV-P1).
+      const rendered = findings.map((f) => projectFinding(f, blockingSeverity));
+
       // FR-002a: only diffable anchors can be inline; everything else → body.
       const files = await this.github.listPullRequestFiles(this.owner, this.repo, prNumber);
       const diffable = computeDiffableLines(files);
-      const { inline, body } = partitionFindings(artifact.findings, diffable);
+      const { inline, body } = partitionFindings(rendered, diffable);
 
       const input: CreateReviewInput = {
         event: 'COMMENT', // SC-001 — never REQUEST_CHANGES on our own PR.
@@ -280,7 +325,7 @@ export class ReviewPoster {
    * (FR-009). Each resolve is independent + best-effort — one failure warns and
    * does not block the others or the workflow (FR-008 / US4 AC3).
    */
-  async resolveResolvedThreads(artifact: FindingsArtifact): Promise<void> {
+  async resolveResolvedThreads(findings: ReviewFinding[]): Promise<void> {
     const prNumber = this.getPrNumber();
     if (prNumber === undefined) {
       this.logger.debug(
@@ -290,7 +335,8 @@ export class ReviewPoster {
       return;
     }
 
-    const resolvedFindings = artifact.findings.filter((f) => f.resolved === true);
+    // #1161: match threads by the canonical finding id (= render marker, INV-P1).
+    const resolvedFindings = findings.filter((f) => f.status === 'resolved');
     if (resolvedFindings.length === 0) return;
 
     let threads;
@@ -305,14 +351,14 @@ export class ReviewPoster {
     }
 
     for (const finding of resolvedFindings) {
-      const marker = findingMarker(finding.marker);
+      const marker = findingMarker(finding.id);
       const thread = threads.find((t) => t.comments.some((c) => c.body.includes(marker)));
       if (!thread || thread.isResolved) continue;
 
       try {
         await this.github.resolveReviewThread(thread.id);
         this.logger.info(
-          { owner: this.owner, repo: this.repo, prNumber, marker: finding.marker },
+          { owner: this.owner, repo: this.repo, prNumber, marker: finding.id },
           'Resolved review thread for addressed finding',
         );
       } catch (error) {
@@ -321,7 +367,7 @@ export class ReviewPoster {
             owner: this.owner,
             repo: this.repo,
             prNumber,
-            marker: finding.marker,
+            marker: finding.id,
             error: String(error),
           },
           'Failed to resolve review thread (non-fatal)',

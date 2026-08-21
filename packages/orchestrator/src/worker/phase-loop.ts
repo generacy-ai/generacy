@@ -8,7 +8,7 @@ import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
-import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
+import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, deriveFindingId, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
 import { waitForCiGreen } from './ci-merge-readiness.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
@@ -18,7 +18,6 @@ import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-s
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
 import type { ReviewPoster } from './review-poster.js';
-import type { FindingsArtifact } from './review-findings-artifact.js';
 import type { ValidateFixHandler, ValidateFailureEvidence } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
@@ -31,19 +30,7 @@ import { boundOutputTail } from './output-tail.js';
 import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
-import { writePauseContext, readPauseContext } from './pause-context.js';
-import {
-  determineReviewMode,
-  computeReviewDelta,
-  composeVerificationInput,
-  buildVerificationPrompt,
-  advanceArtifact,
-  normalizeArtifact,
-  // Aliased to avoid a name collision with #1125's `FindingsArtifact`
-  // (from ./review-findings-artifact.js) — the two are distinct seams
-  // (#1127 bridges them). This is the #1126 convergence artifact shape.
-  type FindingsArtifact as ConvergenceFindingsArtifact,
-} from './review/index.js';
+import { writePauseContext } from './pause-context.js';
 import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
@@ -167,15 +154,17 @@ export interface PhaseLoopDeps {
    */
   reviewPoster?: ReviewPoster;
   /**
-   * #1125/#1156: injectable seam to read the review executor's findings artifact.
-   * Returns the bridged artifact paired with the sidecar-derived `round` (FR-005
-   * — `round` is now an OUTPUT, not an input parameter; the loop-local counter
-   * resets each run and would dedupe-skip re-review after a pause). Defaults
-   * undefined → the review side-effect block never runs → production-inert.
+   * #1125/#1156/#1161: injectable seam to read the review executor's findings
+   * artifact. Returns the canonical `ReviewArtifact` paired with the resolved
+   * `blockingSeverity` (used for the poster's render projection). `round` lives
+   * only in `artifact.round` (single-round-source, INV-C1/FR-006 — the loop-local
+   * counter resets each run and would dedupe-skip re-review after a pause).
+   * Defaults undefined → the review side-effect block never runs →
+   * production-inert.
    */
   readFindingsArtifact?: (
     context: WorkerContext,
-  ) => Promise<{ artifact: FindingsArtifact; round: number } | null>;
+  ) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null>;
   /**
    * #1124: Real review-phase executor. When injected, the `review` branch runs
    * it (spawns the CLI with an in-process charter, writes a findings sidecar,
@@ -612,19 +601,14 @@ export class PhaseLoop {
             // `on-remediation-limit` gate + the remediateTrigger seam below.
             result = this.runStubPhase('review');
           } else {
-            // #1126: delta-scoped verification-pass convergence, run FIRST as
-            // best-effort scaffolding. The reviewer's findings do not yet flow
-            // into it (the ReviewArtifact→FindingsArtifact bridge is deferred to
-            // #1127), so no addressed ids / new findings are consumed here — this
-            // wiring loads, advances, and persists the findings artifact
-            // (incrementing the round + advancing lastReviewedSha) and builds the
-            // verification prompt. Best-effort: any failure degrades to a fresh
-            // full review (FR-009 posture), never blocks the phase.
-            await this.runReviewConvergence(context, config, deps);
-            // #1124: real review executor when injected — spawns the CLI with an
-            // in-process charter, has the agent write a findings sidecar, and
-            // recomputes the verdict engine-side. Falls back to the #1121 inert
-            // stub when no executor is wired (feature-flag-off / non-worker paths).
+            // #1124 + #1161: real review executor when injected — spawns the CLI
+            // with an in-process charter, has the agent write a findings sidecar,
+            // and runs the #1126 delta-scoped convergence merge end-to-end
+            // (round-N→N+1 carry-forward + verdict) INSIDE the executor. The old
+            // `runReviewConvergence` pre-pass is deleted: round now lives only in
+            // the sidecar (single-round-source, INV-C1/FR-006). Falls back to the
+            // #1121 inert stub when no executor is wired (feature-flag-off /
+            // non-worker paths).
             result = deps.reviewExecutor
               ? await deps.reviewExecutor.execute(context)
               : this.runStubPhase(phase);
@@ -1031,6 +1015,7 @@ export class PhaseLoop {
             const round = (prior?.round ?? 0) + 1;
             const head = await context.github.getCurrentCommitSha();
             const finding: ReviewFinding = {
+              id: deriveFindingId(config.validateCommand, 'validate phase failed'),
               severity: 'critical',
               file: config.validateCommand,
               title: 'validate phase failed',
@@ -1665,10 +1650,10 @@ export class PhaseLoop {
       ) {
         const read = await deps.readFindingsArtifact(context);
         if (read) {
-          const { artifact, round } = read;
-          await deps.reviewPoster.postRound(artifact, round);
-          if (round >= 2) {
-            await deps.reviewPoster.resolveResolvedThreads(artifact);
+          const { artifact, blockingSeverity } = read;
+          await deps.reviewPoster.postRound(artifact.findings, artifact.round, blockingSeverity);
+          if (artifact.round >= 2) {
+            await deps.reviewPoster.resolveResolvedThreads(artifact.findings);
           }
           if (artifact.verdict === 'clean') {
             await prManager.markReadyForReview(context.linkedPRs);
@@ -1954,96 +1939,6 @@ export class PhaseLoop {
 
     // noop / pass → let the normal validate run proceed.
     return undefined;
-  }
-
-  /**
-   * #1126 (T015): run the delta-scoped verification-pass convergence for the
-   * `review` phase and persist the advanced findings artifact.
-   *
-   * Pipeline: load artifact (PhaseTracker) → `determineReviewMode` →
-   * `computeReviewDelta` (reading merge-conflict resolution SHAs from the
-   * pause-context sidecar) → `composeVerificationInput` →
-   * `buildVerificationPrompt` (scaffolding for the #1124 executor) →
-   * `advanceArtifact` → persist.
-   *
-   * The reviewer is still a #1121 stub, so `reviewerAddressed` and
-   * `reviewerNewFindings` are empty; the round still increments and
-   * `lastReviewedSha` advances so a subsequent re-review is scoped to the delta.
-   *
-   * Best-effort by construction: PhaseTracker degrades to null/no-op when Redis
-   * is down, and any thrown fault is swallowed with a warn — the review phase
-   * proceeds as a fresh full review (FR-009 posture), never blocked.
-   */
-  private async runReviewConvergence(
-    context: WorkerContext,
-    config: WorkerConfig,
-    deps: PhaseLoopDeps,
-  ): Promise<void> {
-    const { owner, repo, issueNumber, workflowName } = context.item;
-    const branch = context.branch ?? 'no-branch';
-    // Mirrors the phase-start-ref key shape (#1107) + 7-day TTL.
-    const key = `review-findings:${owner}:${repo}:${issueNumber}:${branch}`;
-    try {
-      let storedArtifact: ConvergenceFindingsArtifact | null = null;
-      const rawArtifact = await deps.phaseTracker?.getValueRaw(key);
-      if (rawArtifact != null) {
-        try {
-          storedArtifact = JSON.parse(rawArtifact) as ConvergenceFindingsArtifact;
-        } catch {
-          // Corrupt persisted value ⇒ treat as absent (fresh full review).
-          storedArtifact = null;
-        }
-      }
-      const artifact = normalizeArtifact(storedArtifact);
-      const mode = determineReviewMode(storedArtifact);
-
-      // FR-007: merge-conflict resolution SHAs (read-side only; #1131 writes).
-      const workflowId = `${owner}/${repo}#${issueNumber}`;
-      const pauseContext = await readPauseContext(context.checkoutPath, workflowId);
-
-      const prBaseRef = await resolveBaseRef(context.github, deps.prManager, owner, repo);
-
-      const delta = await computeReviewDelta({
-        github: context.github,
-        artifact,
-        pauseContext: pauseContext ?? undefined,
-        prBaseRef,
-      });
-
-      const verificationInput = composeVerificationInput(delta, artifact);
-      // #1124 scaffolding: the prompt is built (and validated by SC-006 tests)
-      // but not yet fed to a live reviewer — the executor is still a stub.
-      buildVerificationPrompt({
-        round: verificationInput.round,
-        openFindings: verificationInput.openFindings,
-        charter: mode.kind === 'verification' ? 'verification' : 'standard',
-      });
-
-      // Consumes ResolvedWorkflowConfig.review.blockingSeverity. No settings
-      // tier here (phase loop holds only WorkerConfig) ⇒ resolves to the
-      // built-in default; this feature consumes but does not own the default.
-      const blockingSeverity = resolveWorkflowOverrides(config, null, workflowName)
-        .review.blockingSeverity;
-
-      const { artifact: nextArtifact } = advanceArtifact({
-        artifact,
-        delta,
-        reviewerAddressed: [],
-        reviewerNewFindings: [],
-        blockingSeverity,
-      });
-
-      await deps.phaseTracker?.setValueRaw(
-        key,
-        JSON.stringify(nextArtifact),
-        PHASE_START_REF_TTL_SECONDS,
-      );
-    } catch (err) {
-      this.logger.warn(
-        { owner, repo, issueNumber, err: String(err) },
-        'review convergence failed — degrading to a fresh full review (FR-009)',
-      );
-    }
   }
 
   /**

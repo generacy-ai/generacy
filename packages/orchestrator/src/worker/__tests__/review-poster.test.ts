@@ -1,21 +1,20 @@
 /**
- * #1125 T019 — ReviewPoster unit tests.
+ * #1125 T019 / #1161 T024 — ReviewPoster unit tests.
  *
  * Pins the once-per-round COMMENT-event review submission (US1) and the
- * cross-round thread resolution (US4) against a mock GitHubClient + a fake
- * findings artifact. Covers SC-001 (event COMMENT, never REQUEST_CHANGES),
+ * cross-round thread resolution (US4) against a mock GitHubClient. #1161 re-homes
+ * the poster onto the canonical `ReviewFinding[]` input (the #1125
+ * `FindingsArtifact` / `blocking|advisory` vocabulary is deleted); blocking vs
+ * advisory is now derived at post time from `SEVERITY_RANK` + the resolved
+ * `blockingSeverity`. Covers SC-001 (event COMMENT, never REQUEST_CHANGES),
  * FR-002/002a (no finding dropped — diffable→inline, else body), FR-004
- * (advisory visually distinct), FR-009/SC-005 (resolve only `resolved`
- * findings by marker), and FR-010 (per-round dedupe).
+ * (advisory visually distinct), FR-009/SC-005 (resolve only `resolved` findings
+ * by marker), and FR-010 (per-round dedupe).
  */
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { GitHubClient, Review, ReviewThread } from '@generacy-ai/workflow-engine';
-import {
-  ReviewPoster,
-  reviewBodyMarker,
-  findingMarker,
-} from '../review-poster.js';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import { ReviewPoster, reviewBodyMarker, findingMarker } from '../review-poster.js';
+import type { ReviewFinding, Severity } from '../review-artifact.js';
 import type { Logger } from '../types.js';
 
 const mockLogger = {
@@ -32,6 +31,19 @@ const DIFFABLE_FILE = {
   status: 'modified',
   patch: '@@ -1,3 +1,4 @@\n line1\n+line2\n line3\n+line4',
 };
+
+/** Build a canonical `ReviewFinding` with explicit id (marker) + sensible defaults. */
+function finding(overrides: Partial<ReviewFinding> & { id: string }): ReviewFinding {
+  return {
+    severity: 'critical' as Severity,
+    file: 'src/a.ts',
+    title: 'a finding',
+    detail: 'detail',
+    round: 1,
+    status: 'open',
+    ...overrides,
+  };
+}
 
 function makeGithub(overrides: Partial<Record<keyof GitHubClient, unknown>> = {}) {
   return {
@@ -62,12 +74,9 @@ describe('ReviewPoster.postRound', () => {
   });
 
   it('submits exactly one COMMENT-event review per round (SC-001, US1 AC5)', async () => {
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [{ marker: 'm1', text: 'fix this', severity: 'blocking', anchor: { file: 'src/a.ts', line: 2 } }],
-    };
+    const findings = [finding({ id: 'm1', title: 'fix this', line: 2 })];
 
-    await makePoster(github).postRound(artifact, 1);
+    await makePoster(github).postRound(findings, 1, 'critical');
 
     expect(github.createReview).toHaveBeenCalledTimes(1);
     const input = (github.createReview as ReturnType<typeof vi.fn>).mock.calls[0]![3];
@@ -76,12 +85,9 @@ describe('ReviewPoster.postRound', () => {
   });
 
   it('routes a diffable anchor to an inline comment (FR-002)', async () => {
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [{ marker: 'inline1', text: 'inline finding', severity: 'blocking', anchor: { file: 'src/a.ts', line: 2 } }],
-    };
+    const findings = [finding({ id: 'inline1', title: 'inline finding', line: 2 })];
 
-    await makePoster(github).postRound(artifact, 1);
+    await makePoster(github).postRound(findings, 1, 'critical');
 
     const input = (github.createReview as ReturnType<typeof vi.fn>).mock.calls[0]![3];
     expect(input.comments).toHaveLength(1);
@@ -92,19 +98,16 @@ describe('ReviewPoster.postRound', () => {
   });
 
   it('falls back to the body for undiffable and anchorless findings — nothing dropped (FR-002a)', async () => {
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [
-        // File not in the diff → body fallback, keeps its intended file:line.
-        { marker: 'b1', text: 'undiffable file', severity: 'blocking', anchor: { file: 'src/other.ts', line: 5 } },
-        // Line not in the diff → body fallback.
-        { marker: 'b2', text: 'undiffable line', severity: 'advisory', anchor: { file: 'src/a.ts', line: 99 } },
-        // No anchor at all → body.
-        { marker: 'b3', text: 'no anchor', severity: 'blocking' },
-      ],
-    };
+    const findings = [
+      // File not in the diff → body fallback, keeps its intended file:line.
+      finding({ id: 'b1', title: 'undiffable file', file: 'src/other.ts', line: 5 }),
+      // Line not in the diff → body fallback.
+      finding({ id: 'b2', title: 'undiffable line', severity: 'minor', file: 'src/a.ts', line: 99 }),
+      // No line at all → no anchor → body.
+      finding({ id: 'b3', title: 'no anchor', file: 'src/x.ts' }),
+    ];
 
-    await makePoster(github).postRound(artifact, 1);
+    await makePoster(github).postRound(findings, 1, 'critical');
 
     const input = (github.createReview as ReturnType<typeof vi.fn>).mock.calls[0]![3];
     expect(input.comments).toHaveLength(0);
@@ -115,9 +118,7 @@ describe('ReviewPoster.postRound', () => {
   });
 
   it('stamps the body with the round marker and a human Round header (SC-004, SC-006)', async () => {
-    const artifact: FindingsArtifact = { verdict: 'clean', findings: [] };
-
-    await makePoster(github).postRound(artifact, 3);
+    await makePoster(github).postRound([], 3, 'critical');
 
     const input = (github.createReview as ReturnType<typeof vi.fn>).mock.calls[0]![3];
     expect(input.body).toContain(reviewBodyMarker(3));
@@ -125,15 +126,12 @@ describe('ReviewPoster.postRound', () => {
   });
 
   it('renders advisory findings visually distinct from blocking (FR-004)', async () => {
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [
-        { marker: 'adv', text: 'a nit', severity: 'advisory' },
-        { marker: 'blk', text: 'a bug', severity: 'blocking' },
-      ],
-    };
+    const findings = [
+      finding({ id: 'adv', title: 'a nit', severity: 'minor', file: 'src/a.ts' }),
+      finding({ id: 'blk', title: 'a bug', severity: 'critical', file: 'src/a.ts' }),
+    ];
 
-    await makePoster(github).postRound(artifact, 1);
+    await makePoster(github).postRound(findings, 1, 'critical');
 
     const input = (github.createReview as ReturnType<typeof vi.fn>).mock.calls[0]![3];
     expect(input.body).toContain('🔵 Advisory (non-blocking)');
@@ -145,18 +143,16 @@ describe('ReviewPoster.postRound', () => {
       { id: 1, user: { login: 'gen' }, body: reviewBodyMarker(1), state: 'COMMENTED', submittedAt: 't' },
     ];
     github = makeGithub({ listReviews: vi.fn().mockResolvedValue(existing) });
-    const artifact: FindingsArtifact = { verdict: 'clean', findings: [] };
 
-    await makePoster(github).postRound(artifact, 1);
+    await makePoster(github).postRound([], 1, 'critical');
 
     expect(github.createReview).not.toHaveBeenCalled();
   });
 
   it('never throws — a createReview failure is swallowed (FR-008)', async () => {
     github = makeGithub({ createReview: vi.fn().mockRejectedValue(new Error('boom')) });
-    const artifact: FindingsArtifact = { verdict: 'clean', findings: [] };
 
-    await expect(makePoster(github).postRound(artifact, 1)).resolves.toBeUndefined();
+    await expect(makePoster(github).postRound([], 1, 'critical')).resolves.toBeUndefined();
   });
 });
 
@@ -175,15 +171,12 @@ describe('ReviewPoster.resolveResolvedThreads', () => {
   it('resolves only threads for findings marked resolved, matched by marker (FR-009, SC-005)', async () => {
     const threads = [threadWithMarker('T_A', 'mA'), threadWithMarker('T_B', 'mB')];
     const github = makeGithub({ getPRReviewThreads: vi.fn().mockResolvedValue(threads) });
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [
-        { marker: 'mA', text: 'done', severity: 'blocking', resolved: true },
-        { marker: 'mB', text: 'still open', severity: 'blocking', resolved: false },
-      ],
-    };
+    const findings = [
+      finding({ id: 'mA', title: 'done', status: 'resolved' }),
+      finding({ id: 'mB', title: 'still open', status: 'open' }),
+    ];
 
-    await makePoster(github).resolveResolvedThreads(artifact);
+    await makePoster(github).resolveResolvedThreads(findings);
 
     expect(github.resolveReviewThread).toHaveBeenCalledTimes(1);
     expect(github.resolveReviewThread).toHaveBeenCalledWith('T_A');
@@ -192,12 +185,9 @@ describe('ReviewPoster.resolveResolvedThreads', () => {
   it('skips already-resolved threads', async () => {
     const threads = [threadWithMarker('T_A', 'mA', true)];
     const github = makeGithub({ getPRReviewThreads: vi.fn().mockResolvedValue(threads) });
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [{ marker: 'mA', text: 'done', severity: 'blocking', resolved: true }],
-    };
+    const findings = [finding({ id: 'mA', title: 'done', status: 'resolved' })];
 
-    await makePoster(github).resolveResolvedThreads(artifact);
+    await makePoster(github).resolveResolvedThreads(findings);
 
     expect(github.resolveReviewThread).not.toHaveBeenCalled();
   });
@@ -212,27 +202,21 @@ describe('ReviewPoster.resolveResolvedThreads', () => {
       getPRReviewThreads: vi.fn().mockResolvedValue(threads),
       resolveReviewThread,
     });
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [
-        { marker: 'mA', text: 'done', severity: 'blocking', resolved: true },
-        { marker: 'mB', text: 'done', severity: 'blocking', resolved: true },
-      ],
-    };
+    const findings = [
+      finding({ id: 'mA', title: 'done', status: 'resolved' }),
+      finding({ id: 'mB', title: 'done', status: 'resolved' }),
+    ];
 
-    await makePoster(github).resolveResolvedThreads(artifact);
+    await makePoster(github).resolveResolvedThreads(findings);
 
     expect(resolveReviewThread).toHaveBeenCalledTimes(2);
   });
 
   it('is a no-op when no findings are resolved', async () => {
     const github = makeGithub();
-    const artifact: FindingsArtifact = {
-      verdict: 'changes-required',
-      findings: [{ marker: 'mA', text: 'x', severity: 'blocking' }],
-    };
+    const findings = [finding({ id: 'mA', title: 'x', status: 'open' })];
 
-    await makePoster(github).resolveResolvedThreads(artifact);
+    await makePoster(github).resolveResolvedThreads(findings);
 
     expect(github.getPRReviewThreads).not.toHaveBeenCalled();
   });

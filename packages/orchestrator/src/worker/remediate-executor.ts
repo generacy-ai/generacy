@@ -34,8 +34,8 @@ import { buildRemediateCharter } from './remediate-charter.js';
 import {
   bumpRemediationCount,
   readReviewArtifact,
+  SEVERITY_RANK,
   type ReviewFinding,
-  type Severity,
 } from './review-artifact.js';
 import type { Logger, PhaseResult, WorkerContext } from './types.js';
 
@@ -45,8 +45,6 @@ export interface RemediateExecutorDeps {
   settings: OrchestratorSettings | null | undefined;
   logger: Logger;
 }
-
-const SEVERITY_RANK: Record<Severity, number> = { critical: 3, major: 2, minor: 1 };
 
 export class RemediateExecutor {
   private readonly agentLauncher: AgentLauncher;

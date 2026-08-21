@@ -43,35 +43,35 @@ Blocking phase — every later phase imports the canonical types, `SEVERITY_RANK
 Convergence files import canonical types from Phase 1. Deletions and retargets here
 collapse the triple schema to one (SC-001/SC-002/SC-003).
 
-- [ ] T004 [US2] Retarget `worker/review/review-delta.ts`: import `ReviewArtifact` /
+- [X] T004 [US2] Retarget `worker/review/review-delta.ts`: import `ReviewArtifact` /
       `ReviewFinding` from `review-artifact.ts`; change the sha reader from
       `artifact.lastReviewedSha` to canonical `artifact.lastReviewedCommitSha`
       (research Decision 4). `computeReviewDelta(prior, headSha, ctx)` returns
       `ReviewDelta { changedFiles, base, round }` with `round = (prior?.round ?? 0) + 1`
       (1-based, Decision 5).
-- [ ] T005 [US2] Retarget `worker/review/verification-input.ts`: `composeVerificationInput`
+- [X] T005 [US2] Retarget `worker/review/verification-input.ts`: `composeVerificationInput`
       operates on canonical `ReviewFinding`, enumerating all prior findings with
       `status === 'open'`.
-- [ ] T006 [US2] Retarget `worker/review/findings-advance.ts` to canonical types. **Delete**
+- [X] T006 [US2] Retarget `worker/review/findings-advance.ts` to canonical types. **Delete**
       the second `computeVerdict` (SC-002) and any `SEVERITY_ORDER` usage (SC-003); import
       `computeVerdict` + `SEVERITY_RANK` from `review-artifact.ts`. `advanceArtifact(prior,
       delta, reviewerAddressed, reviewerNewFindings)` matches by `id` within the delta,
       enforces resolved-is-terminal, carries forward unaddressed open findings. Retarget
       `filterNewFindings(candidates, round, blockingSeverity)` to 1-based `round >= 2`
       (Decision 5), importing canonical `SEVERITY_RANK`.
-- [ ] T007 [US2] Delete `worker/review/findings-artifact.ts` (#1126 orphan schema, its
+- [X] T007 [US2] Delete `worker/review/findings-artifact.ts` (#1126 orphan schema, its
       `SEVERITY_ORDER`/`sev()`). Fix any remaining imports to point at canonical types.
-- [ ] T008 [US2] Delete `worker/review-findings-artifact.ts` (#1125 orphan schema,
+- [X] T008 [US2] Delete `worker/review-findings-artifact.ts` (#1125 orphan schema,
       `blocking|advisory` vocabulary). Fix remaining imports.
-- [ ] T009 [US2] Delete `worker/review-findings-bridge.ts` (`bridgeReviewArtifact` /
+- [X] T009 [US2] Delete `worker/review-findings-bridge.ts` (`bridgeReviewArtifact` /
       `synthesizeMarker`); its derivation already lives in `review-artifact.ts` from T002.
-- [ ] T010 [US2] In `worker/remediate-executor.ts`, delete the local `SEVERITY_RANK`;
+- [X] T010 [US2] In `worker/remediate-executor.ts`, delete the local `SEVERITY_RANK`;
       import the canonical one from `review-artifact.ts` (SC-003). No behavior change.
 
 ## Phase 3: Poster re-home (US2, FR-009 regression guard)
 <!-- Phase boundary: needs canonical schema (Phase 1) + deleted bridge/#1125 (Phase 2) -->
 
-- [ ] T011 [US2] In `worker/review-poster.ts`, change input from the deleted
+- [X] T011 [US2] In `worker/review-poster.ts`, change input from the deleted
       `FindingsArtifact` to canonical `ReviewFinding[]` + `verdict` + `blockingSeverity`
       (contracts/poster-input.md). Render projection: `marker = finding.id`,
       `text = title + '\n\n' + detail`, `anchor = line !== undefined ? {file,line} :
@@ -88,16 +88,16 @@ Replaces the discarded `runReviewConvergence` pre-pass with a real in-executor m
 (contracts/convergence-merge.md, research Decision 7). This is the anti-vanish behavior
 change (SC-005).
 
-- [ ] T012 [US1] In `worker/phase-loop.ts`, delete `runReviewConvergence` and its
+- [X] T012 [US1] In `worker/phase-loop.ts`, delete `runReviewConvergence` and its
       `review-findings:<owner>:<repo>:<issue>:<branch>` PhaseTracker key (FR-006 — sidecar
       `round` is now the single round source; no independent counter). Retype the
       `readFindingsArtifact` seam to the canonical `ReviewArtifact`/`ReviewFinding` types.
       Remove the `settings = null` `resolveWorkflowOverrides` call site along with it
       (FR-004 / SC-004).
-- [ ] T013 [US1] In `worker/claude-cli-worker.ts`, drop `bridgeReviewArtifact` usage and
+- [X] T013 [US1] In `worker/claude-cli-worker.ts`, drop `bridgeReviewArtifact` usage and
       wire the canonical `readFindingsArtifact` seam to the executor (types only; the
       bridge no longer exists).
-- [ ] T014 [US1] In `worker/review-executor.ts`, implement the convergence merge sequence
+- [X] T014 [US1] In `worker/review-executor.ts`, implement the convergence merge sequence
       (contracts/convergence-merge.md "Executor sequence"): (1) `prior =
       readReviewArtifact(...)` (null on round 1); (2) `delta = computeReviewDelta(prior,
       HEAD, ctx)` reading `prior.lastReviewedCommitSha` (FR-007); (3) build a delta-scoped
@@ -108,7 +108,7 @@ change (SC-005).
       `round = (prior?.round ?? 0) + 1`, `lastReviewedCommitSha = HEAD`, carrying forward
       `remediationCount` / `markedReadyByEngine`. Round advances only on a successful
       review (FR-006).
-- [ ] T015 [US1] In `worker/review-charter.ts`, make the round >= 2 charter delta-scoped
+- [X] T015 [US1] In `worker/review-charter.ts`, make the round >= 2 charter delta-scoped
       and verification-framed: scope to the delta window since `lastReviewedCommitSha`,
       enumerate still-open findings, restrict new findings to blocking severity. Round 1
       (`prior === null`) keeps the whole-PR `standard` profile (data-model "Round-1 special
@@ -117,7 +117,7 @@ change (SC-005).
 ## Phase 5: Consistent `blockingSeverity` resolution (US3, FR-004)
 <!-- Phase boundary: the sole `settings = null` site was deleted in Phase 4 (T012) -->
 
-- [ ] T016 [US3] Audit every verdict-relevant call site (`review-executor.ts`,
+- [X] T016 [US3] Audit every verdict-relevant call site (`review-executor.ts`,
       `remediate-executor.ts`, the gate in `phase-loop.ts`, and the convergence merge) to
       confirm all resolve `blockingSeverity` via
       `resolveWorkflowOverrides(config, this.settings, workflowName)` — zero `settings =
@@ -125,13 +125,13 @@ change (SC-005).
 
 ## Phase 6: Default + docs reconciliation (US4, FR-008, D3)
 
-- [ ] T017 [P] [US4] In `worker/config.ts`, replace the flat
+- [X] T017 [P] [US4] In `worker/config.ts`, replace the flat
       `DEFAULT_REVIEW.blockingSeverity = 'critical'` with a per-workflow
       `defaultBlockingSeverity(workflowName)` returning `speckit-feature → 'major'`, else
       `'critical'` (mirror `defaultMaxRemediations`). Consume it in
       `resolveWorkflowOverrides` as the fallback when no explicit `review.blockingSeverity`
       override is set.
-- [ ] T018 [P] [US4] In `docs/docs/reference/review-artifacts.md`, update the default
+- [X] T018 [P] [US4] In `docs/docs/reference/review-artifacts.md`, update the default
       `blockingSeverity` to `major` for `speckit-feature` (other workflows `critical`) and
       record the D3 rationale so docs and code agree (SC-007).
 

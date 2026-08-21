@@ -33,7 +33,6 @@ import {
   readReviewArtifact,
   clearReviewArtifact,
 } from './review-artifact.js';
-import { bridgeReviewArtifact } from './review-findings-bridge.js';
 import { parseExternalFeedback } from './pr-feedback-parser.js';
 import { writeExternalFeedbackSeed } from './external-feedback-seed.js';
 import { resolveExternalFeedbackThreads } from './external-feedback-resolver.js';
@@ -871,12 +870,13 @@ export class ClaudeCliWorker {
             ctx.checkoutPath,
             `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
           )?.verdict === 'changes-required',
-        // #1156 FR-001/002/003/005: the findings reader the #1125 review side-effect
+        // #1156/#1161 FR-001: the findings reader the #1125 review side-effect
         // block depends on (left undefined before #1156, permanently disabling the
-        // block). Reads the engine-written sidecar, bridges it to the poster's
-        // FindingsArtifact shape (severity mapped via the resolved blockingSeverity —
-        // single source of truth with computeVerdict), and returns the sidecar's
-        // authoritative round alongside it.
+        // block). Reads the canonical engine-written sidecar and returns it paired
+        // with the resolved `blockingSeverity` (used only for the poster's
+        // render-time severity projection — INV-P1). The round lives in
+        // `artifact.round` (single-round-source, INV-C1). No bridge: the poster
+        // now consumes the canonical `ReviewFinding[]` directly (#1161 collapse).
         readFindingsArtifact: async (ctx) => {
           const artifact = await readReviewArtifact(
             ctx.checkoutPath,
@@ -888,10 +888,7 @@ export class ClaudeCliWorker {
             orchSettings,
             ctx.item.workflowName,
           ).review;
-          return {
-            artifact: bridgeReviewArtifact(artifact, blockingSeverity),
-            round: artifact.round,
-          };
+          return { artifact, blockingSeverity };
         },
         validateFixHandler,
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),

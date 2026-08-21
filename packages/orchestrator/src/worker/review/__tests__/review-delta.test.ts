@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { FindingsArtifact } from '../findings-artifact.js';
+import type { ReviewArtifact } from '../../review-artifact.js';
 import { computeReviewDelta, type ReviewDeltaGitHub } from '../review-delta.js';
 
 function makeGithub(overrides: Partial<ReviewDeltaGitHub> = {}): ReviewDeltaGitHub {
@@ -11,16 +11,23 @@ function makeGithub(overrides: Partial<ReviewDeltaGitHub> = {}): ReviewDeltaGitH
   };
 }
 
+function artifact(overrides: Partial<ReviewArtifact> = {}): ReviewArtifact {
+  return {
+    findings: [],
+    verdict: 'changes-required',
+    round: 1,
+    lastReviewedCommitSha: 'LAST',
+    remediationCount: 0,
+    markedReadyByEngine: false,
+    ...overrides,
+  };
+}
+
 describe('computeReviewDelta (FR-002 / FR-007 / FR-009 / SC-001)', () => {
   it('selects last-reviewed base when commitExistsInCheckout is true', async () => {
     const github = makeGithub();
-    const artifact: FindingsArtifact = {
-      round: 1,
-      findings: [],
-      lastReviewedSha: 'LAST',
-    };
 
-    const delta = await computeReviewDelta({ github, artifact, prBaseRef: 'develop' });
+    const delta = await computeReviewDelta({ github, artifact: artifact(), prBaseRef: 'develop' });
 
     expect(delta.base).toEqual({ source: 'last-reviewed', base: 'LAST', head: 'HEAD_SHA' });
     expect(delta.round).toBe(2);
@@ -32,33 +39,24 @@ describe('computeReviewDelta (FR-002 / FR-007 / FR-009 / SC-001)', () => {
     const github = makeGithub({
       getCurrentCommitSha: vi.fn().mockResolvedValue('LAST'),
     });
-    const artifact: FindingsArtifact = { round: 1, findings: [], lastReviewedSha: 'LAST' };
 
-    const delta = await computeReviewDelta({ github, artifact, prBaseRef: 'develop' });
+    const delta = await computeReviewDelta({ github, artifact: artifact(), prBaseRef: 'develop' });
 
     expect(delta.base).toEqual({ source: 'last-reviewed', base: 'LAST', head: 'LAST' });
     expect(delta.files).toEqual([]);
     expect(github.getFilesChangedBetween).not.toHaveBeenCalled();
   });
 
-  it('missing lastReviewedSha ⇒ full-diff fallback, round still artifact.round + 1', async () => {
-    const github = makeGithub();
-    const artifact: FindingsArtifact = { round: 3, findings: [] };
-
-    const delta = await computeReviewDelta({ github, artifact, prBaseRef: 'develop' });
-
-    expect(delta.base).toEqual({ source: 'full-diff', base: 'develop', head: 'HEAD_SHA' });
-    expect(delta.round).toBe(4);
-    expect(github.commitExistsInCheckout).not.toHaveBeenCalled();
-  });
-
-  it('unresolvable lastReviewedSha (commitExistsInCheckout false) ⇒ full-diff fallback', async () => {
+  it('unresolvable lastReviewedCommitSha (commitExistsInCheckout false) ⇒ full-diff fallback', async () => {
     const github = makeGithub({
       commitExistsInCheckout: vi.fn().mockResolvedValue(false),
     });
-    const artifact: FindingsArtifact = { round: 2, findings: [], lastReviewedSha: 'GONE' };
 
-    const delta = await computeReviewDelta({ github, artifact, prBaseRef: 'develop' });
+    const delta = await computeReviewDelta({
+      github,
+      artifact: artifact({ round: 2, lastReviewedCommitSha: 'GONE' }),
+      prBaseRef: 'develop',
+    });
 
     expect(delta.base).toEqual({ source: 'full-diff', base: 'develop', head: 'HEAD_SHA' });
     expect(delta.round).toBe(3);
@@ -68,25 +66,19 @@ describe('computeReviewDelta (FR-002 / FR-007 / FR-009 / SC-001)', () => {
     const github = makeGithub({
       getFilesChangedBetween: vi.fn().mockRejectedValue(new Error('fatal: bad revision')),
     });
-    const artifact: FindingsArtifact = { round: 1, findings: [], lastReviewedSha: 'LAST' };
 
     await expect(
-      computeReviewDelta({ github, artifact, prBaseRef: 'develop' }),
+      computeReviewDelta({ github, artifact: artifact(), prBaseRef: 'develop' }),
     ).rejects.toThrow('fatal: bad revision');
   });
 
   describe('resolution branch (FR-007, T014)', () => {
     it('pauseContext resolution SHAs take highest priority', async () => {
       const github = makeGithub();
-      const artifact: FindingsArtifact = {
-        round: 1,
-        findings: [],
-        lastReviewedSha: 'LAST',
-      };
 
       const delta = await computeReviewDelta({
         github,
-        artifact,
+        artifact: artifact(),
         pauseContext: { resolutionBaseSha: 'RBASE', resolutionHeadSha: 'RHEAD' },
         prBaseRef: 'develop',
       });
@@ -102,11 +94,10 @@ describe('computeReviewDelta (FR-002 / FR-007 / FR-009 / SC-001)', () => {
       const github = makeGithub({
         getFilesChangedBetween: vi.fn().mockResolvedValue(['src/resolved.ts']),
       });
-      const artifact: FindingsArtifact = { round: 2, findings: [], lastReviewedSha: 'LAST' };
 
       const delta = await computeReviewDelta({
         github,
-        artifact,
+        artifact: artifact({ round: 2 }),
         pauseContext: { resolutionBaseSha: 'RBASE', resolutionHeadSha: 'RHEAD' },
         prBaseRef: 'develop',
       });
@@ -117,11 +108,10 @@ describe('computeReviewDelta (FR-002 / FR-007 / FR-009 / SC-001)', () => {
 
     it('only one resolution SHA present ⇒ falls through to last-reviewed', async () => {
       const github = makeGithub();
-      const artifact: FindingsArtifact = { round: 1, findings: [], lastReviewedSha: 'LAST' };
 
       const delta = await computeReviewDelta({
         github,
-        artifact,
+        artifact: artifact(),
         pauseContext: { resolutionBaseSha: 'RBASE' },
         prBaseRef: 'develop',
       });

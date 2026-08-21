@@ -6,7 +6,7 @@
 import { vi, describe, it, expect } from 'vitest';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import { ReviewPoster } from '../review-poster.js';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewFinding } from '../review-artifact.js';
 import type { Logger } from '../types.js';
 
 const mockLogger = {
@@ -27,11 +27,18 @@ function makeGithub() {
   } as unknown as GitHubClient;
 }
 
-const CLEAN: FindingsArtifact = { verdict: 'clean', findings: [] };
-const WITH_RESOLVED: FindingsArtifact = {
-  verdict: 'changes-required',
-  findings: [{ marker: 'm1', text: 't', severity: 'blocking', resolved: true }],
-};
+const CLEAN: ReviewFinding[] = [];
+const WITH_RESOLVED: ReviewFinding[] = [
+  {
+    id: 'm1',
+    severity: 'critical',
+    file: 'src/a.ts',
+    title: 't',
+    detail: 'd',
+    round: 1,
+    status: 'resolved',
+  },
+];
 
 describe('#1156 ReviewPoster PR-number getter', () => {
   it('SC-003: postRound is inert when getPrNumber returns undefined (no PR #0 post)', async () => {
@@ -44,7 +51,7 @@ describe('#1156 ReviewPoster PR-number getter', () => {
       logger: mockLogger,
     });
 
-    await poster.postRound(CLEAN, 1);
+    await poster.postRound(CLEAN, 1, 'critical');
 
     expect(github.listReviews).not.toHaveBeenCalled();
     expect(github.listPullRequestFiles).not.toHaveBeenCalled();
@@ -77,7 +84,7 @@ describe('#1156 ReviewPoster PR-number getter', () => {
       logger: mockLogger,
     });
 
-    await poster.postRound(CLEAN, 1);
+    await poster.postRound(CLEAN, 1, 'critical');
 
     expect(github.listReviews).toHaveBeenCalledWith('o', 'r', 42);
     expect(github.createReview).toHaveBeenCalledWith('o', 'r', 42, expect.anything());
@@ -95,12 +102,12 @@ describe('#1156 ReviewPoster PR-number getter', () => {
     });
 
     // First call: no PR yet — inert.
-    await poster.postRound(CLEAN, 1);
+    await poster.postRound(CLEAN, 1, 'critical');
     expect(github.createReview).not.toHaveBeenCalled();
 
     // PR now exists — second call targets it.
     prRef.value = 9;
-    await poster.postRound(CLEAN, 2);
+    await poster.postRound(CLEAN, 2, 'critical');
     expect(github.createReview).toHaveBeenCalledWith('o', 'r', 9, expect.anything());
   });
 });
