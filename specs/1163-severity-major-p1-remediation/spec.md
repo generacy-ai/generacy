@@ -18,9 +18,15 @@ remediation-limit gate is rejected at the MCP boundary with `invalid-args` (the 
 UI-mode operator cannot answer the cap gate at all. Local mode is unaffected (it does not route
 through the wire schema).
 
-Fix: add `remediation-limit` to `GateTypeSchema` and audit for any other gate type the #1120
-engine can raise that the enum lacks (notably the CI merge gate, `ci`, from #1133). Add a
-schema round-trip test pinning the new member(s).
+Fix: add both `remediation-limit` and `ci` (the CI merge gate from #1133) to the gate-type
+enum — both are operator-answerable worker gates with the identical `--gates=ui` dead-gate
+exposure (clarified 2026-08-21, Q1→A). The addition must land in **both** in-repo mirrors of the
+enum: the MCP-boundary schema at `packages/generacy/src/cli/commands/cockpit/mcp/gates/schemas.ts:34-43`
+**and** the canonical `@generacy-ai/cockpit` enum at `packages/cockpit/src/gates/schema.ts:24-33`,
+because the orchestrator route re-validates every forwarded gate-open via the package schema
+(`GateOpenSchema.parse` at `cockpit-gates.ts:339`); updating only the MCP mirror leaves the gate
+rejected at the route (clarified 2026-08-21, Q2→A). Add a schema round-trip test pinning the new
+members.
 
 **Coordination:** `GateTypeSchema` is the cluster-side mirror of the authoritative cloud
 `cockpitGateTypeEnum` (see the schema file's DESIGN header). The agency plugin's own `GateType`
@@ -66,25 +72,29 @@ that must reach a human,
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `remediation-limit` as a member of `GateTypeSchema` in `schemas.ts`. | P1 | Order relative to the existing 8 values must match the cloud enum ordering convention. |
-| FR-002 | Audit the #1120 / #1153 engine for other operator gate types the enum lacks (candidate: `ci`) and add any confirmed-missing member. | P1 | Decision on `ci` deferred to `/speckit:clarify`. |
-| FR-003 | Add a schema round-trip test that asserts `GateTypeSchema` (and, transitively, `GateOpenWireSchema`/`GateOpenInputSchema`) accepts each newly added gate type. | P1 | Mirror the existing `mcp/gates/__tests__/schemas.test.ts` style. |
-| FR-004 | Keep the cluster mirror field-for-field compatible with the authoritative cloud enum — no reordering or renaming of the existing 8 values. | P1 | Cross-repo coordination noted in Assumptions. |
+| FR-001 | Add `remediation-limit` and `ci` as members of `GateTypeSchema` in the MCP mirror `packages/generacy/src/cli/commands/cockpit/mcp/gates/schemas.ts:34-43`. | P1 | Order relative to the existing 8 values must match the cloud enum ordering convention. |
+| FR-002 | Add the same two members (`remediation-limit`, `ci`) to the canonical `@generacy-ai/cockpit` enum at `packages/cockpit/src/gates/schema.ts:24-33`, so the orchestrator route (`GateOpenSchema.parse`, `cockpit-gates.ts:339`) accepts the forwarded gate-open. | P1 | Resolved Q2→A: both enums required; expands changeset to bump `@generacy-ai/cockpit`. `ci` inclusion resolved Q1→A. |
+| FR-003 | Add a schema round-trip test that asserts `GateTypeSchema` (and, transitively, `GateOpenWireSchema`/`GateOpenInputSchema`) accepts each newly added gate type, in both the MCP-mirror and the `@generacy-ai/cockpit` test suites. | P1 | Mirror the existing `mcp/gates/__tests__/schemas.test.ts` style; add matching coverage under `packages/cockpit/src/__tests__/`. |
+| FR-004 | Keep both mirrors field-for-field compatible with the authoritative cloud enum — no reordering or renaming of the existing 8 values. | P1 | Cross-repo coordination noted in Assumptions. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `remediation-limit` accepted by the gate-type enum | 100% | Round-trip test green; `GateTypeSchema.safeParse('remediation-limit').success === true`. |
-| SC-002 | UI-mode remediation-limit gate no longer rejected at the MCP boundary | 0 `invalid-args` from gate type | `cockpit_gate_open`/`_status`/`_ack` for a remediation-limit gate validate. |
+| SC-001 | `remediation-limit` and `ci` accepted by both gate-type enums | 100% | Round-trip tests green in both suites; `GateTypeSchema.safeParse('remediation-limit').success === true` and `…('ci').success === true` in the MCP mirror and `@generacy-ai/cockpit`. |
+| SC-002 | UI-mode remediation-limit/ci gates no longer rejected at the MCP boundary or the orchestrator route | 0 `invalid-args`/route rejects from gate type | `cockpit_gate_open`/`_status`/`_ack` for a remediation-limit or ci gate validate at the MCP boundary and pass `GateOpenSchema.parse` at the route. |
 | SC-003 | No regression on the existing 8 gate types | 0 removed/renamed members | Existing parity/schema tests remain green. |
 
 ## Assumptions
 
-- The cloud `cockpitGateTypeEnum` will (or already does) accept `remediation-limit`; without a
-  matching cloud change the forwarded record is dropped cloud-side. This cluster fix is necessary
-  but not sufficient for end-to-end UI-mode delivery — cloud + agency counterparts must land
-  before UI-mode dogfood.
+- The cloud `cockpitGateTypeEnum` will (or already does) accept `remediation-limit` and `ci`;
+  without a matching cloud change the forwarded record is dropped cloud-side. This cluster fix is
+  necessary but not sufficient for end-to-end UI-mode delivery — cloud + agency counterparts must
+  land before UI-mode dogfood.
+- `ci` (the CI merge gate from #1133) is confirmed in scope alongside `remediation-limit`
+  (clarified Q1→A); the audit of #1120/#1153 operator-answerable worker gates yields only these
+  two net-new candidates (`review` ships gate-less; `implementation-review` is already an enum
+  member).
 - `remediation-limit` is an operator-answerable gate (resumable pause), matching how the worker
   applies `waiting-for:remediation-limit` + `agent:paused` at the cap.
 - No new gate-identity derivation (`deriveGateKey`/`deriveGateId`) logic is required; the new

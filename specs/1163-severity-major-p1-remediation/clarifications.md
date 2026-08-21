@@ -20,7 +20,7 @@ or add only `remediation-limit` and defer `ci` to a separate coordinated issue?
 - A: Add both `remediation-limit` and `ci` now (single coordinated enum bump).
 - B: Add only `remediation-limit`; track `ci` as a separate follow-up.
 
-**Answer**: *Pending*
+**Answer**: A) Add both `remediation-limit` and `ci` now (single coordinated enum bump). Rationale: the `ci` gate (#1133) is an operator-answerable worker gate with the identical `--gates=ui` dead-gate exposure, and both types need the same one-line addition to the same two 8-value enums (`schemas.ts:34-43` and `schema.ts:24-33`); deferring `ci` merely re-opens the identical rejection for a second gate type.
 
 ### Q2: Second in-repo enum scope
 **Context**: The spec's FR-001 names only the MCP-boundary mirror at
@@ -40,4 +40,4 @@ route re-validates via the package schema?
 - A: Update both enums (required for the gate to reach the cloud end-to-end).
 - B: Update only the MCP mirror per FR-001's literal wording.
 
-**Answer**: *Pending*
+**Answer**: A) Update both enums (required for the gate to reach the cloud end-to-end). Rationale: the orchestrator route imports `GateOpenSchema`/`GateTypeSchema` from `@generacy-ai/cockpit` and re-parses every forwarded gate-open via `GateOpenSchema.parse` (`cockpit-gates.ts:10,61,339`); updating only the MCP mirror lets the gate clear `schemas.ts` but get rejected at the route, so both the mirror and the canonical `@generacy-ai/cockpit` enum must add the value.
