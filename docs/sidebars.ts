@@ -53,6 +53,9 @@ const sidebars: SidebarsConfig = {
             'guides/generacy/overview',
             'guides/generacy/requirements',
             'guides/generacy/configuration',
+            'guides/generacy/review-remediate-migration',
+            'guides/generacy/review-remediate-rollout',
+            'guides/generacy/review-remediate-dogfood',
           ],
         },
       ],
@@ -80,6 +83,8 @@ const sidebars: SidebarsConfig = {
         description: 'API and configuration reference documentation.',
       },
       items: [
+        'reference/bugfix-profile-config',
+        'reference/review-artifacts',
         {
           type: 'category',
           label: 'API',
