@@ -29,8 +29,9 @@ import { warnIfEffortDropped } from './effort-mechanism-check.js';
 import { OutputCapture } from './output-capture.js';
 import { buildReviewCharter } from './review-charter.js';
 import {
+  clearReviewCandidate,
   computeVerdict,
-  getReviewArtifactRelPath,
+  getReviewCandidateRelPath,
   readCandidateFindings,
   readReviewArtifact,
   writeReviewArtifact,
@@ -109,7 +110,9 @@ export class ReviewExecutor implements ReviewExecutorLike {
     const round = (priorRound?.round ?? 0) + 1;
 
     // 3. Build the in-process charter naming the agent's sidecar write target.
-    const sidecarRelPath = getReviewArtifactRelPath(workflowId);
+    //    #1155: the agent writes the *candidate* path; the engine reads it and
+    //    writes the authoritative artifact separately (INV-5).
+    const sidecarRelPath = getReviewCandidateRelPath(workflowId);
     const charter = buildReviewCharter({
       profile,
       sidecarRelPath,
@@ -137,6 +140,11 @@ export class ReviewExecutor implements ReviewExecutorLike {
       { cwd: checkoutPath, timeoutMs, provider, model, effort, round, profile },
       'Spawning Claude CLI for review phase',
     );
+
+    // 5. Clear any stale candidate BEFORE spawning (#1155, INV D-3) so any
+    //    candidate present after the spawn was provably written this round — a
+    //    leftover from a crashed prior round can never be re-ingested.
+    await clearReviewCandidate(checkoutPath, workflowId);
 
     // 5. Spawn via the launcher directly (NOT cli-spawner, which excludes review).
     let child;
@@ -227,20 +235,41 @@ export class ReviewExecutor implements ReviewExecutorLike {
       this.logger.debug({ stderr: stderrBuffer.trim() }, 'Review CLI stderr output');
     }
 
-    // 7. Read the agent-written candidate sidecar; validate findings, stamping
-    //    the authoritative round (tolerates a looser candidate verdict/round).
+    // 7. Read the agent-written candidate sidecar. `null` = no proof of review
+    //    (missing / unreadable / invalid) — a no-verdict round; `[]` = a genuine
+    //    "reviewed, zero findings" (#1155, FR-002).
     const findings = await readCandidateFindings(checkoutPath, workflowId, round);
 
-    // 8. Compute the verdict from the findings — ignore any agent claim (FR-007).
+    // 8. Post-exit gate (#1155, FR-001/FR-002). A non-zero exit is a phase
+    //    failure regardless of candidate; a missing/invalid candidate is a
+    //    no-verdict round even on exit 0 (Q1-A). In either case persist NOTHING
+    //    (Q3-A): any prior-round engine artifact — incl. `round` and
+    //    `remediationCount` — is left exactly as-is, so `round` does not advance
+    //    and repeated failures cannot burn the #1128 remediate cap.
+    if (exitCode !== 0 || findings === null) {
+      this.logger.warn(
+        { exitCode, round, hasCandidate: findings !== null, workflowId },
+        'Review phase failed — no fresh verdict; persisting nothing',
+      );
+      return {
+        phase: 'review',
+        success: false,
+        exitCode: exitCode ?? -1,
+        durationMs: Date.now() - startedAt,
+        output: outputCapture.getOutput(),
+      };
+    }
+
+    // 9. Success: exit 0 AND a fresh candidate this round (possibly `[]`).
+    //    Compute the verdict from the findings — ignore any agent claim (FR-007).
     const verdict = computeVerdict(findings, blockingSeverity);
 
-    // 9. Stamp the commit reviewed.
+    // 10. Stamp the commit reviewed.
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 
-    // 10. Persist the engine-authoritative artifact atomically. Carry forward
-    //     #1128's `remediationCount` — the review executor rewrites the artifact
-    //     each round, and dropping the field here would silently reset the
-    //     review↔remediate cap on every re-review pass.
+    // 11. Persist the engine-authoritative artifact atomically (round advances).
+    //     Carry forward #1128's `remediationCount` — dropping it here would
+    //     silently reset the review↔remediate cap on every re-review pass.
     await writeReviewArtifact(checkoutPath, workflowId, {
       findings,
       verdict,
@@ -249,13 +278,14 @@ export class ReviewExecutor implements ReviewExecutorLike {
       remediationCount: priorRound?.remediationCount ?? 0,
     });
 
+    // 12. Clear the candidate so it cannot be re-ingested on a later round.
+    await clearReviewCandidate(checkoutPath, workflowId);
+
     this.logger.info(
       { verdict, round, findingCount: findings.length, exitCode, lastReviewedCommitSha },
       'Review phase complete — verdict computed by engine',
     );
 
-    // 11. The review phase itself always succeeds (the verdict drives the
-    //     downstream remediate seam, not the phase's success flag).
     return {
       phase: 'review',
       success: true,
