@@ -336,24 +336,29 @@ describe('US2 (#1127) — changes-required → remediate → re-review, real lif
       github,
       owner: 'test',
       repo: 'repo',
-      prNumber: 42,
+      getPrNumber: () => 42,
       logger: mockLogger,
     });
 
     // Round 1 → changes-required (one blocking finding); round 2+ → clean.
-    // The trigger reads the last-observed verdict, exactly like production.
+    // The round is now authoritative from the sidecar (FR-005), so the reader
+    // tracks its own monotonic round exactly as the persisted artifact would.
+    let callRound = 0;
     let lastVerdict: ReviewVerdict | null = null;
-    deps.readFindingsArtifact = vi.fn(async (_ctx, round: number): Promise<FindingsArtifact> => {
-      const artifact: FindingsArtifact =
-        round === 1
-          ? {
-              verdict: 'changes-required',
-              findings: [{ marker: 'f-block-1', text: 'must fix', severity: 'blocking' }],
-            }
-          : { verdict: 'clean', findings: [] };
-      lastVerdict = artifact.verdict;
-      return artifact;
-    });
+    deps.readFindingsArtifact = vi.fn(
+      async (_ctx): Promise<{ artifact: FindingsArtifact; round: number } | null> => {
+        callRound += 1;
+        const artifact: FindingsArtifact =
+          callRound === 1
+            ? {
+                verdict: 'changes-required',
+                findings: [{ marker: 'f-block-1', text: 'must fix', severity: 'blocking' }],
+              }
+            : { verdict: 'clean', findings: [] };
+        lastVerdict = artifact.verdict;
+        return { artifact, round: callRound };
+      },
+    );
     deps.remediateTrigger = () => lastVerdict === 'changes-required';
   });
 
@@ -532,18 +537,21 @@ describe('US4 (#1127) — finding-identity ⇄ marker ⇄ status correlation', (
       github,
       owner: 'test',
       repo: 'repo',
-      prNumber: 42,
+      getPrNumber: () => 42,
       logger: mockLogger,
     });
 
     // Round 1 raises `f-block-1` (blocking, anchored); round 2 re-emits the SAME
-    // marker as resolved. The trigger reads the last-observed verdict, exactly
-    // like production's `readReviewArtifactSync`.
+    // marker as resolved. The round is authoritative from the sidecar (FR-005),
+    // so the reader tracks its own monotonic round like the persisted artifact.
+    let callRound = 0;
     let lastVerdict: ReviewVerdict | null = null;
-    deps.readFindingsArtifact = vi.fn(async (_ctx, round: number): Promise<FindingsArtifact> => {
-      const artifact: FindingsArtifact =
-        round === 1
-          ? {
+    deps.readFindingsArtifact = vi.fn(
+      async (_ctx): Promise<{ artifact: FindingsArtifact; round: number } | null> => {
+        callRound += 1;
+        const artifact: FindingsArtifact =
+          callRound === 1
+            ? {
               verdict: 'changes-required',
               findings: [
                 {
@@ -566,9 +574,10 @@ describe('US4 (#1127) — finding-identity ⇄ marker ⇄ status correlation', (
                 },
               ],
             };
-      lastVerdict = artifact.verdict;
-      return artifact;
-    });
+        lastVerdict = artifact.verdict;
+        return { artifact, round: callRound };
+      },
+    );
     deps.remediateTrigger = () => lastVerdict === 'changes-required';
   });
 

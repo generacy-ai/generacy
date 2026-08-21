@@ -417,6 +417,7 @@ export function createBugfixDeps(options: BugfixDepsOptions = {}): BugfixDeps {
 
   // Round-steered verdict for the review phase (US1 clean happy path by default).
   let lastVerdict: ReviewVerdict | null = null;
+  let callRound = 0;
   const verdictByRound =
     options.verdictByRound ??
     ((): FindingsArtifact => ({
@@ -472,13 +473,14 @@ export function createBugfixDeps(options: BugfixDepsOptions = {}): BugfixDeps {
       github: posterGithub,
       owner: 'test',
       repo: 'repo',
-      prNumber: 42,
+      getPrNumber: () => 42,
       logger: mockLogger,
     }),
-    readFindingsArtifact: vi.fn(async (_ctx: WorkerContext, round: number) => {
-      const artifact = verdictByRound(round);
+    readFindingsArtifact: vi.fn(async (_ctx: WorkerContext) => {
+      callRound += 1;
+      const artifact = verdictByRound(callRound);
       lastVerdict = artifact.verdict;
-      return artifact;
+      return { artifact, round: callRound };
     }),
     remediateTrigger: () => lastVerdict === 'changes-required',
   };

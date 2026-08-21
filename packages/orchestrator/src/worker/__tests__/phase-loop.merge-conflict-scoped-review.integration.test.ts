@@ -91,7 +91,7 @@ function createMockDeps(github: GitHubClient): PhaseLoopDeps {
       github,
       owner: 'test',
       repo: 'repo',
-      prNumber: 42,
+      getPrNumber: () => 42,
       logger: mockLogger,
     }),
   };
@@ -165,7 +165,7 @@ describe('#1131 T015 — merge-conflict re-arm → scoped review → validate (S
     it(`starts at review and lands in validate on a clean verdict (${workflow})`, async () => {
       const github = createGithubSpy();
       const deps = createMockDeps(github);
-      deps.readFindingsArtifact = vi.fn().mockResolvedValue(cleanArtifact());
+      deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
       const context = createResumedContext(workflow, { baseSha: 'base123', headSha: 'head456' });
       const config = createConfig();
       const sequence = getPhaseSequence(workflow, true) as WorkflowPhase[];
@@ -188,7 +188,7 @@ describe('#1131 T015 — merge-conflict re-arm → scoped review → validate (S
   it('does not bypass validate: markReadyForReview fires but the loop still runs validate (SC-004)', async () => {
     const github = createGithubSpy();
     const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(cleanArtifact());
+    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
     const context = createResumedContext('speckit-feature', { baseSha: 'base123', headSha: 'head456' });
     const config = createConfig();
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];

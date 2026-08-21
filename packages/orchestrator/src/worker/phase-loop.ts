@@ -158,11 +158,15 @@ export interface PhaseLoopDeps {
    */
   reviewPoster?: ReviewPoster;
   /**
-   * #1125: injectable seam to read the review executor's findings artifact for
-   * a given round. Defaults undefined → the review side-effect block never runs
-   * → production-inert until #1124 lands the real executor + reader.
+   * #1125/#1156: injectable seam to read the review executor's findings artifact.
+   * Returns the bridged artifact paired with the sidecar-derived `round` (FR-005
+   * — `round` is now an OUTPUT, not an input parameter; the loop-local counter
+   * resets each run and would dedupe-skip re-review after a pause). Defaults
+   * undefined → the review side-effect block never runs → production-inert.
    */
-  readFindingsArtifact?: (context: WorkerContext, round: number) => Promise<FindingsArtifact | null>;
+  readFindingsArtifact?: (
+    context: WorkerContext,
+  ) => Promise<{ artifact: FindingsArtifact; round: number } | null>;
   /**
    * #1124: Real review-phase executor. When injected, the `review` branch runs
    * it (spawns the CLI with an in-process charter, writes a findings sidecar,
@@ -323,11 +327,6 @@ export class PhaseLoop {
     let currentProvider: string | undefined;
     let currentModel: string | undefined;
     let implementRetryCount = 0;
-
-    // #1125: current review round. Starts at 1; incremented on each
-    // remediate→review backtrack so re-review rounds (≥ 2) resolve prior
-    // threads and dedupe by the round body marker.
-    let reviewRound = 1;
 
     // #1129: block-local one-shot control for a validate-origin remediation.
     // When a failing `validate` routes into the review→remediate loop, it
@@ -1040,6 +1039,10 @@ export class PhaseLoop {
               // `on-remediation-limit` cap still bounds the loop (a validate
               // failure must not silently reset the budget).
               remediationCount: prior?.remediationCount ?? 0,
+              // #1156: carry the cross-run ready flag forward across the
+              // validate-routing re-synthesis (D-7 — same reasoning as the
+              // review executor's per-round rewrite).
+              markedReadyByEngine: prior?.markedReadyByEngine ?? false,
             });
 
             // resolveBaseBranch returns `origin/<name>`; strip prefix to match
@@ -1583,21 +1586,24 @@ export class PhaseLoop {
       // Clear output buffer for next phase
       outputCapture.clear();
 
-      // #1125: review side effects. Only runs when the injectable seam is wired
-      // (production-inert until #1124). Reads the findings artifact for this
-      // round, posts one COMMENT review, resolves prior threads on re-review,
-      // and marks the PR ready when the verdict is clean (before validate by
-      // linear order). All best-effort — the poster/PR calls never throw.
+      // #1125: review side effects. Only runs when the injectable seam is wired.
+      // #1156 (FR-005): the round is read from the sidecar (authoritative,
+      // monotonic across pause/re-entry), NOT the loop-local `reviewRound` which
+      // resets each run and would defeat the re-review dedupe + `round >= 2`
+      // thread-resolution gate. Posts one COMMENT review, resolves prior threads
+      // on re-review, and marks the PR ready when the verdict is clean (before
+      // validate by linear order). All best-effort — poster/PR calls never throw.
       if (
         phase === 'review'
         && result.success
         && deps.readFindingsArtifact
         && deps.reviewPoster
       ) {
-        const artifact = await deps.readFindingsArtifact(context, reviewRound);
-        if (artifact) {
-          await deps.reviewPoster.postRound(artifact, reviewRound);
-          if (reviewRound >= 2) {
+        const read = await deps.readFindingsArtifact(context);
+        if (read) {
+          const { artifact, round } = read;
+          await deps.reviewPoster.postRound(artifact, round);
+          if (round >= 2) {
             await deps.reviewPoster.resolveResolvedThreads(artifact);
           }
           if (artifact.verdict === 'clean') {
@@ -1674,7 +1680,6 @@ export class PhaseLoop {
         await labelManager.onPhaseComplete('remediate');
         results.push(remediateResult);
         outputCapture.clear();
-        reviewRound++; // #1125: next review pass is a re-review round
         i--; // Re-enter the review phase
         continue;
       }

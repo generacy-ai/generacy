@@ -238,15 +238,17 @@ export class ReviewExecutor implements ReviewExecutorLike {
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 
     // 10. Persist the engine-authoritative artifact atomically. Carry forward
-    //     #1128's `remediationCount` — the review executor rewrites the artifact
-    //     each round, and dropping the field here would silently reset the
-    //     review↔remediate cap on every re-review pass.
+    //     #1128's `remediationCount` and #1156's `markedReadyByEngine` — the
+    //     review executor rewrites the artifact each round, and dropping either
+    //     field here would silently reset the review↔remediate cap / the
+    //     cross-run ready flag on every re-review pass.
     await writeReviewArtifact(checkoutPath, workflowId, {
       findings,
       verdict,
       round,
       lastReviewedCommitSha,
       remediationCount: priorRound?.remediationCount ?? 0,
+      markedReadyByEngine: priorRound?.markedReadyByEngine ?? false,
     });
 
     this.logger.info(

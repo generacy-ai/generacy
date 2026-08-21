@@ -4,6 +4,7 @@ import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js';
 
 /**
  * Internal discriminated union returned by `commitAndPush`. Loosely mirrors
@@ -52,6 +53,12 @@ export class PrManager {
      * path) keep passing — the default helper falls back to the process cwd.
      */
     private readonly checkoutPath?: string,
+    /**
+     * #1156 FR-006: workflowId for the review sidecar so `markedReadyByEngine`
+     * can be persisted / reconstructed across runs. Optional — best-effort
+     * persistence is skipped when either this or `checkoutPath` is absent.
+     */
+    private readonly workflowId?: string,
   ) {}
 
   /**
@@ -442,6 +449,12 @@ export class PrManager {
       // remediate entry can convert it back to draft (and never touch a PR a
       // human marked ready).
       this.markedReadyByEngine = true;
+      // #1156 FR-006: also persist to the sidecar so a re-entry in a NEW run
+      // (fresh process → in-memory flag reset) can still reconstruct it.
+      // Best-effort — skipped when either path component is absent.
+      if (this.checkoutPath && this.workflowId) {
+        await setMarkedReadyByEngine(this.checkoutPath, this.workflowId, true);
+      }
       this.logger.info(
         { prNumber: this.prNumber, prUrl: this.prUrl },
         'Marked PR as ready for review',
@@ -470,7 +483,17 @@ export class PrManager {
    * no-op until the engine marks ready again (FR-008).
    */
   async convertToDraftIfEngineMarkedReady(linkedPRs?: LinkedPR[]): Promise<void> {
-    if (!this.markedReadyByEngine) {
+    // #1156 FR-006: when the in-memory flag is false (e.g. a fresh process on a
+    // cross-run re-entry) reconstruct it from the sidecar. Only the engine's own
+    // `markReadyForReview` ever writes the flag `true`, so this can never demote
+    // a PR a human marked ready (FR-007).
+    let engineMarkedReady = this.markedReadyByEngine;
+    if (!engineMarkedReady && this.checkoutPath && this.workflowId) {
+      const artifact = await readReviewArtifact(this.checkoutPath, this.workflowId);
+      engineMarkedReady = artifact?.markedReadyByEngine ?? false;
+    }
+
+    if (!engineMarkedReady) {
       this.logger.debug('Engine did not mark this PR ready — skipping convert-to-draft');
       return;
     }
@@ -482,6 +505,11 @@ export class PrManager {
     try {
       await this.github.convertPullRequestToDraft(this.owner, this.repo, this.prNumber);
       this.markedReadyByEngine = false;
+      // #1156 FR-006: clear the persisted flag too so a later remediate entry is
+      // a no-op until the engine marks ready again.
+      if (this.checkoutPath && this.workflowId) {
+        await setMarkedReadyByEngine(this.checkoutPath, this.workflowId, false);
+      }
       this.logger.info(
         { prNumber: this.prNumber, prUrl: this.prUrl },
         'Converted PR back to draft for remediation',

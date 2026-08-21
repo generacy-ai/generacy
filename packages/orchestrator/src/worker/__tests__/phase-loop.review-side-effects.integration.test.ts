@@ -120,7 +120,7 @@ describe('#1125 review side effects through the phase loop', () => {
   it('SC-002: clean verdict posts one review and marks the PR ready before validate', async () => {
     const reviewPoster = makeReviewPoster();
     deps.reviewPoster = reviewPoster as never;
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(CLEAN);
+    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: CLEAN, round: 1 });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     const result = await phaseLoop.executeLoop(createMockContext(), createConfig(), deps, sequence);
@@ -141,7 +141,7 @@ describe('#1125 review side effects through the phase loop', () => {
   it('does not mark ready when the verdict is changes-required', async () => {
     const reviewPoster = makeReviewPoster();
     deps.reviewPoster = reviewPoster as never;
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(CHANGES);
+    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: CHANGES, round: 1 });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     await phaseLoop.executeLoop(createMockContext(), createConfig(), deps, sequence);
@@ -161,7 +161,13 @@ describe('#1125 review side effects through the phase loop', () => {
       fired = true;
       return true;
     };
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(CHANGES);
+    // #1156 FR-005: round is authoritative from the sidecar. Round 1 on the first
+    // review pass, round 2 after the remediate backtrack — so the re-review both
+    // escapes the dedupe skip and satisfies the `round >= 2` thread-resolution gate.
+    deps.readFindingsArtifact = vi
+      .fn()
+      .mockResolvedValueOnce({ artifact: CHANGES, round: 1 })
+      .mockResolvedValueOnce({ artifact: CHANGES, round: 2 });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     const result = await phaseLoop.executeLoop(createMockContext(), createConfig(), deps, sequence);

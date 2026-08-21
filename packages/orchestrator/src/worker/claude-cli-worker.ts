@@ -11,7 +11,11 @@ import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEven
 import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
-import { applyRepoValidateOverrides, applyRepoAgentOverrides } from './config.js';
+import {
+  applyRepoValidateOverrides,
+  applyRepoAgentOverrides,
+  resolveWorkflowOverrides,
+} from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
 import { LabelManager } from './label-manager.js';
 import { StageCommentManager } from './stage-comment-manager.js';
@@ -24,7 +28,12 @@ import { PhaseLoop } from './phase-loop.js';
 import { RemediateExecutor } from './remediate-executor.js';
 import { ReviewExecutor } from './review-executor.js';
 import { SeedAwareReviewExecutor } from './seed-aware-review-executor.js';
-import { readReviewArtifactSync, clearReviewArtifact } from './review-artifact.js';
+import {
+  readReviewArtifactSync,
+  readReviewArtifact,
+  clearReviewArtifact,
+} from './review-artifact.js';
+import { bridgeReviewArtifact } from './review-findings-bridge.js';
 import { parseExternalFeedback } from './pr-feedback-parser.js';
 import { writeExternalFeedbackSeed } from './external-feedback-seed.js';
 import { resolveExternalFeedbackThreads } from './external-feedback-resolver.js';
@@ -737,18 +746,18 @@ export class ClaudeCliWorker {
         item.issueNumber,
         workerLogger,
         checkoutPath, // #1051 FR-002: cwd for the pre-push guard's git ls-remote
+        workflowId, // #1156 FR-006: sidecar key for the cross-run markedReadyByEngine flag
       );
 
-      // #1125: ReviewPoster is wired into the phase loop but stays production-inert
-      // until #1124 lands the findings-artifact reader (PhaseLoopDeps.readFindingsArtifact,
-      // left undefined here). The review side-effect block only fires when BOTH the
-      // reader and this poster are present, so postRound never runs today. #1124 will
-      // supply the reader and resolve the live PR number at that point.
+      // #1125/#1156: ReviewPoster posts the engine review + resolves threads.
+      // #1156 FR-004: the PR number is resolved live per call via a getter — the
+      // PR often does not exist at construction time, so capturing it once here
+      // (the pre-#1156 `prNumber: getPrNumber() ?? 0`) posted early rounds to PR #0.
       const reviewPoster = new ReviewPoster({
         github,
         owner: item.owner,
         repo: item.repo,
-        prNumber: prManager.getPrNumber() ?? 0,
+        getPrNumber: () => prManager.getPrNumber(),
         logger: workerLogger,
       });
 
@@ -862,6 +871,28 @@ export class ClaudeCliWorker {
             ctx.checkoutPath,
             `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
           )?.verdict === 'changes-required',
+        // #1156 FR-001/002/003/005: the findings reader the #1125 review side-effect
+        // block depends on (left undefined before #1156, permanently disabling the
+        // block). Reads the engine-written sidecar, bridges it to the poster's
+        // FindingsArtifact shape (severity mapped via the resolved blockingSeverity —
+        // single source of truth with computeVerdict), and returns the sidecar's
+        // authoritative round alongside it.
+        readFindingsArtifact: async (ctx) => {
+          const artifact = await readReviewArtifact(
+            ctx.checkoutPath,
+            `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
+          );
+          if (!artifact) return null;
+          const { blockingSeverity } = resolveWorkflowOverrides(
+            effectiveConfig,
+            orchSettings,
+            ctx.item.workflowName,
+          ).review;
+          return {
+            artifact: bridgeReviewArtifact(artifact, blockingSeverity),
+            round: artifact.round,
+          };
+        },
         validateFixHandler,
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
         ...(this.phaseTracker ? { phaseTracker: this.phaseTracker } : {}),

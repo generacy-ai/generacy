@@ -52,6 +52,12 @@ export const ReviewArtifactSchema = z.object({
   // #1126). `.default(0)` is load-bearing — #1124 artifacts written before this
   // deploy lack the field and must still parse rather than returning `null`.
   remediationCount: z.number().int().nonnegative().default(0),
+  // #1156: cross-run engine-marked-ready flag (FR-006/FR-007). Persisted so a
+  // later re-entry in a new run can convert a PR the engine marked ready back to
+  // draft. `.default(false)` is load-bearing — pre-#1156 artifacts lack the field
+  // and must still parse. Only ever written `true` by the engine's own
+  // `markReadyForReview`, so reconstruction can never demote a human-ready PR.
+  markedReadyByEngine: z.boolean().default(false),
 });
 
 export type ReviewArtifact = z.infer<typeof ReviewArtifactSchema>;
@@ -131,6 +137,27 @@ export async function resetRemediationCount(
   await writeReviewArtifact(checkoutPath, workflowId, {
     ...artifact,
     remediationCount: 0,
+  });
+}
+
+/**
+ * #1156: read → set → atomic write of `markedReadyByEngine` (FR-006). Null-safe
+ * no-op when the artifact is missing/invalid (D-6). Leaves every other field
+ * untouched. Called best-effort by `PrManager` on mark-ready / convert-to-draft
+ * so cross-run lifecycle state survives a fresh process.
+ */
+export async function setMarkedReadyByEngine(
+  checkoutPath: string,
+  workflowId: string,
+  value: boolean,
+): Promise<void> {
+  const artifact = await readReviewArtifact(checkoutPath, workflowId);
+  if (!artifact) {
+    return;
+  }
+  await writeReviewArtifact(checkoutPath, workflowId, {
+    ...artifact,
+    markedReadyByEngine: value,
   });
 }
 
@@ -269,7 +296,7 @@ export async function readCandidateFindings(
   }));
 }
 
-const SEVERITY_RANK: Record<Severity, number> = { critical: 3, major: 2, minor: 1 };
+export const SEVERITY_RANK: Record<Severity, number> = { critical: 3, major: 2, minor: 1 };
 
 /**
  * Compute the engine-internal verdict (FR-007). Returns `changes-required` iff

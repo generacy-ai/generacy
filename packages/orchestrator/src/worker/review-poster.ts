@@ -195,7 +195,9 @@ export interface ReviewPosterDeps {
   github: GitHubClient;
   owner: string;
   repo: string;
-  prNumber: number;
+  // #1156 (FR-004, D-4): resolved live per call. The PR often does not exist at
+  // construction time, so capturing a number once posted early rounds to PR #0.
+  getPrNumber: () => number | undefined;
   logger: Logger;
 }
 
@@ -203,14 +205,14 @@ export class ReviewPoster {
   private readonly github: GitHubClient;
   private readonly owner: string;
   private readonly repo: string;
-  private readonly prNumber: number;
+  private readonly getPrNumber: () => number | undefined;
   private readonly logger: Logger;
 
   constructor(deps: ReviewPosterDeps) {
     this.github = deps.github;
     this.owner = deps.owner;
     this.repo = deps.repo;
-    this.prNumber = deps.prNumber;
+    this.getPrNumber = deps.getPrNumber;
     this.logger = deps.logger;
   }
 
@@ -222,19 +224,27 @@ export class ReviewPoster {
    * swallowed — the review post must never fail the workflow (FR-008).
    */
   async postRound(artifact: FindingsArtifact, round: number): Promise<void> {
+    const prNumber = this.getPrNumber();
+    if (prNumber === undefined) {
+      this.logger.debug(
+        { owner: this.owner, repo: this.repo },
+        'ReviewPoster: no PR yet, skipping',
+      );
+      return;
+    }
     try {
       // FR-010: skip if this round's review body marker already exists.
-      const existing = await this.github.listReviews(this.owner, this.repo, this.prNumber);
+      const existing = await this.github.listReviews(this.owner, this.repo, prNumber);
       if (isRoundAlreadyPosted(existing, round)) {
         this.logger.debug(
-          { owner: this.owner, repo: this.repo, prNumber: this.prNumber, round },
+          { owner: this.owner, repo: this.repo, prNumber, round },
           'Review round already posted — skipping (FR-010 dedupe)',
         );
         return;
       }
 
       // FR-002a: only diffable anchors can be inline; everything else → body.
-      const files = await this.github.listPullRequestFiles(this.owner, this.repo, this.prNumber);
+      const files = await this.github.listPullRequestFiles(this.owner, this.repo, prNumber);
       const diffable = computeDiffableLines(files);
       const { inline, body } = partitionFindings(artifact.findings, diffable);
 
@@ -244,12 +254,12 @@ export class ReviewPoster {
         comments: inline.map(buildInlineComment),
       };
 
-      await this.github.createReview(this.owner, this.repo, this.prNumber, input);
+      await this.github.createReview(this.owner, this.repo, prNumber, input);
       this.logger.info(
         {
           owner: this.owner,
           repo: this.repo,
-          prNumber: this.prNumber,
+          prNumber,
           round,
           inline: inline.length,
           body: body.length,
@@ -258,7 +268,7 @@ export class ReviewPoster {
       );
     } catch (error) {
       this.logger.warn(
-        { owner: this.owner, repo: this.repo, prNumber: this.prNumber, round, error: String(error) },
+        { owner: this.owner, repo: this.repo, prNumber, round, error: String(error) },
         'Failed to post engine review round (non-fatal)',
       );
     }
@@ -271,15 +281,24 @@ export class ReviewPoster {
    * does not block the others or the workflow (FR-008 / US4 AC3).
    */
   async resolveResolvedThreads(artifact: FindingsArtifact): Promise<void> {
+    const prNumber = this.getPrNumber();
+    if (prNumber === undefined) {
+      this.logger.debug(
+        { owner: this.owner, repo: this.repo },
+        'ReviewPoster: no PR yet, skipping',
+      );
+      return;
+    }
+
     const resolvedFindings = artifact.findings.filter((f) => f.resolved === true);
     if (resolvedFindings.length === 0) return;
 
     let threads;
     try {
-      threads = await this.github.getPRReviewThreads(this.owner, this.repo, this.prNumber);
+      threads = await this.github.getPRReviewThreads(this.owner, this.repo, prNumber);
     } catch (error) {
       this.logger.warn(
-        { owner: this.owner, repo: this.repo, prNumber: this.prNumber, error: String(error) },
+        { owner: this.owner, repo: this.repo, prNumber, error: String(error) },
         'Failed to fetch review threads for resolution (non-fatal)',
       );
       return;
@@ -293,7 +312,7 @@ export class ReviewPoster {
       try {
         await this.github.resolveReviewThread(thread.id);
         this.logger.info(
-          { owner: this.owner, repo: this.repo, prNumber: this.prNumber, marker: finding.marker },
+          { owner: this.owner, repo: this.repo, prNumber, marker: finding.marker },
           'Resolved review thread for addressed finding',
         );
       } catch (error) {
@@ -301,7 +320,7 @@ export class ReviewPoster {
           {
             owner: this.owner,
             repo: this.repo,
-            prNumber: this.prNumber,
+            prNumber,
             marker: finding.marker,
             error: String(error),
           },
