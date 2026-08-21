@@ -25,7 +25,7 @@ no cross-package public API change (plan Technical Context).
 
 <!-- Smallest, self-contained production change; nothing depends on it. Do first. -->
 
-- [ ] T001 [US4] In `packages/orchestrator/src/worker/types.ts` `getPhaseSequence(workflowName, reviewPhaseEnabled = false)`:
+- [X] T001 [US4] In `packages/orchestrator/src/worker/types.ts` `getPhaseSequence(workflowName, reviewPhaseEnabled = false)`:
   when `WORKFLOW_PHASE_SEQUENCES[workflowName] === undefined` (unknown/custom workflow),
   always return `PHASE_SEQUENCE` with `review` filtered out, regardless of `reviewPhaseEnabled`.
   Known workflows keep the existing flag-conditional behavior
@@ -33,7 +33,7 @@ no cross-package public API change (plan Technical Context).
   function pure and side-effect-free. Ref: `contracts/get-phase-sequence.md`,
   `data-model.md` E1 truth table.
 
-- [ ] T002 [US4] Add/extend `packages/orchestrator/src/worker/__tests__/get-phase-sequence.test.ts`
+- [X] T002 [US4] Add/extend `packages/orchestrator/src/worker/__tests__/get-phase-sequence.test.ts`
   asserting the truth table (FR-008): unknown workflow + `reviewPhaseEnabled=true` ⇒ excludes `review`;
   unknown + `false` ⇒ excludes `review`; `speckit-feature` + `true` ⇒ includes `review` (regression guard);
   `speckit-feature` + `false` ⇒ excludes `review` (regression guard); `speckit-epic` (any flag) ⇒ never
@@ -45,14 +45,14 @@ no cross-package public API change (plan Technical Context).
 
 <!-- Largest change. Sequential within the phase (same file, shared helper). -->
 
-- [ ] T003 [US1] In `packages/orchestrator/src/worker/phase-loop.ts` (`executeLoopInner`),
+- [X] T003 [US1] In `packages/orchestrator/src/worker/phase-loop.ts` (`executeLoopInner`),
   factor the flag-ON `changes-required` review-artifact synthesis (currently inline at `:1038-1075`)
   into a shared private helper (one `critical` open `ReviewFinding` citing `effectiveValidateCommand`
   with fenced/bounded validate stdout+stderr, carrying `remediationCount` and `markedReadyByEngine`
   forward). Have the existing flag-ON block call the helper (no behavior change). Ref:
   `contracts/flag-off-validate-fix.md` step 2, `data-model.md` E2.
 
-- [ ] T004 [US1] In `packages/orchestrator/src/worker/phase-loop.ts` (`executeLoopInner`),
+- [X] T004 [US1] In `packages/orchestrator/src/worker/phase-loop.ts` (`executeLoopInner`),
   add the block-local `flagOffValidateFixAttempted: boolean` (init `false`) and insert the flag-OFF
   fallback branch **after** the flag-ON validate-fix block (`:971-1090`) and **before** the escalation
   fall-through (`:1092`). Guard: `phase === 'validate' && config.reviewPhaseEnabled !== true &&
@@ -64,7 +64,7 @@ no cross-package public API change (plan Technical Context).
   and `continue`. Guard-fail falls through to the existing escalation unchanged. Ref:
   `contracts/flag-off-validate-fix.md` Guard/Steps/Invariants, `data-model.md` E3.
 
-- [ ] T005 [US1] Add `packages/orchestrator/src/worker/__tests__/phase-loop.flag-off-validate-fix.test.ts`
+- [X] T005 [US1] Add `packages/orchestrator/src/worker/__tests__/phase-loop.flag-off-validate-fix.test.ts`
   (FR-002): (a) flag OFF + validate fails once + remediate succeeds + validate re-run passes ⇒ loop
   completes, no `failed:validate`, exactly one `remediateExecutor.execute` call; (b) flag OFF + validate
   fails + remediate runs + validate fails again ⇒ exactly one `execute` call, then `failed:validate`;
@@ -78,7 +78,7 @@ no cross-package public API change (plan Technical Context).
 
 <!-- Test-only; no production change. Independent — can run parallel with Phase 4. -->
 
-- [ ] T006 [P] [US3] Add `packages/orchestrator/src/worker/__tests__/config.bugfix-ci-gate.test.ts`
+- [X] T006 [P] [US3] Add `packages/orchestrator/src/worker/__tests__/config.bugfix-ci-gate.test.ts`
   (FR-006): parse `WorkerConfigSchema` with `ciMergeGateEnabled: false` and again with `true` (otherwise
   default config) and assert the speckit-bugfix `implementation-review` gate — `false` ⇒
   `{ phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'on-request' }`;
@@ -93,7 +93,7 @@ no cross-package public API change (plan Technical Context).
 
 <!-- Doc edit + test-only behavior pin. Independent — can run parallel with Phase 3. -->
 
-- [ ] T007 [P] [US2] Correct `docs/docs/guides/generacy/review-remediate-migration.md:140`: scope the
+- [X] T007 [P] [US2] Correct `docs/docs/guides/generacy/review-remediate-migration.md:140`: scope the
   "retired/replaced" claim to the **epic review/remediate path** and affirm that
   `blocked:stuck-feedback-loop` retains its bounded-stop role on the **flag-OFF PR-feedback legacy path**
   (the monitor skips all `blocked:*`). Must carry both load-bearing facts: (1)
@@ -101,7 +101,7 @@ no cross-package public API change (plan Technical Context).
   active/load-bearing on the flag-OFF PR-feedback path. Doc-only, outside `packages/*/src/` (no
   changeset). Ref: `contracts/stuck-loop-doc-reconcile.md` Doc change.
 
-- [ ] T008 [P] [US2] Add/extend `packages/orchestrator/src/worker/__tests__/pr-feedback-stuck-loop.test.ts`
+- [X] T008 [P] [US2] Add/extend `packages/orchestrator/src/worker/__tests__/pr-feedback-stuck-loop.test.ts`
   (FR-003/FR-004): assert `blocked:stuck-feedback-loop` is still applied and bounds the loop on the
   legacy PR-feedback path (`pr-feedback-handler.ts:45`/`:632`, on `!cliSelfCommitted && (!success ||
   !hasChanges)`), so the #883 runaway stays bounded. No new behavior — pins the existing bounded-stop
@@ -113,13 +113,13 @@ no cross-package public API change (plan Technical Context).
 
 <!-- Phase boundary: land all code/doc/test changes before finalizing. -->
 
-- [ ] T009 [US1] Add `.changeset/1165-flag-matrix-guardrails.md` — `@generacy-ai/orchestrator` **patch**.
+- [X] T009 [US1] Add `.changeset/1165-flag-matrix-guardrails.md` — `@generacy-ai/orchestrator` **patch**.
   Corner 1 (`phase-loop.ts` + `types.ts`) is the only non-test production change under
   `packages/*/src/`; no new public exports; `workflow:speckit-bugfix` → `patch` per the CLAUDE.md
   changeset gate. Corner 2's doc edit and the Corner 2/3 test-only additions are exempt. Ref: plan.md
   Changeset, `research.md` Changeset sizing.
 
-- [ ] T010 [US4] Run the full four-corner suite and confirm green (SC-003/SC-004):
+- [X] T010 [US4] Run the full four-corner suite and confirm green (SC-003/SC-004):
   `pnpm --filter @generacy-ai/orchestrator test -- phase-loop.flag-off-validate-fix get-phase-sequence
   config.bugfix-ci-gate pr-feedback-stuck-loop`, plus existing flag-OFF regression tests remain green
   (FR-009 byte-identical guard). Verify the changeset gate is satisfied. Ref: `quickstart.md` Run the

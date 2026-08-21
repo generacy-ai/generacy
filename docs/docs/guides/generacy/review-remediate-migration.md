@@ -146,11 +146,13 @@ findings as an issue comment.
   the remediation counter to `0` and clears the label so the gate re-arms.
 
 `waiting-for:remediation-limit` is the resumable, flag-ON equivalent of the
-legacy `blocked:stuck-feedback-loop` bounded stop. That legacy label is **not
-retired** — it is still live on the default flag-OFF path (when the review phase
-is disabled), where it applies the pre-epic bounded stop. With the review phase
-enabled, the engine pauses on the resumable `waiting-for:remediation-limit`
-instead of a terminal block.
+legacy `blocked:stuck-feedback-loop` bounded stop — it supersedes that terminal
+dead-end, which stranded a run permanently with no resume path. That legacy label
+is **not retired** — it is still live on the default flag-OFF path (when the
+review phase is disabled), where it remains the only bounded stop for the #883
+PR-feedback runaway, since the PR-feedback monitor skips all `blocked:*` labels.
+With the review phase enabled, the engine pauses on the resumable
+`waiting-for:remediation-limit` instead of a terminal block.
 
 ### `implementation-review` (relocated)
 
