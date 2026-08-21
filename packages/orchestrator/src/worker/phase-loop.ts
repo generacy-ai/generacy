@@ -658,11 +658,20 @@ export class PhaseLoop {
             hasBaseMergedThisCycle = true;
           }
 
-          // Pre-validate: install dependencies if configured
-          if (config.preValidateCommand) {
+          // Pre-validate: install dependencies if configured.
+          // #1160 (FR-003/FR-004): resolve per-workflow so a
+          // `workflows.<name>.preValidateCommand` override reaches the install
+          // step. `??` preserves an explicit `""` (skip) vs unset (cluster default);
+          // the `if (cmd)` truthiness guard below already skips on empty-string.
+          const effectivePreValidateCommand = resolveWorkflowOverrides(
+            config,
+            deps.settings ?? null,
+            context.item.workflowName,
+          ).preValidateCommand;
+          if (effectivePreValidateCommand) {
             const installResult = await cliSpawner.runPreValidateInstall(
               context.checkoutPath,
-              config.preValidateCommand,
+              effectivePreValidateCommand,
               context.signal,
             );
             if (!installResult.success) {
@@ -672,7 +681,7 @@ export class PhaseLoop {
               );
               results.push(installResult);
               const evidence = this.buildErrorEvidence(
-                config.preValidateCommand,
+                effectivePreValidateCommand,
                 installResult,
                 DEFAULT_INSTALL_TIMEOUT_MS,
                 undefined,
@@ -693,7 +702,16 @@ export class PhaseLoop {
           // #1134 (US2): for speckit-bugfix, classify the diff and narrow the
           // built-in default validate command to a pnpm workspace-filter form.
           // Every other workflow reaches the plain default unchanged (SC-005).
-          let effectiveValidateCommand = config.validateCommand;
+          // #1160 (FR-001/FR-002): seed from the per-workflow resolution so a
+          // `workflows.<name>.validateCommand` override reaches the spawn. The
+          // speckit-bugfix branch below overwrites this with the targeted-validate
+          // decision, which itself resolves per-workflow — so FR-002 (targeted
+          // narrowing composing over the resolved base) holds by construction.
+          let effectiveValidateCommand = resolveWorkflowOverrides(
+            config,
+            deps.settings ?? null,
+            context.item.workflowName,
+          ).validateCommand;
           let targetedValidate: TargetedValidateDecision | undefined;
           if (context.item.workflowName === 'speckit-bugfix') {
             targetedValidate = await this.resolveTargetedValidate(
@@ -1324,17 +1342,24 @@ export class PhaseLoop {
           });
         }
 
+        // #1160 (FR-006): resolve per-workflow so a
+        // `workflows.<name>.ciWaitTimeoutMs` override reaches the wait budget.
+        const effectiveCiWaitTimeoutMs = resolveWorkflowOverrides(
+          config,
+          deps.settings ?? null,
+          context.item.workflowName,
+        ).ciWaitTimeoutMs;
         const outcome = await waitForCiGreen({
           github: context.github,
           owner: context.item.owner,
           repo: context.item.repo,
           headSha,
           branch: context.branch ?? '',
-          ciWaitTimeoutMs: config.ciWaitTimeoutMs,
+          ciWaitTimeoutMs: effectiveCiWaitTimeoutMs,
           logger: this.logger,
         });
         this.logger.info(
-          { phase, outcome: outcome.kind, ciWaitTimeoutMs: config.ciWaitTimeoutMs },
+          { phase, outcome: outcome.kind, ciWaitTimeoutMs: effectiveCiWaitTimeoutMs },
           '#1133: CI merge-readiness wait resolved',
         );
         if (outcome.kind === 'timeout') {

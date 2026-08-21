@@ -23,7 +23,7 @@ import type { RemediateIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { WorkerConfig } from './config.js';
 import {
-  resolveAgentForPhase,
+  resolveReviewLikeAgent,
   resolvePhaseTimeoutMs,
   resolveWorkflowOverrides,
 } from './config.js';
@@ -90,12 +90,14 @@ export class RemediateExecutor {
       blockingSeverity,
     });
 
-    // 4. Resolve the agent for remediation — reuse the `implement` agent so the
-    //    same model that wrote the code fixes it (mirrors review, #814).
-    const { provider, model, effort } = resolveAgentForPhase(
+    // 4. Resolve the agent for remediation — prefer the `phases.remediate` tier and
+    //    fall back field-by-field to the `implement` agent so the same model that
+    //    wrote the code fixes it when unset (#1160 FR-005; the `review` tier is never
+    //    consulted, so a cheaper review model cannot downgrade remediation).
+    const { provider, model, effort } = resolveReviewLikeAgent(
       this.config,
       workflowName,
-      'implement',
+      'remediate',
     );
 
     warnIfEffortDropped(this.logger, {
