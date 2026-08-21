@@ -3,9 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clearReviewCandidate,
   computeVerdict,
   getReviewArtifactPath,
   getReviewArtifactRelPath,
+  getReviewCandidatePath,
+  getReviewCandidateRelPath,
+  readCandidateFindings,
   readReviewArtifact,
   readReviewArtifactSync,
   writeReviewArtifact,
@@ -91,6 +95,90 @@ describe('review-artifact I/O (SC-001)', () => {
   it('sanitizes the workflow id into the filename', () => {
     const abs = getReviewArtifactPath(checkoutPath, 'acme/widgets#42');
     expect(path.basename(abs)).toBe('review-findings-acme_widgets_42.json');
+  });
+});
+
+describe('review candidate sidecar (#1155, SC-002)', () => {
+  let checkoutPath: string;
+
+  beforeEach(async () => {
+    checkoutPath = await fs.mkdtemp(path.join(os.tmpdir(), 'review-candidate-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(checkoutPath, { recursive: true, force: true });
+  });
+
+  it('candidate path is sanitized and distinct from the engine artifact path', () => {
+    const candidateAbs = getReviewCandidatePath(checkoutPath, WORKFLOW_ID);
+    const candidateRel = getReviewCandidateRelPath(WORKFLOW_ID);
+    expect(path.resolve(checkoutPath, candidateRel)).toBe(candidateAbs);
+    expect(path.basename(candidateAbs)).toBe('review-candidate-acme_widgets_42.json');
+    // Structurally distinct from the engine-authoritative artifact.
+    expect(candidateAbs).not.toBe(getReviewArtifactPath(checkoutPath, WORKFLOW_ID));
+  });
+
+  it('clearReviewCandidate is idempotent — no throw on a missing file', async () => {
+    await expect(clearReviewCandidate(checkoutPath, WORKFLOW_ID)).resolves.toBeUndefined();
+
+    const filePath = getReviewCandidatePath(checkoutPath, WORKFLOW_ID);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify({ findings: [] }), 'utf-8');
+
+    await clearReviewCandidate(checkoutPath, WORKFLOW_ID);
+    await expect(fs.access(filePath)).rejects.toThrow();
+    // Second clear on the now-missing file is still a no-op.
+    await expect(clearReviewCandidate(checkoutPath, WORKFLOW_ID)).resolves.toBeUndefined();
+  });
+
+  async function writeCandidate(raw: unknown): Promise<void> {
+    const filePath = getReviewCandidatePath(checkoutPath, WORKFLOW_ID);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(raw), 'utf-8');
+  }
+
+  it('returns null for a missing candidate (no proof of review)', async () => {
+    expect(await readCandidateFindings(checkoutPath, WORKFLOW_ID, 1)).toBeNull();
+  });
+
+  it('returns null for invalid JSON (no proof of review)', async () => {
+    const filePath = getReviewCandidatePath(checkoutPath, WORKFLOW_ID);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, '{ not json', 'utf-8');
+    expect(await readCandidateFindings(checkoutPath, WORKFLOW_ID, 1)).toBeNull();
+  });
+
+  it('returns null for a schema-invalid candidate (no proof of review)', async () => {
+    await writeCandidate({ findings: [{ severity: 'nope', file: '', title: '', detail: '' }] });
+    expect(await readCandidateFindings(checkoutPath, WORKFLOW_ID, 1)).toBeNull();
+  });
+
+  it('does NOT read the engine artifact path — an engine artifact alone yields null', async () => {
+    // Prior-round engine artifact present, but no candidate written this round.
+    await writeReviewArtifact(checkoutPath, WORKFLOW_ID, {
+      findings: [finding()],
+      verdict: 'changes-required',
+      round: 1,
+      lastReviewedCommitSha: 'abc',
+      remediationCount: 0,
+    });
+    expect(await readCandidateFindings(checkoutPath, WORKFLOW_ID, 2)).toBeNull();
+  });
+
+  it('returns [] for a valid candidate with zero findings (genuine clean)', async () => {
+    await writeCandidate({ findings: [] });
+    expect(await readCandidateFindings(checkoutPath, WORKFLOW_ID, 1)).toEqual([]);
+  });
+
+  it('returns stamped findings for a populated candidate (round + status defaulted)', async () => {
+    await writeCandidate({
+      verdict: 'clean', // agent-claimed top-level — ignored
+      findings: [{ severity: 'major', file: 'src/x.ts', title: 'T', detail: 'D' }],
+    });
+    const result = await readCandidateFindings(checkoutPath, WORKFLOW_ID, 3);
+    expect(result).toEqual([
+      { severity: 'major', file: 'src/x.ts', title: 'T', detail: 'D', round: 3, status: 'open' },
+    ]);
   });
 });
 

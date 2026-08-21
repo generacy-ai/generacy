@@ -21,6 +21,7 @@ import { z } from 'zod';
 
 const DEFAULT_STATE_DIR = '.generacy';
 const REVIEW_ARTIFACT_FILE_PREFIX = 'review-findings-';
+const REVIEW_CANDIDATE_FILE_PREFIX = 'review-candidate-';
 const REVIEW_ARTIFACT_FILE_EXT = '.json';
 
 export type Severity = 'critical' | 'major' | 'minor';
@@ -72,6 +73,24 @@ export function getReviewArtifactRelPath(workflowId: string): string {
 /** Absolute sidecar path: `<checkoutPath>/.generacy/review-findings-<id>.json`. */
 export function getReviewArtifactPath(checkoutPath: string, workflowId: string): string {
   return path.join(checkoutPath, getReviewArtifactRelPath(workflowId));
+}
+
+/**
+ * Relative *candidate* path handed to the agent as its write target (#1155,
+ * FR-003). Distinct from the engine-authoritative artifact path so a missing
+ * candidate on any round is unambiguously "nothing written this round".
+ */
+export function getReviewCandidateRelPath(workflowId: string): string {
+  const safeId = sanitizeWorkflowId(workflowId);
+  return path.join(
+    DEFAULT_STATE_DIR,
+    `${REVIEW_CANDIDATE_FILE_PREFIX}${safeId}${REVIEW_ARTIFACT_FILE_EXT}`,
+  );
+}
+
+/** Absolute candidate path: `<checkoutPath>/.generacy/review-candidate-<id>.json`. */
+export function getReviewCandidatePath(checkoutPath: string, workflowId: string): string {
+  return path.join(checkoutPath, getReviewCandidateRelPath(workflowId));
 }
 
 /**
@@ -204,6 +223,21 @@ export async function clearReviewArtifact(
   }
 }
 
+/** Delete the review *candidate* sidecar (#1155). Idempotent — swallows ENOENT. */
+export async function clearReviewCandidate(
+  checkoutPath: string,
+  workflowId: string,
+): Promise<void> {
+  const filePath = getReviewCandidatePath(checkoutPath, workflowId);
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
 /**
  * Lenient per-finding schema for the *candidate* file the agent writes. Unlike
  * the strict {@link ReviewFindingSchema} governing the engine-written artifact,
@@ -226,36 +260,42 @@ const CandidateArtifactSchema = z.object({
 });
 
 /**
- * Read the agent-written *candidate* sidecar and return validated findings,
- * stamping the authoritative `round` and defaulting `status` to `'open'`.
- * Tolerates a missing per-finding `round`/`status` and ignores any agent-claimed
- * top-level `verdict`. Returns `[]` on missing / unreadable / invalid — NEVER
- * throws.
+ * Read the agent-written *candidate* sidecar (#1155, FR-002) and return validated
+ * findings, stamping the authoritative `round` and defaulting `status` to
+ * `'open'`. Tolerates a missing per-finding `round`/`status` and ignores any
+ * agent-claimed top-level `verdict`.
+ *
+ * Returns `null` on missing / unreadable / invalid-JSON / schema-invalid — there
+ * is NO proof of review, which the engine treats as a no-verdict round (never
+ * `clean`). Returns `ReviewFinding[]` (possibly `[]`) only for a valid candidate:
+ * `[]` is a genuine "reviewed, zero findings" result. NEVER throws. Reads the
+ * separate candidate path so a stale prior-round engine artifact can never be
+ * re-ingested as this round's findings.
  */
 export async function readCandidateFindings(
   checkoutPath: string,
   workflowId: string,
   round: number,
-): Promise<ReviewFinding[]> {
-  const filePath = getReviewArtifactPath(checkoutPath, workflowId);
+): Promise<ReviewFinding[] | null> {
+  const filePath = getReviewCandidatePath(checkoutPath, workflowId);
 
   let content: string;
   try {
     content = await fs.readFile(filePath, 'utf-8');
   } catch {
-    return [];
+    return null;
   }
 
   let raw: unknown;
   try {
     raw = JSON.parse(content);
   } catch {
-    return [];
+    return null;
   }
 
   const parsed = CandidateArtifactSchema.safeParse(raw);
   if (!parsed.success) {
-    return [];
+    return null;
   }
 
   return parsed.data.findings.map((f) => ({
