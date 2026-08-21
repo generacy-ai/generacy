@@ -1384,8 +1384,16 @@ export class GhCliGitHubClient implements GitHubClient {
     }
   }
 
-  async commit(message: string): Promise<CommitResult> {
-    const result = await executeCommand('git', ['commit', '-m', message], { cwd: this.workdir });
+  async commit(message: string, pathspec?: string[]): Promise<CommitResult> {
+    // With an explicit pathspec, `git commit -m <msg> -- <paths>` records only
+    // those paths and disregards anything else staged in the index (#1162) —
+    // the caller must have already staged untracked members of `pathspec`.
+    // Without it, the whole index is committed (legacy behavior).
+    const args =
+      pathspec && pathspec.length > 0
+        ? ['commit', '-m', message, '--', ...pathspec]
+        : ['commit', '-m', message];
+    const result = await executeCommand('git', args, { cwd: this.workdir });
     if (result.exitCode !== 0) {
       throw new Error(`Failed to commit: ${result.stderr}`);
     }

@@ -400,9 +400,17 @@ export interface GitHubClient {
   stageAll(): Promise<void>;
 
   /**
-   * Commit staged changes
+   * Commit changes.
+   *
+   * @param message Commit message.
+   * @param pathspec Optional path list. When provided, only these paths are
+   *   committed (`git commit -m <msg> -- <pathspec>`), bypassing any other
+   *   content staged in the index — so a caller can guarantee an unrelated
+   *   pre-staged path (e.g. an engine bookkeeping sidecar, #1162) is never
+   *   folded into the commit. When omitted, the whole index is committed
+   *   (unchanged legacy behavior).
    */
-  commit(message: string): Promise<CommitResult>;
+  commit(message: string, pathspec?: string[]): Promise<CommitResult>;
 
   /**
    * Push to remote

@@ -8,7 +8,7 @@ import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
-import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, type ReviewFinding } from './review-artifact.js';
+import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, type ReviewFinding } from './review-artifact.js';
 import { waitForCiGreen } from './ci-merge-readiness.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
@@ -1433,6 +1433,26 @@ export class PhaseLoop {
           // exhaustion — the remediate seam would correctly proceed to
           // `validate`, so this gate must not pre-empt it. Runs BEFORE the seam.
           const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+          // #1162 FR-003 reconcile: after a worker restart or fresh re-clone the
+          // disk sidecar may be absent (count reads 0) while Redis still holds
+          // the count spent before the restart. Seed the disk sidecar from the
+          // durable mirror when Redis > disk (max(disk, redis) — never lowers a
+          // spent budget) BEFORE the synchronous gate read, so the existing
+          // `readReviewArtifactSync` observes the durable value. Best-effort:
+          // Redis-down ⇒ `getValueRaw` returns null ⇒ falls back to disk (G3).
+          {
+            const { owner, repo, issueNumber } = context.item;
+            const branch = context.branch ?? 'no-branch';
+            const remediationCountKey = `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`;
+            const rawRedis = await deps.phaseTracker?.getValueRaw(remediationCountKey);
+            const redisCount = rawRedis != null ? Number.parseInt(rawRedis, 10) : NaN;
+            if (Number.isInteger(redisCount)) {
+              const diskCount = readReviewArtifactSync(context.checkoutPath, workflowId)?.remediationCount ?? 0;
+              if (redisCount > diskCount) {
+                await seedRemediationCount(context.checkoutPath, workflowId, redisCount);
+              }
+            }
+          }
           const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
           const { maxRemediations } = resolveWorkflowOverrides(
             config,
@@ -1550,12 +1570,20 @@ export class PhaseLoop {
           // stays { phase: 'review', resumeFrom: 'review' } unchanged. Every
           // other gate keeps today's plain skip-and-continue.
           if (completedLabel === 'completed:remediation-limit') {
-            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+            const { owner, repo, issueNumber } = context.item;
+            const workflowId = `${owner}/${repo}#${issueNumber}`;
             await resetRemediationCount(context.checkoutPath, workflowId);
+            // #1162 FR-003 reset: clear the durable Redis mirror so a fresh
+            // budget also clears the persisted count (best-effort no-op when
+            // Redis is down). Mirrors the disk `resetRemediationCount` above.
+            const branch = context.branch ?? 'no-branch';
+            await deps.phaseTracker?.clearRaw(
+              `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`,
+            );
             await context.github.removeLabels(
-              context.item.owner,
-              context.item.repo,
-              context.item.issueNumber,
+              owner,
+              repo,
+              issueNumber,
               ['completed:remediation-limit'],
             );
             this.logger.info(
@@ -1750,6 +1778,26 @@ export class PhaseLoop {
           }
           if (remediateCommitOutcome.prUrl) {
             context.prUrl = remediateCommitOutcome.prUrl;
+          }
+          // #1162 FR-003 mirror: the executor bumped `remediationCount` on the
+          // disk sidecar; persist that post-bump count to the durable Redis
+          // mirror so it survives a worker restart / re-clone (the disk sidecar
+          // is no longer committed to the branch after this fix). Best-effort —
+          // no-op when Redis is down (G3). Keyed identically to the reconcile +
+          // reset sites so all three operate on the same durable value.
+          const { owner, repo, issueNumber } = context.item;
+          const workflowId = `${owner}/${repo}#${issueNumber}`;
+          const remediationCount = readReviewArtifactSync(
+            context.checkoutPath,
+            workflowId,
+          )?.remediationCount;
+          if (remediationCount !== undefined) {
+            const branch = context.branch ?? 'no-branch';
+            await deps.phaseTracker?.setValueRaw(
+              `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`,
+              String(remediationCount),
+              PHASE_START_REF_TTL_SECONDS,
+            );
           }
         } else {
           this.logger.warn(
