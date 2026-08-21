@@ -3,6 +3,7 @@ import {
   GateOpenSchema,
   GateAnswerSchema,
   GateOutcomeSchema,
+  GateTypeSchema,
   MALFORMED_FIXTURES,
   VALID_ANSWER_FIXTURES,
   VALID_ACK_FIXTURES,
@@ -26,6 +27,19 @@ describe('gates wire-contract schemas', () => {
 
     it.each(['applied', 'superseded', 'failed'] as const)('outcome fixture %s parses', (k) => {
       expect(() => GateOutcomeSchema.parse(VALID_ACK_FIXTURES[k])).not.toThrow();
+    });
+  });
+
+  // #1163 — remediation-limit + ci appended to GateTypeSchema. The it.each
+  // round-trip blocks above already auto-cover them via the widened fixtures;
+  // these accept-by-name assertions make the pin visible (FR-003).
+  describe('gate-type enum widening (#1163)', () => {
+    it.each(['remediation-limit', 'ci'] as const)('accepts %s', (gateType) => {
+      expect(GateTypeSchema.safeParse(gateType).success).toBe(true);
+    });
+
+    it('enum stays closed (unknown value rejected)', () => {
+      expect(GateTypeSchema.safeParse('not-a-real-gate-type').success).toBe(false);
     });
   });
 

@@ -30,7 +30,7 @@ import { z } from 'zod';
 // Enums — mirror the cloud `cockpitGateTypeEnum` / gate-outcome enum exactly.
 // ---------------------------------------------------------------------------
 
-/** 8-value gate-type enum (order preserved to match the cloud enum). */
+/** 10-value gate-type enum (order preserved to match the cloud enum). */
 export const GateTypeSchema = z.enum([
   'clarification',
   'artifact-review',
@@ -40,6 +40,8 @@ export const GateTypeSchema = z.enum([
   'phase-queue',
   'filing',
   'scope-drained',
+  'remediation-limit', // #1120 — remediation cap pause (waiting-for:remediation-limit)
+  'ci', // #1133 — CI merge gate (waiting-for:ci)
 ]);
 export type GateType = z.infer<typeof GateTypeSchema>;
 
