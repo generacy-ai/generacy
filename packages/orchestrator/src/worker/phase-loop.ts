@@ -21,7 +21,7 @@ import type { ReviewPoster } from './review-poster.js';
 import type { FindingsArtifact } from './review-findings-artifact.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
-import { PENDING_ANSWER_LITERAL } from '@generacy-ai/workflow-engine';
+import { PENDING_ANSWER_LITERAL, wrapUntrustedData } from '@generacy-ai/workflow-engine';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, EXCLUDED_EXACT_PATHS, computePhaseScopedProductDiff, resolveBaseRef } from './product-diff.js';
@@ -1042,7 +1042,15 @@ export class PhaseLoop {
               // command, not the flat `config.validateCommand`.
               file: effectiveValidateCommand,
               title: 'validate phase failed',
-              detail: boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+              // #1159 FR-005: raw validate stdout/stderr can contain
+              // attacker-influenced content (e.g. a test name or assertion
+              // message echoing a PR-controlled string) that lands verbatim in
+              // the remediate charter. Fence it at ingestion so it renders as
+              // data, mirroring validate-fix-handler.ts:235.
+              detail: wrapUntrustedData(
+                boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+                'validate-output',
+              ),
               round,
               status: 'open',
             };
