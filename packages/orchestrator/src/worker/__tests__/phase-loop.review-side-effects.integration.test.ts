@@ -14,7 +14,7 @@ import type { PhaseLoopDeps } from '../phase-loop.js';
 import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../types.js';
 import { getPhaseSequence } from '../types.js';
 import type { WorkerConfig } from '../config.js';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../review-artifact.js';
 
 const mockLogger = {
   info: () => {},
@@ -102,11 +102,38 @@ function makeReviewPoster() {
   };
 }
 
-const CLEAN: FindingsArtifact = { verdict: 'clean', findings: [] };
-const CHANGES: FindingsArtifact = {
+// #1161 collapsed the poster/convergence schemas onto the single canonical
+// `ReviewArtifact`; the review side-effect block now reads `artifact.round` off
+// the artifact itself and receives `blockingSeverity` from the seam.
+const BLOCKING_SEVERITY: Severity = 'critical';
+
+function reviewArtifact(overrides: Partial<ReviewArtifact>): ReviewArtifact {
+  return {
+    verdict: 'clean',
+    findings: [],
+    round: 1,
+    lastReviewedCommitSha: 'sha',
+    remediationCount: 0,
+    markedReadyByEngine: false,
+    ...overrides,
+  };
+}
+
+const CLEAN: ReviewArtifact = reviewArtifact({ verdict: 'clean', findings: [], round: 1 });
+const CHANGES_R1: ReviewArtifact = reviewArtifact({
   verdict: 'changes-required',
-  findings: [{ marker: 'm1', text: 'fix', severity: 'blocking' }],
-};
+  round: 1,
+  findings: [
+    { id: 'm1', severity: 'critical', file: 'src/a.ts', title: 'fix', detail: 'fix', round: 1, status: 'open' },
+  ],
+});
+const CHANGES_R2: ReviewArtifact = reviewArtifact({
+  verdict: 'changes-required',
+  round: 2,
+  findings: [
+    { id: 'm1', severity: 'critical', file: 'src/a.ts', title: 'fix', detail: 'fix', round: 2, status: 'open' },
+  ],
+});
 
 describe('#1125 review side effects through the phase loop', () => {
   let phaseLoop: PhaseLoop;
@@ -120,14 +147,16 @@ describe('#1125 review side effects through the phase loop', () => {
   it('SC-002: clean verdict posts one review and marks the PR ready before validate', async () => {
     const reviewPoster = makeReviewPoster();
     deps.reviewPoster = reviewPoster as never;
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: CLEAN, round: 1 });
+    deps.readFindingsArtifact = vi
+      .fn()
+      .mockResolvedValue({ artifact: CLEAN, blockingSeverity: BLOCKING_SEVERITY });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     const result = await phaseLoop.executeLoop(createMockContext(), createConfig(), deps, sequence);
 
     expect(result.completed).toBe(true);
     expect(reviewPoster.postRound).toHaveBeenCalledTimes(1);
-    expect(reviewPoster.postRound).toHaveBeenCalledWith(CLEAN, 1);
+    expect(reviewPoster.postRound).toHaveBeenCalledWith(CLEAN.findings, 1, BLOCKING_SEVERITY);
     // First round → no thread resolution.
     expect(reviewPoster.resolveResolvedThreads).not.toHaveBeenCalled();
 
@@ -141,7 +170,9 @@ describe('#1125 review side effects through the phase loop', () => {
   it('does not mark ready when the verdict is changes-required', async () => {
     const reviewPoster = makeReviewPoster();
     deps.reviewPoster = reviewPoster as never;
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: CHANGES, round: 1 });
+    deps.readFindingsArtifact = vi
+      .fn()
+      .mockResolvedValue({ artifact: CHANGES_R1, blockingSeverity: BLOCKING_SEVERITY });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     await phaseLoop.executeLoop(createMockContext(), createConfig(), deps, sequence);
@@ -166,8 +197,8 @@ describe('#1125 review side effects through the phase loop', () => {
     // escapes the dedupe skip and satisfies the `round >= 2` thread-resolution gate.
     deps.readFindingsArtifact = vi
       .fn()
-      .mockResolvedValueOnce({ artifact: CHANGES, round: 1 })
-      .mockResolvedValueOnce({ artifact: CHANGES, round: 2 });
+      .mockResolvedValueOnce({ artifact: CHANGES_R1, blockingSeverity: BLOCKING_SEVERITY })
+      .mockResolvedValueOnce({ artifact: CHANGES_R2, blockingSeverity: BLOCKING_SEVERITY });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     const result = await phaseLoop.executeLoop(createMockContext(), createConfig(), deps, sequence);
@@ -175,8 +206,8 @@ describe('#1125 review side effects through the phase loop', () => {
     expect(result.completed).toBe(true);
     // Two review passes: round 1 and round 2 (after the remediate backtrack).
     expect(reviewPoster.postRound).toHaveBeenCalledTimes(2);
-    expect(reviewPoster.postRound).toHaveBeenNthCalledWith(1, CHANGES, 1);
-    expect(reviewPoster.postRound).toHaveBeenNthCalledWith(2, CHANGES, 2);
+    expect(reviewPoster.postRound).toHaveBeenNthCalledWith(1, CHANGES_R1.findings, 1, BLOCKING_SEVERITY);
+    expect(reviewPoster.postRound).toHaveBeenNthCalledWith(2, CHANGES_R2.findings, 2, BLOCKING_SEVERITY);
     // Round 2 → threads resolved.
     expect(reviewPoster.resolveResolvedThreads).toHaveBeenCalledTimes(1);
     // Remediate entry converted the PR back to draft.

@@ -36,7 +36,7 @@ import type { WorkerContext, Logger, WorkflowPhase, PhaseResult } from '../types
 import { getPhaseSequence } from '../types.js';
 import type { WorkerConfig } from '../config.js';
 import type { BaseMergeResult } from '../base-merge.js';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../review-artifact.js';
 import {
   bumpRemediationCount,
   readReviewArtifactSync,
@@ -115,26 +115,19 @@ function makeScriptedReviewExecutor(checkoutPath: string, verdicts: Verdict[]) {
 }
 
 /**
- * Mirror the strict ReviewArtifact into the #1125 FindingsArtifact so the review
- * side-effect block (postRound / mark-ready) sees a consistent verdict.
+ * Feed the review side-effect block the canonical `ReviewArtifact` straight off
+ * the sidecar (#1161 collapsed the poster/convergence schemas onto the single
+ * `ReviewArtifact`). The phase loop reads `artifact.round` for the re-review
+ * dedupe + `round >= 2` thread-resolution gate and `blockingSeverity` for the
+ * poster's render projection.
  */
 function makeFindingsReader(
   checkoutPath: string,
-): (context: WorkerContext) => Promise<{ artifact: FindingsArtifact; round: number } | null> {
+): (context: WorkerContext) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> {
   return async () => {
     const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     if (!ra) return null;
-    return {
-      artifact: {
-        verdict: ra.verdict,
-        findings: ra.findings.map((f, idx) => ({
-          marker: `finding-${idx}`,
-          text: f.title,
-          severity: 'blocking' as const,
-        })),
-      },
-      round: ra.round,
-    };
+    return { artifact: ra, blockingSeverity: 'critical' };
   };
 }
 

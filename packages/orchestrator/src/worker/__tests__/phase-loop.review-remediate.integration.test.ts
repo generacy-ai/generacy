@@ -23,13 +23,8 @@ import { resolveWorkflowOverrides } from '../config.js';
 import type { WorkerConfig } from '../config.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import { ReviewPoster, matchEngineAuthoredReviewMarker, findingMarker } from '../review-poster.js';
-import type { FindingsArtifact, ReviewVerdict } from '../review-findings-artifact.js';
-import { advanceArtifact } from '../review/index.js';
-import type {
-  FindingsArtifact as ConvergenceFindingsArtifact,
-  ReviewDelta,
-} from '../review/index.js';
-import type { PhaseTracker } from '../../types/index.js';
+import { advanceArtifact, computeVerdict } from '../review/index.js';
+import type { ReviewArtifact, ReviewFinding, Severity, ReviewDelta } from '../review/index.js';
 import type {
   GitHubClient,
   CreateReviewInput,
@@ -340,23 +335,46 @@ describe('US2 (#1127) — changes-required → remediate → re-review, real lif
       logger: mockLogger,
     });
 
-    // Round 1 → changes-required (one blocking finding); round 2+ → clean.
-    // The round is now authoritative from the sidecar (FR-005), so the reader
-    // tracks its own monotonic round exactly as the persisted artifact would.
+    // Round 1 → changes-required (one blocking finding); round 2+ → clean. #1161
+    // collapsed the poster/convergence schemas onto the single canonical
+    // `ReviewArtifact`; the round is authoritative on it (FR-005), so the reader
+    // hands the phase loop that artifact directly plus the poster's
+    // `blockingSeverity`.
     let callRound = 0;
-    let lastVerdict: ReviewVerdict | null = null;
+    let lastVerdict: 'clean' | 'changes-required' | null = null;
     deps.readFindingsArtifact = vi.fn(
-      async (_ctx): Promise<{ artifact: FindingsArtifact; round: number } | null> => {
+      async (_ctx): Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> => {
         callRound += 1;
-        const artifact: FindingsArtifact =
+        const artifact: ReviewArtifact =
           callRound === 1
             ? {
                 verdict: 'changes-required',
-                findings: [{ marker: 'f-block-1', text: 'must fix', severity: 'blocking' }],
+                findings: [
+                  {
+                    id: 'f-block-1',
+                    severity: 'critical',
+                    file: 'src/a.ts',
+                    title: 'must fix',
+                    detail: 'must fix',
+                    round: 1,
+                    status: 'open',
+                  },
+                ],
+                round: 1,
+                lastReviewedCommitSha: 'sha1',
+                remediationCount: 0,
+                markedReadyByEngine: false,
               }
-            : { verdict: 'clean', findings: [] };
+            : {
+                verdict: 'clean',
+                findings: [],
+                round: callRound,
+                lastReviewedCommitSha: `sha${callRound}`,
+                remediationCount: 0,
+                markedReadyByEngine: false,
+              };
         lastVerdict = artifact.verdict;
-        return { artifact, round: callRound };
+        return { artifact, blockingSeverity: 'critical' };
       },
     );
     deps.remediateTrigger = () => lastVerdict === 'changes-required';
@@ -427,20 +445,21 @@ describe('US2 (#1127) — changes-required → remediate → re-review, real lif
 // operator flagged that (a) #1125's marker-based thread resolution and (b)
 // #1126's `open → resolved` status transition were never actually exercised.
 //
-// Here round 1 raises a blocking finding with a stable `marker` + `anchor`, and
-// round 2 re-emits the SAME marker as `resolved: true`. That single identity —
+// Here round 1 raises a blocking finding with a stable per-finding id + anchor,
+// and round 2 re-emits the SAME id as `resolved`. That single identity —
 // `f-block-1` — stitches the two boundaries together and is asserted against the
 // merged production code (only the permitted `remediateTrigger` /
 // `readFindingsArtifact` doubles injected):
 //
 //   #1125 (marker → thread): `ReviewPoster.resolveResolvedThreads` correlates the
-//     re-emitted marker back to its GitHub review thread and resolves exactly it.
-//   #1126 (status machine): `advanceArtifact` carries the finding across rounds
-//     and flips it `open → resolved` when the reviewer reports it addressed —
-//     the ReviewArtifact→FindingsArtifact bridge phase-loop.ts:520-530 defers
-//     "to #1127". This suite proves the convergence primitive that bridge calls,
-//     plus that `runReviewConvergence` is no longer inert once a `phaseTracker`
-//     is wired (it loads + persists an advancing artifact).
+//     re-emitted per-finding marker (`findingMarker(f.id)`) back to its GitHub
+//     review thread and resolves exactly it.
+//   #1126 (status machine, activated #1161): `advanceArtifact` carries the finding
+//     across rounds and flips it `open → resolved` when the reviewer reports it
+//     addressed; the review executor persists the advancing canonical
+//     `ReviewArtifact` (the triple findings-artifact schema was collapsed onto it,
+//     so the round now lives on the artifact itself rather than a separate
+//     phaseTracker key).
 // ===========================================================================
 
 /** Shared finding identity threading #1125 (marker) to #1126 (finding id). */
@@ -449,28 +468,6 @@ const ANCHOR_FILE = 'packages/orchestrator/src/foo.ts';
 const ANCHOR_LINE = 10;
 /** GraphQL thread node id `resolveReviewThread` is expected to be called with. */
 const THREAD_ID = 'RT_thread-f-block-1';
-
-/** In-memory PhaseTracker so `runReviewConvergence` actually loads + persists. */
-function createFakePhaseTracker(): { tracker: PhaseTracker; store: Map<string, string> } {
-  const store = new Map<string, string>();
-  const tracker = {
-    getValueRaw: vi.fn(async (key: string) => store.get(key) ?? null),
-    setValueRaw: vi.fn(async (key: string, value: string) => {
-      store.set(key, value);
-    }),
-    clearRaw: vi.fn(async (key: string) => {
-      store.delete(key);
-    }),
-    // Remaining PhaseTracker surface — unused by these paths.
-    isDuplicate: vi.fn(async () => false),
-    markProcessed: vi.fn(async () => undefined),
-    clear: vi.fn(async () => undefined),
-    tryMarkProcessed: vi.fn(async () => true),
-    isDuplicateRaw: vi.fn(async () => false),
-    markProcessedRaw: vi.fn(async () => undefined),
-  } as unknown as PhaseTracker;
-  return { tracker, store };
-}
 
 /**
  * GitHubClient spy for the correlation scenario. `listPullRequestFiles` returns
@@ -542,40 +539,47 @@ describe('US4 (#1127) — finding-identity ⇄ marker ⇄ status correlation', (
     });
 
     // Round 1 raises `f-block-1` (blocking, anchored); round 2 re-emits the SAME
-    // marker as resolved. The round is authoritative from the sidecar (FR-005),
-    // so the reader tracks its own monotonic round like the persisted artifact.
+    // per-finding id as resolved. #1161 collapsed the poster/convergence schemas
+    // onto the single canonical `ReviewArtifact`, so the reader hands the phase
+    // loop that artifact directly (round is authoritative on it, FR-005) plus the
+    // `blockingSeverity` the poster's render projection needs.
     let callRound = 0;
-    let lastVerdict: ReviewVerdict | null = null;
+    let lastVerdict: 'clean' | 'changes-required' | null = null;
     deps.readFindingsArtifact = vi.fn(
-      async (_ctx): Promise<{ artifact: FindingsArtifact; round: number } | null> => {
+      async (_ctx): Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> => {
         callRound += 1;
-        const artifact: FindingsArtifact =
+        const finding: ReviewFinding =
           callRound === 1
             ? {
-              verdict: 'changes-required',
-              findings: [
-                {
-                  marker: FINDING_ID,
-                  text: 'must fix',
-                  severity: 'blocking',
-                  anchor: { file: ANCHOR_FILE, line: ANCHOR_LINE },
-                },
-              ],
-            }
-          : {
-              verdict: 'clean',
-              findings: [
-                {
-                  marker: FINDING_ID,
-                  text: 'addressed',
-                  severity: 'blocking',
-                  anchor: { file: ANCHOR_FILE, line: ANCHOR_LINE },
-                  resolved: true,
-                },
-              ],
-            };
+                id: FINDING_ID,
+                severity: 'critical',
+                file: ANCHOR_FILE,
+                line: ANCHOR_LINE,
+                title: 'must fix',
+                detail: 'must fix',
+                round: 1,
+                status: 'open',
+              }
+            : {
+                id: FINDING_ID,
+                severity: 'critical',
+                file: ANCHOR_FILE,
+                line: ANCHOR_LINE,
+                title: 'must fix',
+                detail: 'addressed',
+                round: 2,
+                status: 'resolved',
+              };
+        const artifact: ReviewArtifact = {
+          verdict: callRound === 1 ? 'changes-required' : 'clean',
+          findings: [finding],
+          round: callRound,
+          lastReviewedCommitSha: `sha${callRound}`,
+          remediationCount: 0,
+          markedReadyByEngine: false,
+        };
         lastVerdict = artifact.verdict;
-        return { artifact, round: callRound };
+        return { artifact, blockingSeverity: 'critical' };
       },
     );
     deps.remediateTrigger = () => lastVerdict === 'changes-required';
@@ -606,29 +610,30 @@ describe('US4 (#1127) — finding-identity ⇄ marker ⇄ status correlation', (
     expect(resolve).toHaveBeenCalledWith(THREAD_ID);
   });
 
-  // #1126 — the same finding identity transitions `open → resolved` across
-  // rounds. The ReviewArtifact→FindingsArtifact bridge that would feed
-  // reviewer-addressed ids into `runReviewConvergence` is deferred by
-  // phase-loop.ts (both hardcoded `[]` today), so #1127 proves the convergence
-  // primitive that bridge will call — with the SAME `f-block-1` identity #1125
-  // resolves as a thread above.
+  // #1126 (activated #1161) — the same finding identity transitions
+  // `open → resolved` across rounds through the canonical convergence merge.
+  // `advanceArtifact` carries the prior open finding and flips it to `resolved`
+  // when its file is in the delta AND the reviewer addressed its id — the SAME
+  // `f-block-1` identity #1125 resolves as a thread above. `computeVerdict` then
+  // recomputes the verdict from the merged findings (FR-007).
   it('flips the finding open → resolved when the reviewer reports it addressed (#1126 convergence)', () => {
-    const seeded: ConvergenceFindingsArtifact = {
+    const seededFinding: ReviewFinding = {
+      id: FINDING_ID, // same identity as the #1125 per-finding marker
+      severity: 'critical',
+      file: ANCHOR_FILE,
+      line: ANCHOR_LINE,
+      title: 'must fix',
+      detail: 'blocking finding raised in round 1',
       round: 1,
-      findings: [
-        {
-          id: FINDING_ID, // same identity as the #1125 per-finding marker
-          severity: 'critical',
-          file: ANCHOR_FILE,
-          line: ANCHOR_LINE,
-          title: 'must fix',
-          detail: 'blocking finding raised in round 1',
-          round: 1,
-          status: 'open',
-        },
-      ],
-      lastReviewedSha: 'a1b2c3d4',
+      status: 'open',
+    };
+    const prior: ReviewArtifact = {
+      round: 1,
+      findings: [seededFinding],
+      lastReviewedCommitSha: 'a1b2c3d4',
       verdict: 'changes-required',
+      remediationCount: 0,
+      markedReadyByEngine: false,
     };
     const delta: ReviewDelta = {
       base: { source: 'last-reviewed', base: 'a1b2c3d4', head: 'e5f6a7b8' },
@@ -636,43 +641,39 @@ describe('US4 (#1127) — finding-identity ⇄ marker ⇄ status correlation', (
       round: 2,
     };
 
-    const { artifact: next, verdict } = advanceArtifact({
-      artifact: seeded,
+    const merged = advanceArtifact(
+      prior,
       delta,
-      reviewerAddressed: [FINDING_ID], // non-empty — the reviewer addressed it
-      reviewerNewFindings: [],
-      blockingSeverity: 'major',
-    });
+      [{ ...seededFinding, status: 'resolved' }], // reviewer addressed it (matched by id)
+      [],
+      'major',
+    );
 
-    const carried = next.findings.find((f) => f.id === FINDING_ID);
+    const carried = merged.find((f) => f.id === FINDING_ID);
     expect(carried?.status).toBe('resolved'); // open → resolved (Q1 terminal)
-    expect(next.round).toBe(2); // round advanced across the transition
-    expect(verdict).toBe('clean'); // no open blocking finding remains
+    expect(computeVerdict(merged, 'major')).toBe('clean'); // no open blocking finding remains
   });
 
-  // #1126 — with a phaseTracker wired, `runReviewConvergence` is no longer inert:
-  // it loads the prior artifact and persists an advancing one (round 0 → 1 → 2
-  // across the two review passes). Closes concern (b): "the mock deps provide no
-  // phaseTracker, so it loads/persists nothing."
-  it('loads and persists an advancing convergence artifact once a phaseTracker is wired (#1126 not inert)', async () => {
-    const { tracker, store } = createFakePhaseTracker();
-    deps.phaseTracker = tracker;
+  // #1126 (activated #1161) — the convergence round is not inert: it advances
+  // across the two review passes (round 1 → 2). #1161 collapsed the persistence
+  // onto the canonical `ReviewArtifact` sidecar (the standalone phaseTracker
+  // `review-findings:` key is gone), and the review executor stamps the round on
+  // every pass. Here the loop's per-round review posts carry the advancing round
+  // in their body header, so two passes emit `Round 1` then `Round 2`.
+  it('advances the convergence round across review passes (#1126 not inert)', async () => {
     const context = createCorrelationContext();
     const config = createConfig({ reviewPhaseEnabled: true });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
 
     await phaseLoop.executeLoop(context, config, deps, sequence);
 
-    // The convergence artifact was written under its own key (distinct from the
-    // #1107 phase-start-ref key that shares the store).
-    const convergenceKey = [...store.keys()].find((k) => k.startsWith('review-findings:'));
-    expect(convergenceKey).toBeDefined();
-    expect(tracker.setValueRaw).toHaveBeenCalled();
-
-    // Persisted shape is the #1126 convergence artifact (round + lastReviewedSha),
-    // NOT the #1125 poster artifact — and the round advanced across both passes.
-    const persisted = JSON.parse(store.get(convergenceKey!)!) as ConvergenceFindingsArtifact;
-    expect(persisted.round).toBe(2);
-    expect(persisted.lastReviewedSha).toBeDefined();
+    // Two review passes ran and the round advanced 1 → 2 — the convergence
+    // artifact is loaded + re-stamped each pass, never re-frozen at round 1.
+    const createReview = github.createReview as unknown as ReturnType<typeof vi.fn>;
+    expect(createReview).toHaveBeenCalledTimes(2);
+    const round1Body = (createReview.mock.calls[0]![3] as CreateReviewInput).body;
+    const round2Body = (createReview.mock.calls[1]![3] as CreateReviewInput).body;
+    expect(round1Body).toContain('Round 1');
+    expect(round2Body).toContain('Round 2');
   });
 });
