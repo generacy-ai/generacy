@@ -83,6 +83,14 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   // #889: LabelManager imports WORKFLOW_LABELS to drive the ensure-pass.
   // Provide it here so the mock module surface matches the real one.
   WORKFLOW_LABELS: [],
+  // #1165: the flag-OFF validate-fix fallback fences the failing validate
+  // output through wrapUntrustedData before synthesizing the
+  // `changes-required` artifact. Provide a faithful passthrough so the mock
+  // module surface matches the real one — otherwise the fallback throws.
+  wrapUntrustedData: vi.fn(
+    (content: string, sourceLabel: string) =>
+      `<untrusted-data source="${sourceLabel}">\n${content}\n</untrusted-data>`,
+  ),
 }));
 
 // #1159 T010: hoist a shared switchBranch spy so the head-ref resolution test
@@ -133,6 +141,27 @@ const mockEpicPostTasksInstance = {
 
 vi.mock('../epic-post-tasks.js', () => ({
   EpicPostTasks: vi.fn().mockImplementation(() => mockEpicPostTasksInstance),
+}));
+
+// #1165: the worker now constructs a RemediateExecutor unconditionally, and the
+// flag-OFF validate-fix fallback dispatches exactly one bounded remediate attempt
+// on a failing `validate` (default reviewPhaseEnabled OFF). Stub it here so the
+// integration harness controls that attempt's outcome without spawning the real
+// remediate CLI or touching the review sidecar. The fallback's own contract
+// (one-shot budget, escalation on repeat failure) is pinned by
+// phase-loop.flag-off-validate-fix.test.ts.
+const mockRemediateExecute = vi.fn().mockResolvedValue({
+  phase: 'remediate',
+  success: true,
+  exitCode: 0,
+  durationMs: 1,
+  output: [],
+});
+
+vi.mock('../remediate-executor.js', () => ({
+  RemediateExecutor: vi.fn().mockImplementation(() => ({
+    execute: mockRemediateExecute,
+  })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -270,6 +299,16 @@ describe('ClaudeCliWorker (integration)', () => {
     // Reset EpicPostTasks mock
     mockEpicPostTasksInstance.execute.mockReset();
     mockEpicPostTasksInstance.execute.mockResolvedValue({ childIssues: [101, 102, 103], success: true });
+
+    // #1165: reset the flag-OFF remediate stub to a clean success each test.
+    mockRemediateExecute.mockReset();
+    mockRemediateExecute.mockResolvedValue({
+      phase: 'remediate',
+      success: true,
+      exitCode: 0,
+      durationMs: 1,
+      output: [],
+    });
 
     // Reset logger child to return the mock logger
     (mockLogger.child as ReturnType<typeof vi.fn>).mockReturnValue(mockLogger);
@@ -465,9 +504,13 @@ describe('ClaudeCliWorker (integration)', () => {
       });
       mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop']);
 
-      // implement succeeds, validate fails
+      // implement succeeds, validate fails. #1165: the flag-OFF validate-fix
+      // fallback then runs one bounded remediate attempt (stubbed above) and
+      // re-runs validate, which fails again → escalation. So validate spawns
+      // twice (the remediate attempt itself is stubbed, not spawned here).
       spawnFn
         .mockReturnValueOnce(createMockProcess(0, 5).handle)
+        .mockReturnValueOnce(createMockProcess(1, 5).handle)
         .mockReturnValueOnce(createMockProcess(1, 5).handle);
 
       const config = createConfig({ gates: {} });
@@ -477,6 +520,9 @@ describe('ClaudeCliWorker (integration)', () => {
       });
 
       await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // #1165: exactly one bounded remediate attempt ran before escalation.
+      expect(mockRemediateExecute).toHaveBeenCalledTimes(1);
 
       // agent:error should be added for validate failure (batched with failed:<phase>)
       expect(mockGithub.addLabels).toHaveBeenCalledWith(
