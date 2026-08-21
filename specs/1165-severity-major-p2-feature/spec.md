@@ -65,13 +65,13 @@ The four corners:
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Resolve Corner 1: the flag-OFF validate-failure outcome must be a single, explicit behavior (restore a fallback fixer **or** accept documented escalation). | P1 | Decision deferred to `/clarify`. |
+| FR-001 | Resolve Corner 1: restore an autonomous flag-OFF fallback fixer so a validate failure gets one bounded fix attempt before escalation. | P1 | Decided (D1=A). |
 | FR-002 | Pin the flag-OFF validate-failure behavior with a regression test. | P1 | Prevents silent re-regression. |
-| FR-003 | Resolve Corner 2: reconcile `blocked:stuck-feedback-loop` behavior and the migration-guide "retired" wording. | P1 | Behavior change vs doc change decided in `/clarify`; doc edit may be tracked in the docs issue. |
+| FR-003 | Resolve Corner 2: keep `blocked:stuck-feedback-loop`'s bounded-stop behavior and correct the migration-guide "retired" wording. | P1 | Decided (D2=A); doc edit may be tracked in the docs issue. |
 | FR-004 | Preserve a bounded stop for the flag-OFF PR-feedback stuck-loop (no reintroduction of the #883 unbounded re-enqueue). | P1 | Invariant regardless of which side of Corner 2 wins. |
-| FR-005 | Resolve Corner 3: explicitly decide whether speckit-bugfix carries the relocated `on-ci-green` `implementation-review` gate under `ciMergeGateEnabled === true`. | P1 | Decision deferred to `/clarify`; may require narrowing the #1133 relocation transform. |
+| FR-005 | Resolve Corner 3: speckit-bugfix intentionally carries the relocated `on-ci-green` `implementation-review` gate under `ciMergeGateEnabled === true` (#1133 transform stays uniformly label-based). | P1 | Decided (D3=A). |
 | FR-006 | Test speckit-bugfix's gate set under both `ciMergeGateEnabled` states to lock in the Corner 3 decision. | P1 | |
-| FR-007 | Resolve Corner 4: ensure unknown/custom workflows that include the `review` phase (flag ON) always have an effective `on-remediation-limit` cap. | P1 | Either gate the `getPhaseSequence` fallback to exclude `review` for unknown workflows, or apply default gates to unknown workflows. |
+| FR-007 | Resolve Corner 4: gate the `getPhaseSequence` fallback to exclude `review` (and `remediate`) for unknown workflows, so review never runs without a matching gate map. | P1 | Decided (D4=A) — fail closed; removes the loop's precondition rather than retrofitting a cap. |
 | FR-008 | Test that an unknown workflow with `reviewPhaseEnabled === true` cannot enter an uncapped review↔remediate loop. | P1 | |
 | FR-009 | With both flags OFF (the default), observable behavior for named workflows must remain byte-identical to pre-change except where Corner 1/2 decisions explicitly alter it. | P1 | Guard against collateral change. |
 
@@ -100,12 +100,12 @@ The four corners:
 - Auto-merge behavior (owned by cockpit).
 - Multi-repo / sibling-review coordination changes.
 
-## Open Decisions (for `/clarify`)
+## Resolved Decisions (from `/clarify`)
 
-- **D1 (Corner 1):** Flag-OFF validate failure — restore an autonomous fallback fixer, or accept + document the escalation regression?
-- **D2 (Corner 2):** `blocked:stuck-feedback-loop` — keep as the bounded flag-OFF stop and correct the "retired" docs, or change behavior to match the docs?
-- **D3 (Corner 3):** speckit-bugfix under `ciMergeGateEnabled === true` — intentionally carry the relocated `on-ci-green` `implementation-review` gate, or exclude bugfix from the relocation?
-- **D4 (Corner 4):** Cap unknown-workflow review loops by excluding `review` from the `getPhaseSequence` fallback, or by applying default gates to unknown workflows?
+- **D1 (Corner 1) → Restore a fallback fixer.** Flag-OFF validate failure restores an autonomous fallback fixer that gets one bounded fix attempt before escalation. Flag-OFF is the default deployment; deleting the pre-epic autonomous validate-fix silently escalated every default-cluster validate failure to `failed:validate`. FR-009 carves Corner-1 decisions out of the byte-identical guarantee, so one bounded attempt is in-scope.
+- **D2 (Corner 2) → Keep behavior, fix docs.** Keep `blocked:stuck-feedback-loop`'s bounded-stop behavior and correct the "retired" wording in the docs (doc edit may be tracked in the docs issue). It is the only bounded stop for the #883 runaway on the flag-OFF PR-feedback path (the monitor skips all `blocked:*`); FR-004 makes preserving that bound an invariant. Changing the label's role risks a #883 re-regression.
+- **D3 (Corner 3) → Carry the gate intentionally.** speckit-bugfix intentionally carries the relocated `on-ci-green` `implementation-review` gate under `ciMergeGateEnabled === true`, locked in by a test. `ciMergeGateEnabled` is opt-in and its purpose is a post-validate CI-green merge checkpoint across speckit workflows; excluding bugfix would let it merge with no checkpoint exactly when the operator asked for one, and keeps the #1133 transform uniformly label-based.
+- **D4 (Corner 4) → Exclude review from the fallback.** Gate the `getPhaseSequence` fallback to exclude `review` (and `remediate`) for unknown workflows, so there is no review phase without a matching gate map. The review phase is a speckit concept paired with a specific gate map; excluding review fails closed — removing the loop's precondition rather than retrofitting a cap onto a sequence the engine doesn't understand (SC-002).
 
 ---
 
