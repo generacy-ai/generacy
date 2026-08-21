@@ -102,16 +102,16 @@ against a non-existent ref.
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The targeted-validate classifier MUST exclude changed-file paths that do not exist in the branch checkout before classifying `test-only` and before emitting a `pnpm vitest run` command. | P1 | Deleted/renamed-away paths. Mirrors fail-then-pass ENOENT overlay handling. `diff-classifier.ts:92-94`. |
+| FR-001 | The targeted-validate wiring layer MUST exclude changed-file paths that do not exist in the branch checkout before the classifier classifies `test-only` and before emitting a `pnpm vitest run` command. `classifyDiff` stays pure/no-I/O and receives already-existence-filtered paths (Q3→A). | P1 | Deleted/renamed-away paths. Mirrors fail-then-pass ENOENT overlay handling. `diff-classifier.ts:92-94`. |
 | FR-002 | If, after existence filtering, a `test-only` diff has no remaining test files, validate MUST fall back to the full built-in default rather than run an empty/failing vitest command. | P1 | Deletion-only diff edge case. |
-| FR-003 | When a targeted `pnpm --filter` classification would select zero projects, the classifier/wiring MUST fall back to the full built-in default validate command. | P1 | Root `package.json`, `scripts/**`, root `vitest.config.ts` currently classify `targeted`. `diff-classifier.ts:42-50`. |
-| FR-004 | The fail-then-pass base-ref run MUST NOT report an infrastructure failure (unbuilt dist, missing root vitest, install/setup failure) as a base or branch test outcome. It MUST instead produce a non-blocking `skip` with a logged reason, OR make the base run genuinely runnable (e.g. a build step). | P1 | Prevents vacuous `base-passed`/`branch-failed`. `fail-then-pass.ts:94-110, 211`. |
+| FR-003 | When a targeted `pnpm --filter` classification would select zero projects, the wiring MUST fall back to the full built-in default validate command. The zero-project probe lives in the wiring layer, not inside pure `classifyDiff` (Q3→A). | P1 | Root `package.json`, `scripts/**`, root `vitest.config.ts` currently classify `targeted`. `diff-classifier.ts:42-50`. |
+| FR-004 | The fail-then-pass base-ref run MUST NOT report an infrastructure failure (unbuilt dist, missing root vitest, install/setup failure) as a base or branch test outcome. It MUST instead signature-detect the infra failure and produce a non-blocking `skip` with a logged reason. No build step is added (Q1→A). The infra signature is conservative: only a pre-collection failure — vitest exiting having collected/run zero tests (e.g. "No test files found", dist/module resolution error before any test runs) — counts as infra; any collected-and-failed test is a genuine outcome (Q2→A). | P1 | Prevents vacuous `base-passed`/`branch-failed`. `fail-then-pass.ts:94-110, 211`. |
 | FR-005 | A repo without a root-level vitest MUST NOT yield a false `branch-failed`; the proof MUST skip (non-blocking) with a logged reason. | P1 | `fail-then-pass.ts:211`. |
-| FR-006 | Both the base-ref and branch test runs MUST be bounded by a wall-clock cap; a hang MUST NOT stall validate past the cli-spawner cap. | P1 | Install already has `BASE_INSTALL_TIMEOUT_MS`; tests do not. |
+| FR-006 | Both the base-ref and branch test runs MUST be bounded by a wall-clock cap via a dedicated constant (mirroring `BASE_INSTALL_TIMEOUT_MS`) applied as a per-run timeout on each test run, independent of the install cap (Q5→A); a hang MUST NOT stall validate past the cli-spawner cap. | P1 | Install already has `BASE_INSTALL_TIMEOUT_MS`; tests do not. |
 | FR-007 | The fail-then-pass worktree lifecycle MUST clean up the `mkdtemp` parent directory (not only the inner worktree) on every exit path (success, error, abort). | P2 | `fail-then-pass.ts:162-199`. |
 | FR-008 | Worktree cleanup MUST NOT be silently skipped when the abort `signal` is already aborted; an orphaned registration MUST be reconciled (e.g. `git worktree prune`). | P2 | Cleanup `git worktree remove` currently shares the abort signal. |
 | FR-009 | A `git worktree add` failure MUST be treated as a non-blocking skip with a logged reason, consistent with the documented infra-failure posture — not a hard phase failure. | P2 | `fail-then-pass.ts:167-170`. |
-| FR-010 | A custom `validateCommand` MUST either support a `<base>` placeholder substituted with the resolved base branch, OR the bugfix profile doc MUST stop hardcoding `origin/develop` and document how to adapt it. | P2 | `bugfix-profile-config.md`; custom commands run verbatim with no substitution today (`phase-loop.ts` `computeEffectiveValidateCommand`). |
+| FR-010 | A custom `validateCommand` MUST support a `<base>` placeholder substituted with the resolved base branch (mirroring the existing merge-conflict `<base>`/`<branch>` substitution), and the bugfix profile doc MUST be updated to use it instead of hardcoding `origin/develop` (Q4→A). | P2 | `bugfix-profile-config.md`; custom commands run verbatim with no substitution today (`phase-loop.ts` `computeEffectiveValidateCommand`). |
 | FR-011 | All new fall-back / skip / infra-failure decisions MUST emit a single observability log line describing the decision and reason, consistent with the existing `targeted-validate` and `fail-then-pass` log lines. | P2 | Preserve one-line-per-decision logging. |
 | FR-012 | Every workflow other than `speckit-bugfix`, and any `speckit-bugfix` run that does not exercise a defective code path, MUST remain byte-identical to pre-#1166 behavior. | P1 | No regression to non-bugfix validate. |
 
@@ -134,13 +134,18 @@ against a non-existent ref.
   top rather than redesigning the classification taxonomy.
 - Existence filtering is against the branch checkout working tree (the same tree fail-then-pass
   overlays from), consistent with FR-001's mirror of the ENOENT overlay handling.
-- "Infrastructure-failure signature" detection is acceptable as an alternative to adding a build
-  step, provided it is conservative (skip on ambiguity) so a genuine test failure is never
-  masked as infra.
-- The wall-clock cap for test runs can reuse or mirror the existing `BASE_INSTALL_TIMEOUT_MS`
-  pattern; exact value/derivation is a plan-phase decision.
-- The `<base>` placeholder (if chosen for FR-010) mirrors the existing merge-conflict remedy
-  `<base>` substitution already present in `phase-loop.ts`.
+- "Infrastructure-failure signature" detection is the chosen strategy (Q1→A); no base build step
+  is added. Detection is conservative (Q2→A): only a pre-collection failure — vitest exiting
+  having collected/run zero tests — counts as infra, so a genuine collected-and-failed test is
+  never masked as infra.
+- Existence-filtering (FR-001) and the zero-project fallback (FR-003) live in the targeted-validate
+  wiring layer; `classifyDiff` stays pure/no-I/O and receives already-filtered paths (Q3→A).
+- The wall-clock cap for test runs uses a dedicated constant mirroring the existing
+  `BASE_INSTALL_TIMEOUT_MS` pattern, applied per-run independent of the install cap (Q5→A); exact
+  value/derivation is a plan-phase decision.
+- FR-010 is resolved via a `<base>` placeholder in the custom `validateCommand`, substituted with
+  the resolved base branch, mirroring the existing merge-conflict `<base>` substitution already
+  present in `phase-loop.ts` (Q4→A).
 
 ## Out of Scope
 
