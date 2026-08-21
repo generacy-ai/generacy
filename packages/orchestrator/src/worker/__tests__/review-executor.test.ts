@@ -19,7 +19,11 @@ import type { QueueItem } from '../../types/index.js';
 import type { WorkerConfig } from '../config.js';
 import { AgentLauncher } from '../../launcher/agent-launcher.js';
 import { ReviewExecutor } from '../review-executor.js';
-import { getReviewArtifactPath, readReviewArtifact } from '../review-artifact.js';
+import {
+  getReviewArtifactPath,
+  getReviewCandidatePath,
+  readReviewArtifact,
+} from '../review-artifact.js';
 
 const logger: Logger = {
   info: vi.fn(),
@@ -48,6 +52,32 @@ function makeProcess(exitCode = 0): ChildProcessHandle {
     exitPromise,
   };
   setTimeout(() => resolveExit(exitCode), 5);
+  return handle;
+}
+
+/**
+ * A process that never exits on its own — it only resolves when killed, with a
+ * `null` exit code (signal death). Used to drive the SIGTERM→SIGKILL timeout
+ * path deterministically.
+ */
+function makeHangingProcess(killExitCode: number | null = null): ChildProcessHandle {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  let resolveExit: (code: number | null) => void;
+  const exitPromise = new Promise<number | null>((r) => {
+    resolveExit = r;
+  });
+  const handle: ChildProcessHandle = {
+    stdin: null,
+    stdout: stdout as unknown as NodeJS.ReadableStream,
+    stderr: stderr as unknown as NodeJS.ReadableStream,
+    pid: 4242,
+    kill: vi.fn((sig?: string) => {
+      if (sig === 'SIGTERM' || sig === 'SIGKILL') resolveExit(killExitCode);
+      return true;
+    }),
+    exitPromise,
+  };
   return handle;
 }
 
@@ -97,16 +127,32 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
    * then resolves the child. `readCandidateFindings` runs after `exitPromise`,
    * so the file must exist by the time the process exits.
    */
+  async function writeCandidateFile(raw: unknown): Promise<void> {
+    const filePath = getReviewCandidatePath(checkoutPath, workflowId);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, JSON.stringify(raw), 'utf-8');
+  }
+
   function makeLauncher(candidate: unknown): {
     launcher: AgentLauncher;
     launch: ReturnType<typeof vi.fn>;
   } {
+    // #1155: the agent writes the *candidate* path (not the engine artifact).
+    return makeLauncherWith({ onLaunch: () => writeCandidateFile(candidate) });
+  }
+
+  /**
+   * Flexible launcher: run an arbitrary `onLaunch` side-effect (write / skip /
+   * corrupt the candidate) and return a caller-chosen child process.
+   */
+  function makeLauncherWith(opts: {
+    onLaunch?: () => Promise<void>;
+    process?: ChildProcessHandle;
+  }): { launcher: AgentLauncher; launch: ReturnType<typeof vi.fn> } {
     const launch = vi.fn(async () => {
-      const filePath = getReviewArtifactPath(checkoutPath, workflowId);
-      await mkdir(path.dirname(filePath), { recursive: true });
-      await writeFile(filePath, JSON.stringify(candidate), 'utf-8');
+      if (opts.onLaunch) await opts.onLaunch();
       return {
-        process: makeProcess(0),
+        process: opts.process ?? makeProcess(0),
         outputParser: { processChunk: () => undefined, flush: () => undefined },
         metadata: { pluginId: 'claude-code', intentKind: 'review' },
       };
@@ -233,6 +279,163 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
     const persisted = await readReviewArtifact(checkoutPath, workflowId);
     expect(persisted!.round).toBe(2);
     expect(persisted!.verdict).toBe('clean');
+  });
+
+  describe('#1155 phantom-clean regression (FR-006)', () => {
+    it('(a) missing candidate after exit 0 → success:false, no artifact, no verdict computed', async () => {
+      // Agent exits 0 but writes no candidate — no proof of review.
+      const { launcher } = makeLauncherWith({});
+      const getCurrentCommitSha = vi.fn().mockResolvedValue('sha');
+      const github = { getCurrentCommitSha } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(makeContext(github));
+
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(0);
+      // Nothing persisted, and the engine never got as far as stamping a commit.
+      expect(await readReviewArtifact(checkoutPath, workflowId)).toBeNull();
+      expect(getCurrentCommitSha).not.toHaveBeenCalled();
+    });
+
+    it('(b) non-zero exit → success:false, exitCode:1, no artifact (even with a valid candidate)', async () => {
+      // A valid candidate is present, but a non-zero exit is still a failure.
+      const { launcher } = makeLauncherWith({
+        onLaunch: () => writeCandidateFile({ findings: [] }),
+        process: makeProcess(1),
+      });
+      const github = {
+        getCurrentCommitSha: vi.fn().mockResolvedValue('sha'),
+      } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(makeContext(github));
+
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(await readReviewArtifact(checkoutPath, workflowId)).toBeNull();
+    });
+
+    it('(c) CLI timeout (SIGTERM/SIGKILL) → success:false, no artifact', async () => {
+      const timeoutConfig = {
+        ...baseConfig,
+        phaseTimeoutMs: 50,
+        shutdownGracePeriodMs: 10,
+      } as WorkerConfig;
+      const { launcher } = makeLauncherWith({ process: makeHangingProcess(null) });
+      const github = {
+        getCurrentCommitSha: vi.fn().mockResolvedValue('sha'),
+      } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: timeoutConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(makeContext(github));
+
+      expect(result.success).toBe(false);
+      expect(await readReviewArtifact(checkoutPath, workflowId)).toBeNull();
+    });
+
+    it('(d) round ≥ 2, no fresh candidate → prior artifact + remediationCount untouched, success:false', async () => {
+      // Seed a prior round-1 engine artifact carrying a remediation budget.
+      const prior = {
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior finding',
+            detail: 'From round 1.',
+            round: 1,
+            status: 'open',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'old',
+        remediationCount: 2,
+      };
+      const priorPath = getReviewArtifactPath(checkoutPath, workflowId);
+      await mkdir(path.dirname(priorPath), { recursive: true });
+      await writeFile(priorPath, JSON.stringify(prior), 'utf-8');
+
+      // Agent exits 0 but writes no candidate this round.
+      const { launcher } = makeLauncherWith({});
+      const github = {
+        getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
+      } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(makeContext(github));
+
+      expect(result.success).toBe(false);
+      // Prior artifact is left exactly as-is — round does not advance, budget intact.
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.round).toBe(1);
+      expect(persisted!.remediationCount).toBe(2);
+      expect(persisted!.lastReviewedCommitSha).toBe('old');
+    });
+
+    it('(e) crash window: engine artifact intact + invalid candidate → artifact + budget preserved, success:false', async () => {
+      const prior = {
+        findings: [],
+        verdict: 'clean',
+        round: 3,
+        lastReviewedCommitSha: 'stable',
+        remediationCount: 3,
+      };
+      const priorPath = getReviewArtifactPath(checkoutPath, workflowId);
+      await mkdir(path.dirname(priorPath), { recursive: true });
+      await writeFile(priorPath, JSON.stringify(prior), 'utf-8');
+
+      // Half-written / invalid candidate from a crashed write.
+      const { launcher } = makeLauncherWith({
+        onLaunch: async () => {
+          const filePath = getReviewCandidatePath(checkoutPath, workflowId);
+          await mkdir(path.dirname(filePath), { recursive: true });
+          await writeFile(filePath, '{ not valid json', 'utf-8');
+        },
+      });
+      const github = {
+        getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
+      } as unknown as GitHubClient;
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(makeContext(github));
+
+      expect(result.success).toBe(false);
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.round).toBe(3);
+      expect(persisted!.remediationCount).toBe(3);
+      expect(persisted!.lastReviewedCommitSha).toBe('stable');
+    });
   });
 
   describe('#1131 resolution-scoped diff window', () => {
