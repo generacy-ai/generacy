@@ -21,9 +21,9 @@ import {
 //    REPEAT_FAILURE_THRESHOLD (SC-002);
 //  - `failed:validate` (labelManager.onError('validate')) is NEVER applied on
 //    the routed path (FR-009);
-//  - the legacy adapter is invoked at exactly one site — the remediate seam —
-//    and never on both the routing branch and the remediate seam for one
-//    failure (SC-003 / FR-008).
+//  - #1158: the single RemediateExecutor is invoked at exactly one site — the
+//    remediate seam — and never on both the routing branch and the remediate
+//    seam for one failure (SC-003 / FR-008).
 // ---------------------------------------------------------------------------
 
 const mockLogger = {
@@ -59,7 +59,7 @@ interface DepsHandles {
   onError: ReturnType<typeof vi.fn>;
   onRepeatedError: ReturnType<typeof vi.fn>;
   postFailureAlert: ReturnType<typeof vi.fn>;
-  handle: ReturnType<typeof vi.fn>;
+  remediateExecute: ReturnType<typeof vi.fn>;
   runValidatePhase: ReturnType<typeof vi.fn>;
 }
 
@@ -67,7 +67,9 @@ function createDeps(checkoutPath: string, priorCount: number, workflowId: string
   const onError = vi.fn().mockResolvedValue(undefined);
   const onRepeatedError = vi.fn().mockResolvedValue(undefined);
   const postFailureAlert = vi.fn().mockResolvedValue(undefined);
-  const handle = vi.fn().mockResolvedValue(undefined);
+  // #1158: both origins converge on the single RemediateExecutor at the seam —
+  // the retired ValidateFixHandler adapter is gone.
+  const remediateExecute = vi.fn(async (): Promise<PhaseResult> => makeSuccessResult('remediate'));
 
   // Fail the first validate run, succeed on the post-remediation re-run.
   const runValidatePhase = vi
@@ -129,7 +131,7 @@ function createDeps(checkoutPath: string, priorCount: number, workflowId: string
       } as any,
       failureFingerprintTracker: tracker,
       reviewExecutor: reviewExecutor as any,
-      validateFixHandler: { handle } as any,
+      remediateExecutor: { execute: remediateExecute } as any,
       // Production-shaped trigger: the remediate seam fires iff the persisted
       // artifact verdict is `changes-required` (mirrors claude-cli-worker wiring).
       remediateTrigger: (ctx: WorkerContext) =>
@@ -138,7 +140,7 @@ function createDeps(checkoutPath: string, priorCount: number, workflowId: string
     onError,
     onRepeatedError,
     postFailureAlert,
-    handle,
+    remediateExecute,
     runValidatePhase,
   };
 }
@@ -196,7 +198,7 @@ describe('PhaseLoop validate-failure fingerprint routing (#1129 T010)', () => {
 
   it('repeat-identical validate failure escalates with failed:validate-repeated at threshold (SC-002)', async () => {
     // One prior identical failure already recorded → occurrence = 2 = threshold.
-    const { deps, onError, onRepeatedError, postFailureAlert, handle } = createDeps(
+    const { deps, onError, onRepeatedError, postFailureAlert, remediateExecute } = createDeps(
       checkoutPath,
       1,
       workflowId,
@@ -222,13 +224,13 @@ describe('PhaseLoop validate-failure fingerprint routing (#1129 T010)', () => {
     expect(alertArg.phase).toBe('validate');
     expect(alertArg.fingerprint).toMatch(/^[0-9a-f]{16}$/);
 
-    // SC-003: the terminal path never dispatches the legacy adapter.
-    expect(handle).not.toHaveBeenCalled();
+    // SC-003: the terminal path never dispatches the remediate executor.
+    expect(remediateExecute).not.toHaveBeenCalled();
   });
 
   it('first-time validate failure self-heals via exactly one remediate-seam adapter call (SC-003 / FR-008)', async () => {
     // No prior occurrence → occurrence = 1 < threshold → synthesize + remediate.
-    const { deps, onError, onRepeatedError, postFailureAlert, handle, runValidatePhase } =
+    const { deps, onError, onRepeatedError, postFailureAlert, remediateExecute, runValidatePhase } =
       createDeps(checkoutPath, 0, workflowId);
 
     const result = await phaseLoop.executeLoop(createContext(checkoutPath), createConfig(), deps, [
@@ -247,18 +249,10 @@ describe('PhaseLoop validate-failure fingerprint routing (#1129 T010)', () => {
     // FR-009: `failed:validate` never applied on the routed path.
     expect(onError).not.toHaveBeenCalledWith('validate');
 
-    // SC-003 / FR-008: the legacy adapter runs at EXACTLY one site — the
-    // remediate seam — for one failure. Never both the routing branch and the
-    // seam.
-    expect(handle).toHaveBeenCalledTimes(1);
-    expect(handle).toHaveBeenCalledWith(
-      expect.anything(),
-      checkoutPath,
-      { prNumber: 42, baseBranch: 'develop' },
-      expect.objectContaining({ exitCode: 1 }),
-      expect.anything(),
-      'speckit-feature',
-    );
+    // SC-003 / FR-008: the single RemediateExecutor runs at EXACTLY one site —
+    // the remediate seam — for one failure. Never both the routing branch and
+    // the seam.
+    expect(remediateExecute).toHaveBeenCalledTimes(1);
 
     // validate ran twice: the initial red, then the post-remediation green.
     expect(runValidatePhase).toHaveBeenCalledTimes(2);

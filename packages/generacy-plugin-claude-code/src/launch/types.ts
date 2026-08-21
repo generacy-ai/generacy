@@ -74,27 +74,6 @@ export interface MergeConflictIntent {
 }
 
 /**
- * Intent for a bounded validate-fix agent attempt (#892). Routes through the
- * same launcher plumbing as `pr-feedback` — no new plugin needed. The
- * `evidenceHash` surfaces in launcher observability + PhaseTracker dedupe key.
- */
-export interface ValidateFixIntent {
-  kind: 'validate-fix';
-  /** PR number for logging/tracing */
-  prNumber: number;
-  /** Full prompt text (pre-built by ValidateFixHandler with stdout evidence) */
-  prompt: string;
-  /** 64-hex SHA-256 identity of the failing evidence — surfaces in logs. */
-  evidenceHash: string;
-  /** Provider breadcrumb (dispatch reads LaunchRequest.provider). */
-  provider?: string;
-  /** Optional model override, provider-interpreted. */
-  model?: string;
-  /** Optional reasoning-effort override, provider-interpreted. */
-  effort?: Effort;
-}
-
-/**
  * Intent for an engine-driven review pass (#1124). Routes through the same
  * launcher plumbing as `merge-conflict`. The engine builds the review charter
  * in-process and passes it as the prompt.
@@ -168,7 +147,6 @@ export interface InvokeIntent {
 export type ClaudeCodeIntent =
   | PhaseIntent
   | PrFeedbackIntent
-  | ValidateFixIntent
   | MergeConflictIntent
   | ReviewIntent
   | RemediateIntent

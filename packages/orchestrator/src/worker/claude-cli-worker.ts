@@ -8,7 +8,6 @@ import { createGitHubClient, createFeature, registerProcessLauncher, clearProces
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem, PhaseTracker, PrFeedbackMetadata } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter, WorkflowPhase } from './types.js';
-import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
 import {
@@ -151,10 +150,8 @@ export interface ClaudeCliWorkerDeps {
   /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
   tokenProvider?: () => Promise<string | undefined>;
   /**
-   * Optional PhaseTracker injected by the worker-mode wiring for #892's
-   * ValidateFixHandler dedupe. Also used by the #849 paired-clear callback.
-   * When absent, ValidateFixHandler is not constructed and the fix-cycle
-   * behavior degrades to "same as today" (base-advance re-runs still occur).
+   * Optional PhaseTracker injected by the worker-mode wiring. Used by the #849
+   * paired-clear callback. When absent, the paired-clear degrades to a no-op.
    */
   phaseTracker?: PhaseTracker;
   /**
@@ -756,7 +753,7 @@ export class ClaudeCliWorker {
 
       // 6. Build WorkerContext
       // #892: surface resume identity so PhaseLoop's validate `catch` can gate
-      // the ValidateFixHandler on the base-advance path.
+      // remediation routing on the base-advance path.
       const md = (item.metadata ?? {}) as Record<string, unknown>;
       const rawResumeReason = md['resumeReason'];
       const resumeReason =
@@ -925,16 +922,6 @@ export class ClaudeCliWorker {
       const phaseSequence = getPhaseSequence(item.workflowName, effectiveConfig.reviewPhaseEnabled);
       const phaseLoop = new PhaseLoop(workerLogger);
 
-      // #1129: thin remediate adapter for validate-origin remediations. The
-      // phase loop invokes it at the remediate seam (never a base-advance
-      // catch); escalation + dedupe are the loop's job now, so the handler no
-      // longer needs PhaseTracker or an event emitter.
-      const validateFixHandler = new ValidateFixHandler(
-        effectiveConfig,
-        this.agentLauncher,
-        workerLogger,
-      );
-
       // #1124: real review-phase executor. Spawns the CLI with an in-process
       // charter prompt, reads the agent-written findings sidecar, recomputes the
       // verdict engine-side, and persists the review artifact. The synchronous
@@ -1007,7 +994,6 @@ export class ClaudeCliWorker {
             round: artifact.round,
           };
         },
-        validateFixHandler,
         ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
         ...(this.phaseTracker ? { phaseTracker: this.phaseTracker } : {}),
         reviewPoster,

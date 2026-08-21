@@ -53,7 +53,7 @@ interface DepsHandles {
   onError: ReturnType<typeof vi.fn>;
   onRepeatedError: ReturnType<typeof vi.fn>;
   postFailureAlert: ReturnType<typeof vi.fn>;
-  handle: ReturnType<typeof vi.fn>;
+  remediateExecute: ReturnType<typeof vi.fn>;
   runValidatePhase: ReturnType<typeof vi.fn>;
   baseMergeRunner: ReturnType<typeof vi.fn>;
   phaseStarts: WorkflowPhase[];
@@ -68,7 +68,11 @@ function createDeps(
   const onError = vi.fn().mockResolvedValue(undefined);
   const onRepeatedError = vi.fn().mockResolvedValue(undefined);
   const postFailureAlert = vi.fn().mockResolvedValue(undefined);
-  const handle = vi.fn().mockResolvedValue(undefined);
+  // #1158: both origins converge on the single RemediateExecutor. The
+  // validate-origin backtrack synthesizes a changes-required finding, then
+  // dispatches through `remediateExecutor.execute` at the seam — the retired
+  // ValidateFixHandler adapter is gone.
+  const remediateExecute = vi.fn(async (): Promise<PhaseResult> => makeSuccessResult('remediate'));
 
   const runValidatePhase = opts.validateFailsThenPasses
     ? vi.fn().mockResolvedValueOnce(makeValidateFailure()).mockResolvedValue(makeSuccessResult('validate'))
@@ -136,7 +140,7 @@ function createDeps(
       } as any,
       failureFingerprintTracker: tracker as any,
       reviewExecutor: reviewExecutor as any,
-      validateFixHandler: { handle } as any,
+      remediateExecutor: { execute: remediateExecute } as any,
       baseMergeRunner: baseMergeRunner as any,
       remediateTrigger: (ctx: WorkerContext) =>
         readReviewArtifactSync(ctx.checkoutPath, workflowId)?.verdict === 'changes-required',
@@ -144,7 +148,7 @@ function createDeps(
     onError,
     onRepeatedError,
     postFailureAlert,
-    handle,
+    remediateExecute,
     runValidatePhase,
     baseMergeRunner,
     phaseStarts,
@@ -207,7 +211,7 @@ describe('PhaseLoop validate-failure remediate routing (#1129 T009)', () => {
   });
 
   it('failing validate self-heals via remediate → review → validate-green (SC-001 / SC-004)', async () => {
-    const { deps, handle, runValidatePhase, baseMergeRunner, phaseStarts, onError } = createDeps(
+    const { deps, remediateExecute, runValidatePhase, baseMergeRunner, phaseStarts, onError } = createDeps(
       checkoutPath,
       workflowId,
       { reviewPhaseEnabled: true, validateFailsThenPasses: true },
@@ -233,8 +237,9 @@ describe('PhaseLoop validate-failure remediate routing (#1129 T009)', () => {
     expect(phaseStarts[remediateIdx + 1]).toBe('review');
     expect(phaseStarts[remediateIdx + 2]).toBe('validate');
 
-    // The legacy adapter runs at exactly one site (the remediate seam).
-    expect(handle).toHaveBeenCalledTimes(1);
+    // #1158: the validate-origin backtrack dispatches through the single
+    // RemediateExecutor exactly once, at the seam.
+    expect(remediateExecute).toHaveBeenCalledTimes(1);
 
     // validate ran twice: the initial red, then the post-remediation green.
     expect(runValidatePhase).toHaveBeenCalledTimes(2);
@@ -287,7 +292,7 @@ describe('PhaseLoop validate-failure remediate routing (#1129 T009)', () => {
   });
 
   it('reviewPhaseEnabled = false keeps legacy escalation — routing is inert (SC-005)', async () => {
-    const { deps, handle, onError, onRepeatedError, baseMergeRunner } = createDeps(
+    const { deps, remediateExecute, onError, onRepeatedError, baseMergeRunner } = createDeps(
       checkoutPath,
       workflowId,
       { reviewPhaseEnabled: false, validateFailsThenPasses: false },
@@ -307,9 +312,9 @@ describe('PhaseLoop validate-failure remediate routing (#1129 T009)', () => {
     expect(result.lastPhase).toBe('validate');
 
     // Legacy escalation applies `failed:validate` (onError), and the routing
-    // branch never fires: no adapter dispatch, no -repeated backstop.
+    // branch never fires: no remediate dispatch, no -repeated backstop.
     expect(onError).toHaveBeenCalledWith('validate');
-    expect(handle).not.toHaveBeenCalled();
+    expect(remediateExecute).not.toHaveBeenCalled();
     expect(onRepeatedError).not.toHaveBeenCalledWith('validate');
 
     // Exactly one validate cycle → at most one base-merge.
