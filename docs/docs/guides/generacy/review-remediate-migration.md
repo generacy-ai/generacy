@@ -47,10 +47,11 @@ orchestrator:
   validateCommand: 'pnpm lint && pnpm format:check && pnpm typecheck && pnpm build'
 ```
 
-### Guardrails when the default command is auto-narrowed
+### Guardrails when the default command is auto-narrowed (`speckit-bugfix` only)
 
-If you leave `validateCommand` at the built-in monorepo default
-(`pnpm build && pnpm test`), the engine classifies each diff before narrowing it
+Auto-narrowing applies **only to the `speckit-bugfix` workflow**. On a bugfix run,
+if you leave `validateCommand` at the built-in monorepo default
+(`pnpm test && pnpm build`), the engine classifies each diff before narrowing it
 to a targeted `--filter "...[origin/<base>]"` run. The classifier is ordered and
 first-match-wins:
 
@@ -68,14 +69,21 @@ first-match-wins:
   the affected packages and their dependents.
 
 Setting `validateCommand` explicitly (as in the snippet above) pins your command
-verbatim and bypasses auto-narrowing entirely.
+verbatim and bypasses auto-narrowing entirely. Every other workflow — including
+`speckit-feature` — reaches the plain default command with no diff classification
+or narrowing.
 
 ## 3. Per-workflow configuration
 
 Review/remediate knobs live under `orchestrator.workflows.<name>`. Configure
-`speckit-feature` and `speckit-bugfix` independently — a key omitted from a
-workflow block falls through to the repo-level `orchestrator.*` value, then the
-cluster default.
+`speckit-feature` and `speckit-bugfix` independently. Precedence depends on the
+key:
+
+- `validateCommand` / `preValidateCommand` resolve **workflow → repo
+  (`orchestrator.*`) → cluster default** — the repo tier exists only for these two.
+- `maxRemediations`, `ciWaitTimeoutMs`, and the `review.*` sub-fields resolve
+  **workflow → built-in default**, with no repo tier. A key omitted from a
+  workflow block falls straight through to the built-in default.
 
 ```yaml title=".generacy/config.yaml"
 repos:
@@ -137,9 +145,12 @@ findings as an issue comment.
 - **Resume** by adding `completed:remediation-limit`. On resume the engine resets
   the remediation counter to `0` and clears the label so the gate re-arms.
 
-This replaces the retired `blocked:stuck-feedback-loop` dead-end — that label
-stranded a run permanently with no resume path. `waiting-for:remediation-limit`
-is a resumable pause, not a terminal block.
+`waiting-for:remediation-limit` is the resumable, flag-ON equivalent of the
+legacy `blocked:stuck-feedback-loop` bounded stop. That legacy label is **not
+retired** — it is still live on the default flag-OFF path (when the review phase
+is disabled), where it applies the pre-epic bounded stop. With the review phase
+enabled, the engine pauses on the resumable `waiting-for:remediation-limit`
+instead of a terminal block.
 
 ### `implementation-review` (relocated)
 
