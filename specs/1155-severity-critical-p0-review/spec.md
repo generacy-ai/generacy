@@ -17,6 +17,15 @@ So when the review agent dies before writing its findings sidecar — usage-limi
 - **Round ≥ 2, agent writes nothing.** The *prior engine artifact* is re-parsed as this round's candidate — `CandidateArtifactSchema` is non-strict and only reads `findings`, so the previous round's stamped findings survive as if the agent had re-confirmed them. Indistinguishable from "agent confirmed prior findings".
 - **Crash window.** Worker death between the agent's candidate write and the engine's atomic rewrite (`review-executor.ts:232-250`) leaves a strict-schema-invalid file → `readReviewArtifact` → `null` → the next write restarts `remediationCount` at 0, silently refilling the review↔remediate budget.
 
+## Clarifications
+
+### Session 2026-08-21 (Batch 1)
+
+- **Q1 (clean-signal contract) → A**: The sole signal for a legitimate `clean` verdict is a candidate written *this round* whose findings compute to `clean` ("proof of review"). A missing or stale candidate is never `clean`, regardless of exit code (including exit 0). The verdict signal is independent of the FR-001 exit-code gate.
+- **Q2 (candidate vs engine-artifact separation) → A**: Use a separate candidate file path. The agent writes the candidate; the engine reads it, writes the authoritative artifact to the existing path, then clears the candidate. A missing candidate next round = "nothing written this round". This also isolates the crash window, satisfying FR-004 for free.
+- **Q3 (persistence on failure) → A**: Persist nothing on a failed / no-verdict round — leave any prior-round engine artifact exactly as-is, preserving `round` and `remediationCount`; no fresh `clean` is ever written.
+- **Q4 (`round` advancement on failure) → A**: `round` advances only when a review completes and produces a fresh verdict; a failed / timed-out round does not consume the counter (consistent with Q3-A), so repeated failures cannot burn the `#1128` remediate cap.
+
 ## User Stories
 
 ### US1: Failed review does not pass as clean (Primary)
@@ -55,9 +64,9 @@ So when the review agent dies before writing its findings sidecar — usage-limi
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | The review executor MUST propagate the child CLI exit code and timeout into `PhaseResult` (`success` reflects `exitCode === 0`; timeout ⇒ `success: false`), instead of the hardcoded `success: true, exitCode: 0`. | P0 | Mirror `remediate-executor.ts:225-231`. |
-| FR-002 | After a failed / timed-out CLI, a missing or unchanged findings sidecar MUST be treated as a phase failure, NOT a `clean` verdict. The engine MUST NOT persist a `clean` artifact in this case. | P0 | Distinguish "agent verified, found nothing" from "agent never ran / produced nothing". |
-| FR-003 | The engine MUST be able to distinguish a candidate written *this round* from an engine-authoritative artifact left by a prior round (separate path, or a per-round written marker). | P0 | Fixes round ≥ 2 stale re-ingestion. |
-| FR-004 | A worker crash between the agent's candidate write and the engine's rewrite MUST NOT silently reset `remediationCount`. | P1 | Crash-window resilience. |
+| FR-002 | The sole signal for a legitimate `clean` verdict is a candidate written *this round* whose findings compute to `clean` ("proof of review", Q1-A). A missing or stale (not-written-this-round) candidate is NEVER `clean`, regardless of the CLI exit code — including exit 0. In that case the engine treats the round as a failure/no-verdict and MUST NOT persist any artifact (Q3-A): any prior-round engine artifact is left exactly as-is, so `round` and `remediationCount` are preserved and no fresh `clean` is written. A first-round failure ⇒ no artifact exists ⇒ nothing to advance. | P0 | Verdict signal (fresh candidate) is independent of the exit-code gate (FR-001). Closes the exit-0-but-no-fresh-sidecar gap. |
+| FR-003 | Candidate findings MUST be written to a separate candidate file path (e.g. `review-candidate-<id>.json`), distinct from the engine-authoritative artifact path (Q2-A). The agent writes the candidate; the engine reads it, writes the authoritative artifact to the existing path, then clears the candidate. A missing candidate on the next round is unambiguously "nothing written this round". | P0 | Fixes round ≥ 2 stale re-ingestion. The agent's write target is supplied via the charter `sidecarRelPath` value — a caller-supplied path change, not an edit to charter prompt text. |
+| FR-004 | A worker crash between the agent's candidate write and the engine's rewrite MUST NOT silently reset `remediationCount`. Satisfied for free by FR-003's separate candidate path: the engine artifact stays intact through the crash window. | P1 | Crash-window resilience. |
 | FR-005 | When the review phase fails per FR-001/FR-002, the loop MUST NOT advance to `validate`, MUST NOT mark the PR ready, and MUST NOT resolve external feedback threads with a "loop completed" reply. | P0 | Downstream consumers gated on `result.success` / `verdict === 'clean'`. |
 | FR-006 | Regression tests MUST cover the missing-sidecar, timeout, non-zero-exit, round ≥ 2 no-op, and crash-window paths. | P0 | Explicit fix-direction ask in the issue. |
 | FR-007 | Existing happy-path behaviour (agent writes valid candidate, engine recomputes verdict, `#1131` empty-window short-circuit, `#1128` `remediationCount` carry-forward) MUST remain unchanged. | P0 | No regression to the working path. |
