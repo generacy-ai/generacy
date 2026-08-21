@@ -42,13 +42,58 @@ describe('evaluateCiReadiness', () => {
     const { github } = githubReturning([
       {
         runs: [{ status: 'completed', conclusion: 'success' }],
-        source: 'actions-runs',
+        source: 'check-runs',
       },
     ]);
     const readiness = await evaluateCiReadiness({ github, ...baseParams });
     expect(readiness.verdict).toBe('green');
     expect(readiness.runCount).toBe(1);
+    expect(readiness.source).toBe('check-runs');
+  });
+
+  // #1157 FR-007 (Q5→C): the actions/runs fallback is blind to third-party
+  // required checks, so a would-be `green` aggregated from it is failed-closed
+  // to `not-passed`. See contracts/fr-007-fallback-guard.md.
+  it('actions-runs + would-be green → downgraded to not-passed (FR-007)', async () => {
+    const { github } = githubReturning([
+      {
+        runs: [{ status: 'completed', conclusion: 'success' }],
+        source: 'actions-runs',
+      },
+    ]);
+    const readiness = await evaluateCiReadiness({ github, ...baseParams });
+    expect(readiness.verdict).toBe('not-passed');
     expect(readiness.source).toBe('actions-runs');
+  });
+
+  it('check-runs + green → stays green (FR-007 guard does not fire)', async () => {
+    const { github } = githubReturning([
+      {
+        runs: [{ status: 'completed', conclusion: 'success' }],
+        source: 'check-runs',
+      },
+    ]);
+    const readiness = await evaluateCiReadiness({ github, ...baseParams });
+    expect(readiness.verdict).toBe('green');
+  });
+
+  it('actions-runs + pending → unchanged (only green is downgraded)', async () => {
+    const { github } = githubReturning([
+      { runs: [], source: 'actions-runs' },
+    ]);
+    const readiness = await evaluateCiReadiness({ github, ...baseParams });
+    expect(readiness.verdict).toBe('pending');
+  });
+
+  it('actions-runs + not-passed → unchanged (already blocked)', async () => {
+    const { github } = githubReturning([
+      {
+        runs: [{ status: 'completed', conclusion: 'failure' }],
+        source: 'actions-runs',
+      },
+    ]);
+    const readiness = await evaluateCiReadiness({ github, ...baseParams });
+    expect(readiness.verdict).toBe('not-passed');
   });
 });
 

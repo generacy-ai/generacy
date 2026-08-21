@@ -279,3 +279,122 @@ describe('#1133 — CI-aware merge gate (phase-loop)', () => {
     expect(context.github.getCiRunsForSha).not.toHaveBeenCalled();
   });
 });
+
+// #1157 — red CI must not silently complete the workflow.
+describe('#1157 — red-CI pause (phase-loop)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+  let checkoutPath: string;
+
+  beforeEach(async () => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+    checkoutPath = await mkdtemp(path.join(tmpdir(), 'phase-loop-ci-1157-'));
+  });
+
+  afterEach(async () => {
+    await rm(checkoutPath, { recursive: true, force: true });
+  });
+
+  it('SC-001/SC-003/FR-009: validate success + not-passed verdict pauses on waiting-for:ci, never grants completed:validate, posts a reason comment', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    // Recoverable pause, not a silent completion.
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    // onGateHit('validate', 'waiting-for:ci') is what applies waiting-for:ci +
+    // agent:paused and removes phase:validate (FR-009). Never the review gate.
+    expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('validate', 'waiting-for:ci');
+    expect(deps.labelManager.onGateHit).not.toHaveBeenCalledWith(
+      'validate',
+      'waiting-for:implementation-review',
+    );
+    // INV-2: completed:validate is NEVER granted on the red path.
+    expect(deps.labelManager.onPhaseComplete).not.toHaveBeenCalledWith('validate');
+    // FR-004: a best-effort reason comment is attempted.
+    expect(context.github.addIssueComment).toHaveBeenCalled();
+    // The readout was actually consulted (a real red verdict, not a fast-fail).
+    expect(context.github.getCiRunsForSha).toHaveBeenCalled();
+  });
+
+  it('SC-002: the red path does not complete the phase or re-mark the PR ready a second time', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    // markReadyForReview fires exactly once (before the CI wait); the red path
+    // returns without a second flip.
+    expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
+    // No completion label surgery for validate.
+    expect(deps.labelManager.onPhaseComplete).not.toHaveBeenCalledWith('validate');
+  });
+
+  it('SC-004: getCurrentCommitSha throwing fast-fails into the pause without polling CI (no getCiRunsForSha)', async () => {
+    // Start at `validate` so the `implement` product-diff guard (the only phase in
+    // PHASES_REQUIRING_CHANGES, which also consumes getCurrentCommitSha) is skipped;
+    // the sole getCurrentCommitSha caller is then the validate-phase CI-readiness fast-fail.
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'success' }],
+      startPhase: 'validate',
+    });
+    (context.github.getCurrentCommitSha as any).mockRejectedValue(
+      new Error('detached HEAD / no commit'),
+    );
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      // A long timeout: if the fast-fail regressed into waitForCiGreen this would
+      // hang well past the test budget. It must return immediately instead.
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('validate', 'waiting-for:ci');
+    expect(deps.labelManager.onPhaseComplete).not.toHaveBeenCalledWith('validate');
+    // FR-005 ordering guarantee: the readout is never invoked on the fast-fail path.
+    expect(context.github.getCiRunsForSha).not.toHaveBeenCalled();
+  });
+
+  it("SC-004: getCurrentCommitSha returning the 'unknown' sentinel also fast-fails without polling", async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'success' }],
+      startPhase: 'validate',
+    });
+    (context.github.getCurrentCommitSha as any).mockResolvedValue('unknown');
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('validate', 'waiting-for:ci');
+    expect(context.github.getCiRunsForSha).not.toHaveBeenCalled();
+  });
+});

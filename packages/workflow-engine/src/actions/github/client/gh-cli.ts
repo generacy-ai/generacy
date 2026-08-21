@@ -1706,6 +1706,18 @@ export class GhCliGitHubClient implements GitHubClient {
       primaryError = err instanceof Error ? err.message : String(err);
     }
 
+    // #1157 FR-007: this fallback only enumerates GitHub-Actions `workflow_runs`
+    // for the branch (filtered client-side to the head SHA). It is BLIND to
+    // third-party required checks (external status contexts), so a `green`
+    // aggregated from these runs may be a false green. The primary path is used
+    // only when `check-runs` failed — the canonical symptom of a token lacking
+    // `checks:read`. To close the false-green hole, `evaluateCiReadiness`
+    // (packages/orchestrator/src/worker/ci-merge-readiness.ts) fails-closed:
+    // when `source === 'actions-runs'` a would-be `green` is downgraded to
+    // `not-passed`. Operator note: a `checks:read`-lacking cluster fails closed
+    // (CI merge readiness never reports green via this fallback); granting the
+    // token `checks:read` restores full third-party-check visibility via the
+    // primary `check-runs` path.
     const fallback = await this.executeGh([
       'api',
       '--paginate',
