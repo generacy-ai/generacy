@@ -443,6 +443,17 @@ export interface GitHubClient {
   stashPop(): Promise<{ success: boolean; conflicts: boolean }>;
 
   /**
+   * Discard all working-tree changes: hard-reset tracked files to HEAD and
+   * remove untracked files/directories. Used to guarantee "branch untouched"
+   * when abandoning a phase's partial work.
+   *
+   * @param excludePaths gitignore-style patterns forwarded to `git clean -e`
+   *   so caller-owned state (e.g. orchestrator sidecars under `.generacy/`)
+   *   survives the clean.
+   */
+  discardWorkingTreeChanges(excludePaths?: string[]): Promise<void>;
+
+  /**
    * Get list of files with merge conflicts
    */
   getConflictedFiles(): Promise<string[]>;

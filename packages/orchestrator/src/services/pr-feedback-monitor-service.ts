@@ -51,6 +51,15 @@ export interface SetWebhooksConfiguredOptions {
 const WAITING_FOR_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
 const MIN_POLL_INTERVAL_MS = 10000;
 /**
+ * Non-completing loop-exit pause gates (#1159, review follow-up). These gates
+ * exit the review/remediate loop WITHOUT `loopResult.completed`, so the
+ * external-feedback convergence resolver is bypassed and human threads stay
+ * unresolved. Re-enqueuing while they persist would reset the remediation
+ * budget every poll (#883 runaway). `waiting-for:remediation-limit`, `failed:*`
+ * and `blocked:*` are handled by their own dedicated skips.
+ */
+const NON_COMPLETING_PAUSE_GATES = ['waiting-for:merge-conflicts', 'waiting-for:ci'];
+/**
  * Adaptive polling divisor for PR feedback monitor.
  * Per US4: "Polling interval decreases by 50%" → divide by 2.
  * This differs from LabelMonitorService which uses ADAPTIVE_DIVISOR = 3.
@@ -568,6 +577,67 @@ export class PrFeedbackMonitorService {
       );
       // Idempotent-state hygiene: keep the transition-log map fresh so the
       // next non-blocked poll doesn't look like a fresh transition.
+      this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
+      return false;
+    }
+
+    // #1159 FR-003: blanket failed:* re-enqueue skip. Mirrors the blocked:*
+    // short-circuit above (prefix match, no allow-list). Placed AFTER the
+    // waiting-for:remediation-limit and blocked:fixer-timeout retry-eligible
+    // carve-outs so those remain reachable.
+    //
+    // On a non-completing loop exit (phase-failure escalation like
+    // failed:review / failed:validate-repeated, or a non-convergence gate) the
+    // convergence resolver is bypassed and human threads stay unresolved, so the
+    // monitor would otherwise re-enqueue on every poll while the unresolved
+    // external threads persist. Each re-enqueue reaches clearReviewArtifact and
+    // wipes the remediation budget, restarting the seed-aware executor at
+    // remediationCount 0 — the on-remediation-limit cap is per-entry and never
+    // fires globally, re-introducing the #883 runaway this feature retires.
+    // The operator removes the failed:* label to grant a fresh attempt (already
+    // the resume convention for failed:review / failed:validate-repeated); a
+    // genuinely new external review posts new threads that change the unresolved
+    // set and legitimately re-arm the trigger.
+    const failedLabel = issueLabels.find(l => l.startsWith('failed:'));
+    if (failedLabel) {
+      this.logger.info(
+        {
+          owner, repo, prNumber, issueNumber,
+          failedLabel,
+          unresolvedThreads: unresolvedThreadIds.length,
+          reason: 'failed-label-present',
+          gate: 'failed-label-present',
+        },
+        'Skipping PR-feedback enqueue while failed:* label is present',
+      );
+      this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
+      return false;
+    }
+
+    // #1159 FR-003 (review follow-up): the two OTHER non-completing loop exits
+    // named in the spec (§Defect 1) — a base-merge-conflict pause
+    // (`waiting-for:merge-conflicts`) and the on-ci-green pause
+    // (`waiting-for:ci`). Like `failed:*` and `waiting-for:remediation-limit`,
+    // these gates exit the loop WITHOUT `loopResult.completed`, so the
+    // external-feedback convergence resolver is bypassed and the human threads
+    // stay unresolved. Without this skip the monitor re-enqueues on every poll
+    // while those threads persist; each re-entry reaches `clearReviewArtifact`
+    // (claude-cli-worker.ts) and resets `remediationCount` to 0 — the #883
+    // budget-reset runaway this feature retires. The gate clears when the
+    // underlying pause resolves (conflict fixed / CI green) or an operator
+    // removes it, which re-arms the trigger.
+    const pauseGate = issueLabels.find(l => NON_COMPLETING_PAUSE_GATES.includes(l));
+    if (pauseGate) {
+      this.logger.info(
+        {
+          owner, repo, prNumber, issueNumber,
+          pauseGate,
+          unresolvedThreads: unresolvedThreadIds.length,
+          reason: 'non-completing-pause-gate-present',
+          gate: 'non-completing-pause-gate-present',
+        },
+        'Skipping PR-feedback enqueue while a non-completing pause gate is present',
+      );
       this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
       return false;
     }

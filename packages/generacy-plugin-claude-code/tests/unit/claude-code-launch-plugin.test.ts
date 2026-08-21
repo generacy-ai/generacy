@@ -3,7 +3,6 @@ import { ClaudeCodeLaunchPlugin } from '../../src/launch/claude-code-launch-plug
 import type {
   PhaseIntent,
   PrFeedbackIntent,
-  ValidateFixIntent,
   MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,
@@ -19,8 +18,8 @@ describe('ClaudeCodeLaunchPlugin', () => {
       expect(plugin.pluginId).toBe('claude-code');
     });
 
-    it('supports phase, pr-feedback, validate-fix, merge-conflict, review, remediate, conversation-turn, and invoke kinds', () => {
-      expect(plugin.supportedKinds).toEqual(['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'review', 'remediate', 'conversation-turn', 'invoke']);
+    it('supports phase, pr-feedback, merge-conflict, review, remediate, conversation-turn, and invoke kinds', () => {
+      expect(plugin.supportedKinds).toEqual(['phase', 'pr-feedback', 'merge-conflict', 'review', 'remediate', 'conversation-turn', 'invoke']);
     });
   });
 
@@ -310,22 +309,6 @@ describe('ClaudeCodeLaunchPlugin', () => {
       ]);
     });
 
-    it('validate-fix intent argv is unchanged when model + effort are both unset', () => {
-      const spec = plugin.buildLaunch({
-        kind: 'validate-fix',
-        prNumber: 42,
-        prompt: 'fix validate failures',
-        evidenceHash: 'a'.repeat(64),
-      });
-      expect(spec.args).toEqual([
-        '-p',
-        '--output-format', 'stream-json',
-        '--dangerously-skip-permissions',
-        '--verbose',
-        'fix validate failures',
-      ]);
-    });
-
     it('merge-conflict intent argv is unchanged when model + effort are both unset', () => {
       const spec = plugin.buildLaunch({
         kind: 'merge-conflict',
@@ -385,26 +368,6 @@ describe('ClaudeCodeLaunchPlugin', () => {
       expect(spec.args[effortIdx + 1]).toBe('high');
       // Prompt remains the last argument.
       expect(spec.args[spec.args.length - 1]).toBe('x');
-    });
-
-    it('validate-fix intent pushes --model and --effort in that order', () => {
-      const intent: ValidateFixIntent = {
-        kind: 'validate-fix',
-        prNumber: 42,
-        prompt: 'fix',
-        evidenceHash: 'b'.repeat(64),
-        model: 'opus-4-7',
-        effort: 'high',
-      };
-      const spec = plugin.buildLaunch(intent);
-      const modelIdx = spec.args.indexOf('--model');
-      const effortIdx = spec.args.indexOf('--effort');
-      expect(modelIdx).toBeGreaterThan(-1);
-      expect(effortIdx).toBe(modelIdx + 2);
-      expect(spec.args[modelIdx + 1]).toBe('opus-4-7');
-      expect(spec.args[effortIdx + 1]).toBe('high');
-      // Prompt remains the last argument (unchanged shape).
-      expect(spec.args[spec.args.length - 1]).toBe('fix');
     });
 
     it('merge-conflict intent pushes --model and --effort in that order', () => {

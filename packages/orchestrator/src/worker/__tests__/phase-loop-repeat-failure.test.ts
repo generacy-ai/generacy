@@ -24,7 +24,7 @@ const SNAPPOLL_PHASE: WorkflowPhase = 'implement';
 // no-product-code-changes site. This mirrors what buildErrorEvidence produces
 // downstream of the no-product-code-changes classifier. #1107 rewrote the
 // reason to the phase-scoped shape (own-commit files since the start ref, both
-// exclusion sets); #1162 extended EXCLUDED_PATH_PREFIXES with the three engine
+// exclusion sets); #1162 extended EXCLUDED_PATH_PREFIXES with the five engine
 // sidecar prefixes. This fixture tracks that message verbatim so the
 // fingerprint invariant stays load-bearing.
 const SNAPPOLL_EVIDENCE = {
@@ -34,7 +34,8 @@ const SNAPPOLL_EVIDENCE = {
   reason:
     'Phase "implement" produced no product-code changes — every file touched by the phase\'s own ' +
     'commits (since a1b2c3d4) is under an excluded prefix ' +
-    '[specs/, .generacy/review-findings-, .generacy/review-candidate-, .generacy/pause-context-] ' +
+    '[specs/, .generacy/review-findings-, .generacy/review-candidate-, .generacy/pause-context-, ' +
+    '.generacy/external-feedback-, .generacy/workflow-state-] ' +
     'or is an excluded agent-context file [CLAUDE.md, AGENTS.md, GEMINI.md, .github/copilot-instructions.md]. ' +
     'Own-commit files: [specs/942/tasks.md]. Implement must modify at least one product file.',
 };
