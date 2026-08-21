@@ -110,12 +110,12 @@ prevented or clearly understood.
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | A `not-passed` CI merge-readiness verdict on a successful `validate` MUST NOT result in `completed: true`. | P0 | Core P0 fix. |
-| FR-002 | The `not-passed` path MUST enter a recoverable, operator-visible paused state (gate label + `agent:paused`), symmetric with the existing `timeout` → `waiting-for:ci` pause. | P0 | Reuse `waiting-for:ci` or a `failed:validate`-class label; must not be terminal `blocked:*`. |
+| FR-002 | The `not-passed` path MUST enter a recoverable, operator-visible paused state (gate label + `agent:paused`), symmetric with the existing `timeout` → `waiting-for:ci` pause. | P0 | Reuses `waiting-for:ci` (Q2 → A); must not be terminal `blocked:*`. On resume, re-runs `validate` (Q3 → A). |
 | FR-003 | `completed:validate` (and any other merge-eligible label) MUST NOT be granted on the `not-passed` path. | P0 | Prevents cockpit treating the red PR as merge-eligible. |
 | FR-004 | On the `not-passed` pause, a comment naming the red-CI reason MUST be posted to the issue, best-effort (a comment failure MUST NOT alter the pause). | P1 | Mirrors the `remediation-limit` gate-body pattern. |
 | FR-005 | When the head SHA cannot be resolved, the CI wait MUST fail fast rather than polling the `'unknown'` sentinel for the full `ciWaitTimeoutMs`. | P1 | `phase-loop.ts:1278-1295`. |
 | FR-006 | `aggregateCiVerdict` MUST treat `startup_failure` and `stale` as failing terminal conclusions (→ `not-passed`). | P2 | `ci-verdict.ts` `FAILING_CONCLUSIONS`. |
-| FR-007 | The `actions/runs` fallback readout MUST guard against or clearly document that third-party required checks are invisible on the token-limited path. | P3 | `gh-cli.ts:1709-1739`. |
+| FR-007 | The `actions/runs` fallback readout MUST guard against declaring `green` when the token is known to lack `checks:read` (fallback actually used), and document the limitation at the readout site + operator docs otherwise (Q5 → C). | P3 | `gh-cli.ts:1709-1739`. |
 | FR-008 | With `ciMergeGateEnabled` off, behavior MUST be byte-identical to today. | P0 | Flag-gated; no regression to non-gated clusters. |
 | FR-009 | The `not-passed` terminal path MUST gain automated test coverage (the current gap). | P0 | Alongside existing `skipped`/`green` tests. |
 
@@ -130,17 +130,35 @@ prevented or clearly understood.
 | SC-005 | Hard-failure verdict | `startup_failure` / `stale` → `not-passed` | Unit test on `aggregateCiVerdict`. |
 | SC-006 | No regression when flag off | Byte-identical completion behavior | Existing `ciMergeGateEnabled=false` tests remain green. |
 
+## Clarified Decisions (Batch 1 — 2026-08-21)
+
+- **Recoverable state (Q1 → A)**: the `not-passed` path pauses with a `waiting-for:*`
+  gate + `agent:paused` — recoverable, symmetric with the existing timeout pause. No
+  terminal `blocked:*`, no `failed:validate`-class escalation, no bounded re-check
+  escalation.
+- **Gate label identity (Q2 → A)**: the `not-passed` pause reuses the existing
+  `waiting-for:ci` label. Red-CI and timeout are disambiguated only by the reason
+  comment, keeping a single `GATE_MAPPING['ci']` resume path.
+- **Resume semantics (Q3 → A)**: when the gate is satisfied (operator adds the
+  `completed:*` label), the workflow re-runs `validate` — re-marks ready, re-waits CI
+  on the new head SHA, and re-evaluates the merge gate. Resume never skips straight to
+  completion.
+- **Head-SHA fast-fail landing (Q4 → A)**: the missing-head-SHA fast-fail lands in the
+  same pause state as red CI (reuse the `waiting-for:ci` gate + label), differentiated
+  only by the reason comment/log.
+- **FR-007 fallback treatment (Q5 → C)**: conservative middle — the `actions/runs`
+  fallback guards (never yields `green`) only when the token is known to lack
+  `checks:read` (i.e. the fallback was actually used); otherwise the limitation is
+  documented at the readout site and in operator docs.
+
 ## Assumptions
 
-- The intended recoverable state is a pause; whether it reuses `waiting-for:ci` or a
-  new gate label (and whether a `failed:validate`-class escalation is preferred over
-  a pause) is a clarification for `/speckit:clarify`.
 - `waitForCiGreen` remains the single readiness driver; the fix threads the
   `not-passed` outcome into a pause branch rather than into the `on-ci-green` gate.
 - The head-SHA fast-fail surfaces as an operator-visible pause (same class as the
   red-CI pause), not a silent completion.
-- FR-007 may ship as documentation + a conservative guard rather than a full
-  third-party-check integration (which is out of scope).
+- Full third-party-check integration is out of scope (see Out of Scope); FR-007 ships
+  as documentation + the conservative `checks:read`-gated guard per Q5.
 
 ## Out of Scope
 
