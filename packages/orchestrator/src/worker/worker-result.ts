@@ -23,7 +23,18 @@ export interface FailureMetadata {
  * deadlock guard per #902 Q1).
  */
 export type PostCompleteAction =
-  | { readonly kind: 'rearm'; readonly rearmItem: QueueItem };
+  | {
+      readonly kind: 'rearm';
+      readonly rearmItem: QueueItem;
+      /**
+       * FR-008 (#1164) — invoked by the dispatcher AFTER `enqueueIfAbsent`
+       * resolves (on enqueued AND dropped, NOT on throw). Clears the ownership
+       * (`agent:*`) labels. Built by the worker (which holds the `GitHubClient`);
+       * the dispatcher has none in worker mode. Best-effort: a failure must not
+       * fail the dispatch.
+       */
+      readonly afterEnqueue?: () => Promise<void>;
+    };
 
 export interface CompletedResult {
   readonly status: 'completed';
