@@ -122,6 +122,24 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
   }
 
   /**
+   * Canonical `GitHubClient` fake for the convergence path (#1161). The executor
+   * always resolves a review delta (`resolvePrBaseRef` → `computeReviewDelta`)
+   * before spawning, which needs `getDefaultBranch`, `commitExistsInCheckout`,
+   * and `getFilesChangedBetween` in addition to `getCurrentCommitSha`. Defaults
+   * drive the round-1 full-diff fallback (no last-reviewed SHA resolves) with an
+   * empty changed-file set; override per test as needed.
+   */
+  function makeGithub(overrides: Record<string, unknown> = {}): GitHubClient {
+    return {
+      getCurrentCommitSha: vi.fn().mockResolvedValue('deadbeef'),
+      getDefaultBranch: vi.fn().mockResolvedValue('main'),
+      commitExistsInCheckout: vi.fn().mockResolvedValue(false),
+      getFilesChangedBetween: vi.fn().mockResolvedValue([]),
+      ...overrides,
+    } as unknown as GitHubClient;
+  }
+
+  /**
    * Fake launcher whose `launch()` writes the agent *candidate* sidecar (with a
    * deliberately-wrong `verdict: 'clean'` alongside a critical open finding),
    * then resolves the child. `readCandidateFindings` runs after `exitPromise`,
@@ -185,7 +203,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
 
     const getCurrentCommitSha = vi.fn().mockResolvedValue('deadbeef');
     const ghReview = vi.fn();
-    const github = { getCurrentCommitSha, review: ghReview } as unknown as GitHubClient;
+    const github = makeGithub({ getCurrentCommitSha, review: ghReview });
 
     const executor = new ReviewExecutor({
       agentLauncher: launcher,
@@ -205,8 +223,10 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
     expect(req.intent.kind).toBe('review');
 
     // SC-003: no GitHub review API was touched — only getCurrentCommitSha.
+    // #1161: the convergence path reads HEAD twice — once for the delta window
+    // (full-diff fallback head) and once to stamp `lastReviewedCommitSha`.
     expect(ghReview).not.toHaveBeenCalled();
-    expect(getCurrentCommitSha).toHaveBeenCalledTimes(1);
+    expect(getCurrentCommitSha).toHaveBeenCalledTimes(2);
 
     // SC-004: engine recomputed the verdict from findings, ignoring the claim.
     const persisted = await readReviewArtifact(checkoutPath, workflowId);
@@ -232,9 +252,9 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
       ],
     };
     const { launcher } = makeLauncher(candidate);
-    const github = {
+    const github = makeGithub({
       getCurrentCommitSha: vi.fn().mockResolvedValue('cafef00d'),
-    } as unknown as GitHubClient;
+    });
 
     const executor = new ReviewExecutor({
       agentLauncher: launcher,
@@ -263,9 +283,9 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
 
     const candidate = { findings: [] };
     const { launcher } = makeLauncher(candidate);
-    const github = {
+    const github = makeGithub({
       getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
-    } as unknown as GitHubClient;
+    });
 
     const executor = new ReviewExecutor({
       agentLauncher: launcher,
@@ -286,7 +306,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
       // Agent exits 0 but writes no candidate — no proof of review.
       const { launcher } = makeLauncherWith({});
       const getCurrentCommitSha = vi.fn().mockResolvedValue('sha');
-      const github = { getCurrentCommitSha } as unknown as GitHubClient;
+      const github = makeGithub({ getCurrentCommitSha });
 
       const executor = new ReviewExecutor({
         agentLauncher: launcher,
@@ -299,9 +319,10 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
 
       expect(result.success).toBe(false);
       expect(result.exitCode).toBe(0);
-      // Nothing persisted, and the engine never got as far as stamping a commit.
+      // Nothing persisted. #1161: the delta reads HEAD once, but the stamp write
+      // never runs — so exactly one call proves nothing was persisted.
       expect(await readReviewArtifact(checkoutPath, workflowId)).toBeNull();
-      expect(getCurrentCommitSha).not.toHaveBeenCalled();
+      expect(getCurrentCommitSha).toHaveBeenCalledTimes(1);
     });
 
     it('(b) non-zero exit → success:false, exitCode:1, no artifact (even with a valid candidate)', async () => {
@@ -310,9 +331,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
         onLaunch: () => writeCandidateFile({ findings: [] }),
         process: makeProcess(1),
       });
-      const github = {
-        getCurrentCommitSha: vi.fn().mockResolvedValue('sha'),
-      } as unknown as GitHubClient;
+      const github = makeGithub({ getCurrentCommitSha: vi.fn().mockResolvedValue('sha') });
 
       const executor = new ReviewExecutor({
         agentLauncher: launcher,
@@ -335,9 +354,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
         shutdownGracePeriodMs: 10,
       } as WorkerConfig;
       const { launcher } = makeLauncherWith({ process: makeHangingProcess(null) });
-      const github = {
-        getCurrentCommitSha: vi.fn().mockResolvedValue('sha'),
-      } as unknown as GitHubClient;
+      const github = makeGithub({ getCurrentCommitSha: vi.fn().mockResolvedValue('sha') });
 
       const executor = new ReviewExecutor({
         agentLauncher: launcher,
@@ -376,9 +393,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
 
       // Agent exits 0 but writes no candidate this round.
       const { launcher } = makeLauncherWith({});
-      const github = {
-        getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
-      } as unknown as GitHubClient;
+      const github = makeGithub({ getCurrentCommitSha: vi.fn().mockResolvedValue('newsha') });
 
       const executor = new ReviewExecutor({
         agentLauncher: launcher,
@@ -417,9 +432,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
           await writeFile(filePath, '{ not valid json', 'utf-8');
         },
       });
-      const github = {
-        getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
-      } as unknown as GitHubClient;
+      const github = makeGithub({ getCurrentCommitSha: vi.fn().mockResolvedValue('newsha') });
 
       const executor = new ReviewExecutor({
         agentLauncher: launcher,
@@ -435,6 +448,148 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
       expect(persisted!.round).toBe(3);
       expect(persisted!.remediationCount).toBe(3);
       expect(persisted!.lastReviewedCommitSha).toBe('stable');
+    });
+  });
+
+  describe('#1161 convergence anti-vanish (SC-005 / US1 AC2 / AC3 / FR-007)', () => {
+    /**
+     * Seed a prior round-1 engine artifact (ids are backfilled deterministically
+     * on read, so they may be omitted here).
+     */
+    async function seedPrior(prior: unknown): Promise<void> {
+      const priorPath = getReviewArtifactPath(checkoutPath, workflowId);
+      await mkdir(path.dirname(priorPath), { recursive: true });
+      await writeFile(priorPath, JSON.stringify(prior), 'utf-8');
+    }
+
+    it('carries a round-1 open finding forward as open (verdict stays changes-required) when the round-2 candidate omits it, never reopens a resolved finding, and scopes the delta to lastReviewedCommitSha', async () => {
+      await seedPrior({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior open finding',
+            detail: 'Raised in round 1, unaddressed.',
+            round: 1,
+            status: 'open',
+          },
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior resolved finding',
+            detail: 'Already resolved in round 1.',
+            round: 1,
+            status: 'resolved',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'r1sha',
+        remediationCount: 0,
+      });
+
+      // Round-2 candidate reports NOTHING — the agent silently omits the prior
+      // open finding and does not confirm the resolved one.
+      const { launcher } = makeLauncher({ findings: [] });
+
+      const getFilesChangedBetween = vi.fn().mockResolvedValue(['src/b.ts']);
+      const getCurrentCommitSha = vi.fn().mockResolvedValue('r2head');
+      const commitExistsInCheckout = vi.fn().mockResolvedValue(true);
+      const github = makeGithub({
+        getCurrentCommitSha,
+        commitExistsInCheckout,
+        getFilesChangedBetween,
+      });
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(makeContext(github));
+      expect(result.success).toBe(true);
+
+      // AC2 / FR-007: the round-2 delta is scoped to the last-reviewed base, not
+      // a full re-diff from the PR base.
+      expect(commitExistsInCheckout).toHaveBeenCalledWith('r1sha');
+      expect(getFilesChangedBetween).toHaveBeenCalledWith('r1sha', 'r2head');
+
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted).not.toBeNull();
+      expect(persisted!.round).toBe(2);
+
+      const open = persisted!.findings.find((f) => f.title === 'Prior open finding');
+      const resolved = persisted!.findings.find((f) => f.title === 'Prior resolved finding');
+
+      // SC-005 anti-vanish: the omitted round-1 finding is neither dropped nor
+      // flipped — it stays open.
+      expect(open).toBeDefined();
+      expect(open!.status).toBe('open');
+
+      // AC3 monotonic: the resolved finding is never reopened.
+      expect(resolved).toBeDefined();
+      expect(resolved!.status).toBe('resolved');
+
+      // Verdict is recomputed from the merged set and stays changes-required
+      // because the open critical finding survived the merge.
+      expect(persisted!.verdict).toBe('changes-required');
+      expect(persisted!.lastReviewedCommitSha).toBe('r2head');
+    });
+
+    it('transitions a prior open finding to resolved ONLY when its file is in the delta AND the candidate confirms it (evidence-based), yielding a clean verdict', async () => {
+      await seedPrior({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior open finding',
+            detail: 'Raised in round 1.',
+            round: 1,
+            status: 'open',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'r1sha',
+        remediationCount: 0,
+      });
+
+      // Round-2 candidate confirms the SAME finding (matching file+title ⇒
+      // matching deterministic id) as resolved.
+      const { launcher } = makeLauncher({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior open finding',
+            detail: 'Now fixed by the delta.',
+            status: 'resolved',
+          },
+        ],
+      });
+
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue('r2head'),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        // The finding's file IS in the delta window (evidence the delta touched it).
+        getFilesChangedBetween: vi.fn().mockResolvedValue(['src/a.ts']),
+      });
+
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      await executor.execute(makeContext(github));
+
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      const finding = persisted!.findings.find((f) => f.title === 'Prior open finding');
+      expect(finding!.status).toBe('resolved');
+      expect(persisted!.verdict).toBe('clean');
     });
   });
 
@@ -492,9 +647,7 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
     it('SC-002: non-empty window passes the exact baseSha..headSha range to the charter and spawns', async () => {
       const [sha0, sha1] = await initRepoWithCommits(checkoutPath, 2);
       const { launcher, launch } = makeLauncher({ findings: [] });
-      const github = {
-        getCurrentCommitSha: vi.fn().mockResolvedValue('newsha'),
-      } as unknown as GitHubClient;
+      const github = makeGithub({ getCurrentCommitSha: vi.fn().mockResolvedValue('newsha') });
 
       const executor = new ReviewExecutor({
         agentLauncher: launcher,

@@ -138,34 +138,34 @@ change (SC-005).
 ## Phase 7: Tests & verification (SC-001..SC-008)
 <!-- Phase boundary: implementation Phases 1–6 must land first -->
 
-- [ ] T019 [US2] Update `review/__tests__/` for `findings-advance` and `review-delta` to
+- [X] T019 [US2] Update `review/__tests__/` for `findings-advance` and `review-delta` to
       the canonical types (deleted second `computeVerdict`, canonical
       `lastReviewedCommitSha`, 1-based rounds). Fix broken imports from deleted files.
-- [ ] T020 [P] [US2] Add/adjust a schema-audit test asserting exactly one findings-artifact
+- [X] T020 [P] [US2] Add/adjust a schema-audit test asserting exactly one findings-artifact
       schema, one `computeVerdict`, one `SEVERITY_RANK` under `worker/` (SC-001/SC-002/
       SC-003). Include a back-compat parse test: a sidecar without per-finding `id` parses
       and default-fills the deterministic id (INV-4/INV-5).
-- [ ] T021 [US1] Add a convergence anti-vanish test (SC-005): a finding raised in round 1
+- [X] T021 [US1] Add a convergence anti-vanish test (SC-005): a finding raised in round 1
       and omitted by the round-2 candidate stays `open`, verdict stays `changes-required`;
       a resolved finding is never reopened (monotonic, US1 AC3); round >= 2 review is
       scoped to the delta since `lastReviewedCommitSha` (US1 AC2 / FR-007).
-- [ ] T022 [P] [US3] Add a `blockingSeverity` override-parity test (SC-004): with a
+- [X] T022 [P] [US3] Add a `blockingSeverity` override-parity test (SC-004): with a
       per-workflow override set, the executor, remediate executor, gate, and convergence
       merge produce an identical verdict for the same findings set.
-- [ ] T023 [P] [US4] Add a docs-vs-code default assertion (SC-007): the
+- [X] T023 [P] [US4] Add a docs-vs-code default assertion (SC-007): the
       `defaultBlockingSeverity('speckit-feature')` constant equals the value documented in
       `docs/docs/reference/review-artifacts.md`. Add a single-source-of-round test (SC-006):
       no round counter can disagree for one review.
-- [ ] T024 [P] [US2] Update `review-poster.ts` tests for the canonical `ReviewFinding[]`
+- [X] T024 [P] [US2] Update `review-poster.ts` tests for the canonical `ReviewFinding[]`
       input type only; assert posting output (markers, bodies, dedupe, lifecycle) is
       byte-for-byte preserved (FR-009 / INV-P3).
-- [ ] T025 [US2] Run `pnpm --filter @generacy-ai/orchestrator test` — all pre-existing
+- [X] T025 [US2] Run `pnpm --filter @generacy-ai/orchestrator test` — all pre-existing
       review/remediate/lifecycle suites (#1156, #1128, #1154) green (SC-008 / FR-009). Run
       `tsc` + lint: no unused-export or dead-file warnings for the removed schemas (US2 AC3).
 
 ## Phase 8: Changeset
 
-- [ ] T026 Add `.changeset/1161-collapse-findings-schema-activate-convergence.md`:
+- [X] T026 Add `.changeset/1161-collapse-findings-schema-activate-convergence.md`:
       `@generacy-ai/orchestrator` **patch** (`workflow:speckit-bugfix`) — internal
       consolidation + bug fix, no new public exports, no new label vocabulary. Verify with
       `pnpm changeset status`.
