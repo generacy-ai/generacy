@@ -67,8 +67,8 @@ Filed from a post-merge code review of epic generacy-ai/generacy#1120. Part of f
 | FR-002 | The `speckit-bugfix` targeted-validate narrowing MUST continue to apply on top of the resolved command. | P1 | Preserve `resolveTargetedValidate` behavior. |
 | FR-003 | The pre-validate install step MUST use the per-workflow-resolved `preValidateCommand`. | P1 | Replace raw `config.preValidateCommand` at `phase-loop.ts:654`. |
 | FR-004 | An empty-string `preValidateCommand` override MUST skip the install step. | P1 | Distinguish empty-string (skip) from unset (fall back). |
-| FR-005 | `phases.review`/`phases.remediate` agent selection MUST either be implemented at the executor call sites or rejected loudly at parse time. | P1 | Decision needed — see Assumptions. Fallback to `implement` agent if implemented. |
-| FR-006 | `ciWaitTimeoutMs` MUST either be a valid per-workflow override key or be documented/commented as cluster-env only. | P1 | Decision needed — see Assumptions. |
+| FR-005 | `phases.review`/`phases.remediate` agent selection MUST be implemented at the executor call sites: resolve the `review`/`remediate` agent, falling back to the `implement` agent when unset. When `phases.remediate` is unset the fallback is directly `implement` (never `phases.review`). | P1 | Resolved (clarify Q1=A, Q3=A). Fix the `implement` literal at review-executor.ts:126 / remediate-executor.ts:98; no schema change. |
+| FR-006 | `ciWaitTimeoutMs` MUST be a valid per-workflow override key, resolved per-workflow. | P1 | Resolved (clarify Q2=A). Add to `WorkflowOverrideSchema` beside `maxRemediations`; resolve in `resolveWorkflowOverrides`. |
 | FR-007 | No configuration key named in this spec may be silently ignored: each MUST either change runtime behavior or be rejected at parse time. | P1 | Governing acceptance principle. |
 | FR-008 | Each key MUST be covered by a config round-trip test proving it changes runtime behavior (or is rejected) for the workflow it names. | P1 | Per-key test is the acceptance gate. |
 
@@ -84,8 +84,9 @@ Filed from a post-merge code review of epic generacy-ai/generacy#1120. Part of f
 
 ## Assumptions
 
-- **Decision A (FR-005):** Default direction is to **implement** per-phase agent selection for `review`/`remediate` (resolve the `review`/`remediate` agent, fall back to `implement`), since the epic documented it as a cost knob; the reject-and-doc-fix alternative is acceptable if implementation is disproportionate. To be resolved in `/clarify`.
-- **Decision B (FR-006):** Default direction is to **add** `ciWaitTimeoutMs` to `WorkflowOverrideSchema` and resolve it per-workflow (mirroring existing per-workflow numeric overrides), making the documented YAML valid; the remove-comment-and-fix-doc alternative is acceptable. To be resolved in `/clarify`.
+- **Decision A (FR-005) — RESOLVED (clarify Q1 = A):** **Implement** per-phase agent selection for `review`/`remediate` — resolve the `review`/`remediate` agent, fall back to `implement`. `WorkflowAgentEntriesSchema.phases` already enumerates review/remediate and `resolveAgentForPhase` resolves per-phase with tier fallback; the executors merely pass the `implement` literal (review-executor.ts:126, remediate-executor.ts:98). Fix the literal — no schema change.
+- **Decision A2 (FR-005) — RESOLVED (clarify Q3 = A):** When `phases.remediate` is unset, the remediate executor falls back **directly to the `implement` agent**, ignoring `phases.review`. The remediate phase writes code, so inheriting a deliberately cheaper `phases.review` model would silently downgrade a code-writing phase (remediate-executor.ts:93-99).
+- **Decision B (FR-006) — RESOLVED (clarify Q2 = A):** **Add** `ciWaitTimeoutMs` to `WorkflowOverrideSchema` and resolve it per-workflow, mirroring `phaseTimeoutMs`/`maxRemediations`, making the documented YAML valid. `WorkerConfig` already carries the "Per-workflow-overridable" comment (config.ts:155); add one optional field beside `maxRemediations`.
 - Doc reconciliation (migration guide, bugfix-profile-config) is tracked separately in the docs issue; this spec settles behavior, and docs follow.
 - Existing precedence chains (`workflows.<name>` → repo-level → global/default) are the intended semantics for each key.
 

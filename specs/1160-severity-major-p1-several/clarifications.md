@@ -9,7 +9,7 @@
 - A: Implement per-phase agent selection — resolve the `review`/`remediate` agent, fall back to `implement` (spec default, Decision A).
 - B: Reject `phases.review`/`phases.remediate` at parse time with a clear message and correct the docs.
 
-**Answer**: *Pending*
+**Answer**: A) Implement per-phase agent selection — resolve the review/remediate agent, fall back to implement (spec default, Decision A). Rationale: `WorkflowAgentEntriesSchema.phases` already enumerates review/remediate and `resolveAgentForPhase` resolves per-phase with tier fallback; the executors merely pass the `implement` literal (review-executor.ts:126, remediate-executor.ts:98). Fix the literal — no schema change.
 
 ### Q2: `ciWaitTimeoutMs` per-workflow claim (FR-006)
 **Context**: The migration guide (`review-remediate-migration.md:96-97`) presents `ciWaitTimeoutMs` as a per-workflow key, but `WorkflowOverrideSchema` is `.strict()` without it, so the documented YAML fails parsing. It currently exists only as cluster env (`WORKER_CI_WAIT_TIMEOUT_MS`). The "Per-workflow-overridable" comment at `worker/config.ts:155` is stale plan text.
@@ -18,7 +18,7 @@
 - A: Add `ciWaitTimeoutMs` to `WorkflowOverrideSchema` and resolve it per-workflow, mirroring `phaseTimeoutMs`/`maxRemediations` (spec default, Decision B). Makes the documented YAML valid.
 - B: Keep it cluster-env-only — remove the stale "Per-workflow-overridable" comment and correct the docs so schema and docs agree.
 
-**Answer**: *Pending*
+**Answer**: A) Add `ciWaitTimeoutMs` to `WorkflowOverrideSchema` and resolve it per-workflow, mirroring `phaseTimeoutMs`/`maxRemediations` (spec default, Decision B). Rationale: `WorkerConfig` already carries the "Per-workflow-overridable" comment (config.ts:155); add one optional field beside `maxRemediations` to make the documented YAML valid.
 
 ### Q3: Remediate agent fallback when only `phases.review` is set
 **Context**: Only relevant if Q1 = A (implement). An operator may set `phases.review` to a cheaper model without setting `phases.remediate`. The remediate phase writes code, so the fallback target changes cost/quality behavior.
@@ -27,4 +27,4 @@
 - A: Fall back directly to the `implement` agent, ignoring `phases.review` for remediate (spec default — matches "fall back to `implement`").
 - B: Fall back to the `phases.review` agent first, then `implement`.
 
-**Answer**: *Pending*
+**Answer**: A) Fall back directly to the `implement` agent, ignoring `phases.review` for remediate (spec default). Rationale: the remediate phase writes code, so inheriting a deliberately cheaper `phases.review` model would silently downgrade a code-writing phase (remediate-executor.ts:93-99).
