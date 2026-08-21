@@ -132,10 +132,10 @@ describe('#1135 T013 — speckit-bugfix profile end-to-end happy path (US1)', ()
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('validate');
   });
 
-  // AC5 control — the final gate requires BOTH validate and green CI. With
-  // validate green but CI not passing, the `on-ci-green` gate stays inactive and
-  // the loop advances without raising `implementation-review`.
-  it('does NOT raise the final gate when validate is green but CI is not passing (AC5, FR-007)', async () => {
+  // AC5/FR-007 — with validate green but CI not passing, the loop pauses on the
+  // distinct `waiting-for:ci` gate (recoverable; resume re-runs validate) and does
+  // NOT raise the `implementation-review` final gate or mark validate complete.
+  it('pauses on waiting-for:ci without raising the implementation-review final gate when validate is green but CI is not passing (AC5, FR-007)', async () => {
     const graph = loadFixtureGraph();
     const changedFiles = ['packages/core/src/x.ts'];
     const ledger = new SuiteLedger();
@@ -159,13 +159,19 @@ describe('#1135 T013 — speckit-bugfix profile end-to-end happy path (US1)', ()
 
     const result = await phaseLoop.executeLoop(context, config, deps, sequence);
 
-    // Gate inactive → loop completes normally, no implementation-review raise.
-    expect(result.gateHit).toBe(false);
-    expect(result.completed).toBe(true);
+    // Not-passed CI → recoverable pause on `waiting-for:ci`, NOT the final gate,
+    // and validate is NOT marked complete (so resume re-runs it) — INV-2/FR-007.
+    expect(result.gateHit).toBe(true);
+    expect(result.completed).toBe(false);
+    expect(deps.labelManager.onGateHit).toHaveBeenCalledWith(
+      'validate',
+      'waiting-for:ci',
+    );
     expect(deps.labelManager.onGateHit).not.toHaveBeenCalledWith(
       'validate',
       'waiting-for:implementation-review',
     );
+    expect(deps.labelManager.onPhaseComplete).not.toHaveBeenCalledWith('validate');
 
     // The targeted validate still ran once with the same affected-set count.
     expect(deps.validateCommands).toHaveLength(1);
