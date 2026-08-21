@@ -10,7 +10,7 @@
 - B: Force each FR's edit literally, rewording whatever comment now occupies the cited region to satisfy the acceptance-criteria wording verbatim.
 - C: Drop all three stale-comment FRs (FR-005–FR-007) from scope and ship only the doc-facing (FR-001–FR-004) and enumeration (FR-008–FR-011) FRs.
 
-**Answer**: *Pending*
+**Answer**: A — Re-anchor the whole audit to current branch HEAD; treat FRs whose cited inaccuracy is already gone as verify-and-skip no-ops and only change what is still inaccurate. **Caveat:** HEAD is `ea0b2437` (post-#1156/#1160/#1161), not `155b3464`. FR-005 is fully resolved (findings reader wired in #1156; the "#1124 will supply" text is gone) and FR-007 is resolved (the `ciWaitTimeoutMs` per-workflow override precedence is already documented). **FR-006 is only *partly* resolved** — `phase-loop.ts` correctly scopes deadness to the undefined default, but the residual future-tense wording ("concrete triggers land in later epic issues"; "dead in production") is stale because a concrete `remediateTrigger` did land (`claude-cli-worker.ts`). Treat FR-006 as **verify-and-FIX that residual wording**, not a pure no-op.
 
 ### Q2: `WAITING_PIPELINE_ORDER` insertion positions (FR-008)
 **Context**: In `precedence.ts:26` earlier index wins, so the position of the two new gates determines which pause cockpit surfaces when labels coexist. The list today ends with the review pipeline (`waiting-for:spec-review` … `waiting-for:implementation-review`, `waiting-for:manual-validation`). `remediation-limit` is a review-loop pause; `ci` is the final merge-readiness pause.
@@ -20,7 +20,7 @@
 - B: Both at the end, in the order `waiting-for:remediation-limit` then `waiting-for:ci`.
 - C: Other — specify the exact ordering in the answer.
 
-**Answer**: *Pending*
+**Answer**: A — `waiting-for:remediation-limit` immediately after `waiting-for:implementation-review`; `waiting-for:ci` at the very end (after `waiting-for:manual-validation`). Rationale: earlier-index-wins; remediation-limit is a review-loop pause (belongs in the review-gate cluster), ci is the final merge-readiness wait (least-urgent → last).
 
 ### Q3: `STAGE_COMPLETE_PIPELINE_ORDER` insertion positions (FR-009)
 **Context**: `precedence.ts:71` is "latest-phase-wins" — labels closer to the workflow end come first (lower index wins). The list currently starts `completed:implementation-review, completed:implement, completed:tasks-review, …` and has no `completed:validate` today. In the flow, `review` and `remediate` run between `implement` and `validate`, and `validate` is the last phase.
@@ -30,7 +30,7 @@
 - B: `completed:validate` at the top; `completed:review`/`completed:remediate` immediately after `completed:implement`.
 - C: Other — specify the exact ordering in the answer.
 
-**Answer**: *Pending*
+**Answer**: A — Workflow-end-first: `completed:validate`, `completed:implementation-review`, `completed:remediate`, `completed:review`, `completed:implement`, … (validate at index 0; review/remediate between implementation-review and implement). Rationale: latest-phase-wins; validate is the last phase so it belongs at the top, and remediate-before-review preserves existing relations with minimal disturbance.
 
 ### Q4: FR-011 seeded-round "mismatch" — actual target
 **Context**: FR-011 cites a `round: 0` vs `round: 1` mismatch in `seed-aware-review-executor.ts`. At current HEAD the executor computes `const round = (prior?.round ?? 0) + 1` and stamps *both* each finding's `round` field and the artifact's top-level `round` to that same value — there is no visible `round: 0` anywhere. #1161's artifact collapse may have already unified them.
@@ -39,7 +39,7 @@
 - A: The mismatch is already resolved at HEAD (single `round` source); treat FR-011 as verify-and-skip and note it resolved. (Recommended)
 - B: A real mismatch remains — specify the exact field(s) and the intended value in the answer.
 
-**Answer**: *Pending*
+**Answer**: A — Already resolved at HEAD (single `round` source); treat FR-011 as verify-and-skip and note it resolved. Rationale: `seed-aware-review-executor.ts` computes `round = (prior?.round ?? 0) + 1` and stamps that value into both each finding's `round` and the artifact's top-level `round`; there is no `round: 0` literal (the #1161 collapse already unified them).
 
 ### Q5: FR-004 replacement wording for "retired"
 **Context**: `review-remediate-migration.md:140-142` says `waiting-for:remediation-limit` "replaces the retired `blocked:stuck-feedback-loop` dead-end." The label is live on the default flag-OFF PR-feedback path (`pr-feedback-handler.ts`), so "retired" is inaccurate.
@@ -48,4 +48,4 @@
 - A: Reword to describe `blocked:stuck-feedback-loop` as the legacy pre-epic (flag-OFF) bounded stop that still applies when the review phase is disabled, and frame `waiting-for:remediation-limit` as the resumable equivalent on the flag-ON path — dropping the "retired"/"replaces" framing. (Recommended)
 - B: Delete the "This replaces the retired … terminal block." sentence entirely, leaving only the resumable-pause description above it.
 
-**Answer**: *Pending*
+**Answer**: A — Reword `blocked:stuck-feedback-loop` as the legacy pre-epic (flag-OFF) bounded stop still active when review is disabled; frame `waiting-for:remediation-limit` as the resumable flag-ON equivalent — dropping the "retired"/"replaces" framing. Rationale: the label is demonstrably live (`pr-feedback-handler.ts` re-applies it on the flag-OFF path; `precedence.ts` calls it "Retained as the legacy (flag-OFF) PR-feedback bounded stop"), so "retired" is inaccurate; A preserves the useful flag-OFF/flag-ON contrast.
