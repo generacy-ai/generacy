@@ -1522,6 +1522,25 @@ export class GhCliGitHubClient implements GitHubClient {
     return { success: true, conflicts: false };
   }
 
+  async discardWorkingTreeChanges(excludePaths: string[] = []): Promise<void> {
+    // Revert tracked modifications (staged + unstaged) to HEAD.
+    const reset = await executeCommand('git', ['reset', '--hard', 'HEAD'], { cwd: this.workdir });
+    if (reset.exitCode !== 0) {
+      throw new Error(`Failed to reset working tree: ${reset.stderr}`);
+    }
+
+    // Remove untracked files/directories left behind by the abandoned work.
+    // `-e <pattern>` keeps caller-owned untracked state (e.g. `.generacy/`).
+    const cleanArgs = ['clean', '-fd'];
+    for (const pattern of excludePaths) {
+      cleanArgs.push('-e', pattern);
+    }
+    const clean = await executeCommand('git', cleanArgs, { cwd: this.workdir });
+    if (clean.exitCode !== 0) {
+      throw new Error(`Failed to clean working tree: ${clean.stderr}`);
+    }
+  }
+
   async getConflictedFiles(): Promise<string[]> {
     const result = await executeCommand('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: this.workdir });
     return result.stdout.split('\n').filter(f => f);

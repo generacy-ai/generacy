@@ -222,6 +222,14 @@ export interface PhaseResult {
   };
   /** Partial implement result parsed from sentinel output (implement phase only) */
   implementResult?: ImplementPartialResult;
+  /**
+   * True when the phase process was killed by the executor's timeout
+   * (SIGTERM→grace→SIGKILL), as opposed to exiting on its own with a non-zero
+   * code. Lets the remediate seam preserve partial work on a timeout-kill
+   * (commit/push) while skipping commit/push on a clean-run non-zero exit
+   * (#1158 FR-007 / Q3=B). Undefined ⇒ not timed out.
+   */
+  timedOut?: boolean;
 }
 
 /**
