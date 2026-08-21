@@ -1384,8 +1384,16 @@ export class GhCliGitHubClient implements GitHubClient {
     }
   }
 
-  async commit(message: string): Promise<CommitResult> {
-    const result = await executeCommand('git', ['commit', '-m', message], { cwd: this.workdir });
+  async commit(message: string, pathspec?: string[]): Promise<CommitResult> {
+    // With an explicit pathspec, `git commit -m <msg> -- <paths>` records only
+    // those paths and disregards anything else staged in the index (#1162) —
+    // the caller must have already staged untracked members of `pathspec`.
+    // Without it, the whole index is committed (legacy behavior).
+    const args =
+      pathspec && pathspec.length > 0
+        ? ['commit', '-m', message, '--', ...pathspec]
+        : ['commit', '-m', message];
+    const result = await executeCommand('git', args, { cwd: this.workdir });
     if (result.exitCode !== 0) {
       throw new Error(`Failed to commit: ${result.stderr}`);
     }
@@ -1520,6 +1528,25 @@ export class GhCliGitHubClient implements GitHubClient {
     }
 
     return { success: true, conflicts: false };
+  }
+
+  async discardWorkingTreeChanges(excludePaths: string[] = []): Promise<void> {
+    // Revert tracked modifications (staged + unstaged) to HEAD.
+    const reset = await executeCommand('git', ['reset', '--hard', 'HEAD'], { cwd: this.workdir });
+    if (reset.exitCode !== 0) {
+      throw new Error(`Failed to reset working tree: ${reset.stderr}`);
+    }
+
+    // Remove untracked files/directories left behind by the abandoned work.
+    // `-e <pattern>` keeps caller-owned untracked state (e.g. `.generacy/`).
+    const cleanArgs = ['clean', '-fd'];
+    for (const pattern of excludePaths) {
+      cleanArgs.push('-e', pattern);
+    }
+    const clean = await executeCommand('git', cleanArgs, { cwd: this.workdir });
+    if (clean.exitCode !== 0) {
+      throw new Error(`Failed to clean working tree: ${clean.stderr}`);
+    }
   }
 
   async getConflictedFiles(): Promise<string[]> {

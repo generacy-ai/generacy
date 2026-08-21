@@ -4,6 +4,7 @@ import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import { isEngineSidecar } from './product-diff.js';
 import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js';
 
 /**
@@ -129,15 +130,32 @@ export class PrManager {
     try {
       let committed = false;
 
-      // Check if there are any uncommitted changes to commit
+      // #1162 FR-001: stage only genuine product paths, never engine sidecars.
+      // Replaces the unscoped `git add -A` that committed `.generacy/review-*`
+      // and `pause-context-*` bookkeeping into product PR diffs. A phase whose
+      // only pending change is a sidecar leaves `toStage` empty and produces no
+      // commit (no empty commits).
+      //
+      // `status.staged` is included so an index-only product change (staged with
+      // no further working-tree diff — e.g. an implement agent that ran
+      // `git add`, or a prior interrupted commitAndPush) is not stranded. The
+      // commit is then made with an explicit pathspec of exactly `toStage`, so a
+      // sidecar that some other actor pre-staged into the index is never folded
+      // into the commit by the whole-index `git commit` — the "never committed"
+      // guarantee (FR-001/SC-001) holds even against a dirty index.
       const status = await this.github.getStatus();
-      if (status.has_changes) {
-        // Stage all changes
-        await this.github.stageAll();
+      const { staged = [], unstaged = [], untracked = [] } = status;
+      const toStage = [...new Set([...staged, ...unstaged, ...untracked])].filter(
+        (p) => !isEngineSidecar(p),
+      );
+      if (toStage.length > 0) {
+        // Stage first so untracked members of `toStage` are known to git before
+        // the pathspec commit (a bare `git commit -- <untracked>` would fail).
+        await this.github.stageFiles(toStage);
 
-        // Commit with a phase-specific message
+        // Commit with a phase-specific message, scoped to the filtered pathspec.
         const message = customMessage ?? `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
-        const commitResult = await this.github.commit(message);
+        const commitResult = await this.github.commit(message, toStage);
         this.logger.info(
           { phase, sha: commitResult.sha, files: commitResult.files_committed.length },
           'Committed phase changes',

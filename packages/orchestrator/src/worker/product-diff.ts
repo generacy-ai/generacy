@@ -2,6 +2,43 @@ import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { PrManager } from './pr-manager.js';
 
 /**
+ * Path prefixes of engine bookkeeping sidecars (#1162).
+ *
+ * Single source of truth consumed by BOTH the phase-completion staging filter
+ * (`PrManager.commitAndPush`, FR-001) and the product-diff exclusion (FR-004),
+ * so the two can never drift. Matched via literal `String.prototype.startsWith`
+ * against the exact filename stems the sidecar writers emit — so they match
+ * `<prefix><sanitized-id>.json` but never `.generacy/config.yaml` or
+ * `.generacy/epics/*` (Q3, legitimately tracked product files).
+ *
+ * Every `.generacy/<name>-<sanitized-workflow-id>.json` bookkeeping file written
+ * into the checkout MUST be enumerated here, or a phase-completion commit that
+ * runs while the file is still on disk stages it into the PR branch — the exact
+ * #1162 failure mode. Writers, for the record:
+ *  - `review-findings-` / `review-candidate-` — `review-artifact.ts`
+ *  - `pause-context-`                         — `pause-context.ts`
+ *  - `external-feedback-`                     — `external-feedback-seed.ts`
+ *    (carries raw external human/PR feedback text; normally consumed+cleared by
+ *    the seed-aware review executor, but a non-review phase can commit first on
+ *    resume, or the executor can throw before `clearExternalFeedbackSeed`)
+ *  - `workflow-state-`                        — `@generacy-ai/workflow-engine`'s
+ *    `FilesystemWorkflowStore` (pause/resume state, read back at
+ *    `loadLinkedPRsFromState`)
+ */
+export const ENGINE_SIDECAR_PREFIXES = [
+  '.generacy/review-findings-',
+  '.generacy/review-candidate-',
+  '.generacy/pause-context-',
+  '.generacy/external-feedback-',
+  '.generacy/workflow-state-',
+] as const;
+
+/** True when `p` is an engine bookkeeping sidecar (#1162). */
+export function isEngineSidecar(p: string): boolean {
+  return ENGINE_SIDECAR_PREFIXES.some((prefix) => p.startsWith(prefix));
+}
+
+/**
  * Path prefixes excluded from the "product diff" check.
  *
  * Matched via `String.prototype.startsWith` — literal prefix, no glob, no regex,
@@ -9,7 +46,7 @@ import type { PrManager } from './pr-manager.js';
  * `phase-loop.ts`) as a module-level constant per Clarification Q1: no
  * `WorkerConfig` field, no YAML key.
  */
-export const EXCLUDED_PATH_PREFIXES: readonly string[] = ['specs/'];
+export const EXCLUDED_PATH_PREFIXES: readonly string[] = ['specs/', ...ENGINE_SIDECAR_PREFIXES];
 
 /**
  * Exact repo-root file paths excluded from the "product diff" check (#1107).
