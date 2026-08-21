@@ -21,9 +21,9 @@ import {
 //    REPEAT_FAILURE_THRESHOLD (SC-002);
 //  - `failed:validate` (labelManager.onError('validate')) is NEVER applied on
 //    the routed path (FR-009);
-//  - the legacy adapter is invoked at exactly one site — the remediate seam —
-//    and never on both the routing branch and the remediate seam for one
-//    failure (SC-003 / FR-008).
+//  - #1158: the single RemediateExecutor is invoked at exactly one site — the
+//    remediate seam — and never on both the routing branch and the remediate
+//    seam for one failure (SC-003 / FR-008).
 // ---------------------------------------------------------------------------
 
 const mockLogger = {

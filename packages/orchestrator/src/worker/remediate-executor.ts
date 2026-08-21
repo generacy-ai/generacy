@@ -154,6 +154,7 @@ export class RemediateExecutor {
 
     // 6. Manage the child: capture output + SIGTERM→grace→SIGKILL timeout.
     const outputCapture = new OutputCapture(workflowId, this.logger);
+    let timedOut = false;
 
     if (child.stdout) {
       child.stdout.on('data', (data: Buffer | string) => {
@@ -169,6 +170,7 @@ export class RemediateExecutor {
     }
 
     const timeoutTimer = setTimeout(() => {
+      timedOut = true;
       this.logger.warn(
         { pid: child.pid, timeoutMs },
         'Remediate CLI timed out — sending SIGTERM',
@@ -203,6 +205,7 @@ export class RemediateExecutor {
         exitCode: -1,
         durationMs: Date.now() - startedAt,
         output: outputCapture.getOutput(),
+        timedOut,
       };
     }
     clearTimeout(timeoutTimer);
@@ -228,6 +231,7 @@ export class RemediateExecutor {
       exitCode: exitCode ?? -1,
       durationMs: Date.now() - startedAt,
       output: outputCapture.getOutput(),
+      timedOut,
     };
   }
 

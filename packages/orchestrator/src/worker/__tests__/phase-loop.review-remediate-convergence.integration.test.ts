@@ -320,7 +320,14 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
 
     it('validate-failure re-enters remediate → review → validate-green (AC4, T014)', async () => {
       const checkoutPath2 = checkoutPath;
-      const handle = vi.fn().mockResolvedValue(undefined);
+      // #1158: both origins converge on the single RemediateExecutor. The
+      // validate-origin backtrack synthesizes a changes-required finding, then
+      // dispatches through `remediateExecutor.execute` at the seam — the retired
+      // ValidateFixHandler adapter is gone.
+      const remediateExecute = vi.fn(async (): Promise<PhaseResult> => {
+        await bumpRemediationCount(checkoutPath2, WORKFLOW_ID);
+        return makeSuccessResult('remediate');
+      });
       const onError = vi.fn().mockResolvedValue(undefined);
 
       // No-op base-merge runner — its call count is the #914 per-cycle guard
@@ -359,7 +366,7 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
         markReadyForReview: vi.fn().mockResolvedValue(undefined),
       } as any;
       deps.reviewExecutor = reviewExecutor as any;
-      deps.validateFixHandler = { handle } as any;
+      deps.remediateExecutor = { execute: remediateExecute } as any;
       deps.baseMergeRunner = baseMergeRunner as any;
       deps.failureFingerprintTracker = {
         countPriorOccurrences: vi.fn(async () => 0),
@@ -393,8 +400,9 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
         'validate',
       ]);
 
-      // The #1129 validate-fix adapter dispatches exactly once, at the seam.
-      expect(handle).toHaveBeenCalledTimes(1);
+      // #1158: the validate-origin backtrack dispatches through the single
+      // RemediateExecutor exactly once, at the seam.
+      expect(remediateExecute).toHaveBeenCalledTimes(1);
 
       // validate ran twice: the initial red, then the post-remediation green.
       expect(runValidatePhase).toHaveBeenCalledTimes(2);
