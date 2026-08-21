@@ -85,12 +85,12 @@ describe('#1156 ReviewPoster PR-number getter', () => {
 
   it('re-resolves the PR number on each call (undefined then present)', async () => {
     const github = makeGithub();
-    let current: number | undefined;
+    const prRef: { value: number | undefined } = { value: undefined };
     const poster = new ReviewPoster({
       github,
       owner: 'o',
       repo: 'r',
-      getPrNumber: () => current,
+      getPrNumber: () => prRef.value,
       logger: mockLogger,
     });
 
@@ -99,7 +99,7 @@ describe('#1156 ReviewPoster PR-number getter', () => {
     expect(github.createReview).not.toHaveBeenCalled();
 
     // PR now exists — second call targets it.
-    current = 9;
+    prRef.value = 9;
     await poster.postRound(CLEAN, 2);
     expect(github.createReview).toHaveBeenCalledWith('o', 'r', 9, expect.anything());
   });
