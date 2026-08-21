@@ -488,25 +488,97 @@ export class ClaudeCliWorker {
       //
       // createFeature is idempotent: if the branch/dir already exists it
       // checks out the existing branch and pulls latest from remote.
-      const featureResult = await createFeature({
-        description,
-        number: item.issueNumber,
-        cwd: checkoutPath,
-      });
+      //
+      // #1159 FR-006/FR-007 (Q4→C): on the `address-pr-feedback` re-entry the
+      // working branch MUST be resolved from the PR head ref, not derived from
+      // createFeature({ number }). The issue-derived slug is a *guess* that
+      // diverges under #1043 slug drift; committing to it lands the remediation
+      // on a stale branch and opens a duplicate PR instead of updating the
+      // existing one. Apply the zero/one/many linked-open-PR rule:
+      //   exactly one → getPullRequest(prNumber).head.ref + switchBranch
+      //                 (mirrors pr-feedback-handler.ts:230; budget preserved)
+      //   zero        → fresh-request: fall through to createFeature (budget 0)
+      //   more than one → genuine ambiguity: park this poll without mutation and
+      //                 surface for operator attention (guessing risks committing
+      //                 to the wrong PR or opening a third).
+      let branchAlreadyCheckedOut = false;
+      // Branch name + feature dir outlive the setup blocks below (used when
+      // building WorkerContext and the ConversationLogger). On the head-ref
+      // path there is no createFeature call, so these are populated from the PR
+      // head ref (branch) with no feature dir; on the fresh-request path they
+      // come from createFeature.
+      let resolvedBranch: string | undefined;
+      let featureDir: string | undefined;
+      if (item.command === 'address-pr-feedback') {
+        const setupMeta = item.metadata as PrFeedbackMetadata | undefined;
+        const setupPrNumber = setupMeta?.prNumber;
+        if (!setupPrNumber) {
+          throw new Error('Missing prNumber in metadata for address-pr-feedback command');
+        }
 
-      if (featureResult.success) {
-        workerLogger.info(
-          {
-            branch: featureResult.branch_name,
-            created: featureResult.git_branch_created,
-            featureDir: featureResult.feature_dir,
-          },
-          'Feature branch setup complete',
-        );
-      } else {
-        throw new Error(
-          `Failed to setup feature branch for issue #${item.issueNumber}: ${featureResult.error ?? 'unknown error'}`,
-        );
+        // Count linked open PRs on this issue's `<N>-*` branches (the #1043
+        // enumeration pattern). Only the count drives the zero/one/many rule;
+        // the head ref itself comes from the known metadata prNumber.
+        const linkedBranchPrefix = new RegExp('^' + item.issueNumber + '-');
+        const openPrs = await github.listOpenPullRequests(item.owner, item.repo);
+        const linkedOpenPrs = openPrs.filter((pr) => linkedBranchPrefix.test(pr.head.ref));
+
+        if (linkedOpenPrs.length > 1) {
+          workerLogger.warn(
+            {
+              issueNumber: item.issueNumber,
+              prNumber: setupPrNumber,
+              linkedPrNumbers: linkedOpenPrs.map((pr) => pr.number),
+              linkedBranches: linkedOpenPrs.map((pr) => pr.head.ref),
+              gate: 'ambiguous-linked-prs',
+            },
+            '#1159: parking address-pr-feedback poll — >1 linked open PR, operator attention required (no mutation)',
+          );
+          return { status: 'completed' };
+        }
+
+        if (linkedOpenPrs.length === 1) {
+          const pr = await github.getPullRequest(item.owner, item.repo, setupPrNumber);
+          const headRef = pr.head.ref;
+          await this.repoCheckout.switchBranch(checkoutPath, headRef);
+          branchAlreadyCheckedOut = true;
+          resolvedBranch = headRef;
+          // #1159 FR-007 / T006: with HEAD now on the PR head ref,
+          // PrManager.ensureDraftPr's getCurrentBranch() == headRef, so
+          // findPRForBranch(headRef) resolves the existing PR and
+          // commitPushAndEnsurePr('remediate') updates it in place — no
+          // duplicate PR under #1043 slug drift. No extra guard required.
+          workerLogger.info(
+            { issueNumber: item.issueNumber, prNumber: setupPrNumber, headRef },
+            '#1159: checked out PR head ref for address-pr-feedback (budget preserved)',
+          );
+        }
+        // linkedOpenPrs.length === 0 → fall through to createFeature (fresh request).
+      }
+
+      if (!branchAlreadyCheckedOut) {
+        const featureResult = await createFeature({
+          description,
+          number: item.issueNumber,
+          cwd: checkoutPath,
+        });
+
+        if (featureResult.success) {
+          resolvedBranch = featureResult.branch_name;
+          featureDir = featureResult.feature_dir;
+          workerLogger.info(
+            {
+              branch: featureResult.branch_name,
+              created: featureResult.git_branch_created,
+              featureDir: featureResult.feature_dir,
+            },
+            'Feature branch setup complete',
+          );
+        } else {
+          throw new Error(
+            `Failed to setup feature branch for issue #${item.issueNumber}: ${featureResult.error ?? 'unknown error'}`,
+          );
+        }
       }
 
       // 5a2. #1130: address-pr-feedback (flag ON) — parse dual-source external
@@ -590,6 +662,13 @@ export class ClaudeCliWorker {
         // a new/re-opened human thread changed the unresolved set — both correct
         // occasions to grant a fresh budget. The old runaway (reset-on-every-poll
         // for identical feedback) is unreachable.
+        //
+        // #1159 FR-001/FR-002a: a non-completing loop exit escalates to a
+        // `failed:*` label instead of resolving threads, which previously slipped
+        // past the monitor's gate skips and re-enqueued on every poll, wiping the
+        // budget here each time. The blanket `failed:*` monitor skip
+        // (pr-feedback-monitor-service.ts, FR-003) closes that last hole, so this
+        // reset is now genuinely reached only on the two legitimate occasions.
         await clearReviewArtifact(checkoutPath, workflowId);
         await writeExternalFeedbackSeed(checkoutPath, workflowId, {
           version: 1,
@@ -677,7 +756,7 @@ export class ClaudeCliWorker {
         logger: workerLogger,
         signal: abortController.signal,
         checkoutPath,
-        branch: featureResult.branch_name,
+        branch: resolvedBranch,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
         siblingWorkdirs,
@@ -728,8 +807,8 @@ export class ClaudeCliWorker {
         this.config.credentialRole,
       );
 
-      const conversationLogger = featureResult.feature_dir
-        ? new ConversationLogger(featureResult.feature_dir)
+      const conversationLogger = featureDir
+        ? new ConversationLogger(featureDir)
         : undefined;
 
       const outputCapture = new OutputCapture(

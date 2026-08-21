@@ -22,7 +22,7 @@ The load-bearing runaway fix. A blanket `failed:*` monitor skip is what makes th
 existing `clearReviewArtifact` reachable only on the two legitimate reset occasions
 (Q1→A / Q2→B), so the `on-remediation-limit` cap becomes globally reachable for free.
 
-- [ ] T001 [US1] Add a blanket `failed:*` re-enqueue skip in
+- [X] T001 [US1] Add a blanket `failed:*` re-enqueue skip in
   `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`. Mirror the
   existing `blocked:*` short-circuit at `:557` — `labels.some(l => l.startsWith('failed:'))`,
   no allow-list. Place it **after** the `waiting-for:remediation-limit` (`:473`) and
@@ -30,7 +30,7 @@ existing `clearReviewArtifact` reachable only on the two legitimate reset occasi
   grouped adjacent to the `blocked:*` gate. Match the `blocked:*` skip's log shape
   (structured skip log line). See `contracts/monitor-failed-skip.md`. (FR-003, INV-6)
 
-- [ ] T002 [US1] Verify no change is required at the two budget-lifecycle sites and
+- [X] T002 [US1] Verify no change is required at the two budget-lifecycle sites and
   document the reasoning inline where non-obvious:
   `clearReviewArtifact` (`claude-cli-worker.ts:593`, D-2 reset comment at `:580-592`)
   and `remediationCount: prior?.remediationCount ?? 0` (`seed-aware-review-executor.ts:96`).
@@ -47,7 +47,7 @@ Wrap untrusted `detail` with `wrapUntrustedData` at the **two ingestion sites on
 (Q5→A). The charter (`remediate-charter.ts:60`) stays untouched and embeds the
 already-fenced string verbatim. Engine-authored review findings are NOT wrapped (INV-4).
 
-- [ ] T003 [P] [US2] In `packages/orchestrator/src/worker/seed-aware-review-executor.ts`
+- [X] T003 [P] [US2] In `packages/orchestrator/src/worker/seed-aware-review-executor.ts`
   (`:70-78`, `detail: f.body` at `:75`), wrap the raw comment body:
   `detail: wrapUntrustedData(f.body, <pr-review-comment / author-login label>)`. Add the
   `wrapUntrustedData` import from `@generacy-ai/workflow-engine`
@@ -55,7 +55,7 @@ already-fenced string verbatim. Engine-authored review findings are NOT wrapped 
   attacker-controlled author login cannot break out of `source="…"`. See
   `contracts/detail-fencing.md`. (FR-004)
 
-- [ ] T004 [P] [US2] In `packages/orchestrator/src/worker/phase-loop.ts` validate-evidence
+- [X] T004 [P] [US2] In `packages/orchestrator/src/worker/phase-loop.ts` validate-evidence
   synthesis (`:1029-1055`, `detail` at `:1037`), wrap the validate output tail:
   `detail: wrapUntrustedData(boundOutputTail(\`${stdout}\n${stderr}\`), 'validate-output')`.
   Mirror the existing pattern at `validate-fix-handler.ts:235`. Add the
@@ -70,7 +70,7 @@ On the `address-pr-feedback` re-entry only, resolve the working branch from the 
 `head.ref` instead of `createFeature(issueNumber)` (Q4→C). Every other command keeps
 `createFeature`.
 
-- [ ] T005 [US3] In `packages/orchestrator/src/worker/claude-cli-worker.ts`
+- [X] T005 [US3] In `packages/orchestrator/src/worker/claude-cli-worker.ts`
   (`:461-501`, `createFeature({ number })` at `:491-495`), branch on
   `command === 'address-pr-feedback'` and resolve the working branch from the PR head
   ref via `getPullRequest(prNumber).head.ref` + `repoCheckout.switchBranch(...)` — the
@@ -79,7 +79,7 @@ On the `address-pr-feedback` re-entry only, resolve the working branch from the 
   fresh-request path (budget 0); more than one → park this poll and surface for operator
   attention (no mutation). See `contracts/head-ref-resolution.md`. (FR-006, INV-5)
 
-- [ ] T006 [US3] Confirm the single-PR path lets `commitPushAndEnsurePr('remediate')`
+- [X] T006 [US3] Confirm the single-PR path lets `commitPushAndEnsurePr('remediate')`
   update the existing PR rather than open a duplicate under slug drift (#1043). No new
   code expected beyond T005 — verify the head-ref checkout removes the dup-PR path and
   add an inline note if a guard is needed. (FR-007, INV-5)

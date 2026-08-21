@@ -572,6 +572,39 @@ export class PrFeedbackMonitorService {
       return false;
     }
 
+    // #1159 FR-003: blanket failed:* re-enqueue skip. Mirrors the blocked:*
+    // short-circuit above (prefix match, no allow-list). Placed AFTER the
+    // waiting-for:remediation-limit and blocked:fixer-timeout retry-eligible
+    // carve-outs so those remain reachable.
+    //
+    // On a non-completing loop exit (phase-failure escalation like
+    // failed:review / failed:validate-repeated, or a non-convergence gate) the
+    // convergence resolver is bypassed and human threads stay unresolved, so the
+    // monitor would otherwise re-enqueue on every poll while the unresolved
+    // external threads persist. Each re-enqueue reaches clearReviewArtifact and
+    // wipes the remediation budget, restarting the seed-aware executor at
+    // remediationCount 0 — the on-remediation-limit cap is per-entry and never
+    // fires globally, re-introducing the #883 runaway this feature retires.
+    // The operator removes the failed:* label to grant a fresh attempt (already
+    // the resume convention for failed:review / failed:validate-repeated); a
+    // genuinely new external review posts new threads that change the unresolved
+    // set and legitimately re-arm the trigger.
+    const failedLabel = issueLabels.find(l => l.startsWith('failed:'));
+    if (failedLabel) {
+      this.logger.info(
+        {
+          owner, repo, prNumber, issueNumber,
+          failedLabel,
+          unresolvedThreads: unresolvedThreadIds.length,
+          reason: 'failed-label-present',
+          gate: 'failed-label-present',
+        },
+        'Skipping PR-feedback enqueue while failed:* label is present',
+      );
+      this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
+      return false;
+    }
+
     this.logger.info(
       { owner, repo, prNumber, issueNumber, linkMethod, unresolvedCount: unresolvedThreadIds.length },
       `Found ${unresolvedThreadIds.length} unresolved review thread(s)`,

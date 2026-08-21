@@ -45,6 +45,10 @@ const mockGithub = {
   getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/foo/src/bar.ts']),
   // PR operations for PrFeedbackHandler
   getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
+  // #1159 T005/T010: address-pr-feedback head-ref rule counts linked open PRs
+  // on `<N>-*` branches. Default to none so non-head-ref tests fall through to
+  // the fresh-request createFeature path.
+  listOpenPullRequests: vi.fn().mockResolvedValue([]),
   getPRReviewThreads: vi.fn().mockResolvedValue([]),
   replyToPRComment: vi.fn().mockResolvedValue(undefined),
   // #889: LabelManager.ensureRepoLabelsExist boundary net. Default to the repo
@@ -236,6 +240,8 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.listBranches.mockResolvedValue([]);
     mockGithub.branchExists.mockResolvedValue(true);
     mockGithub.getCommitsBetween.mockResolvedValue([]);
+    mockGithub.listOpenPullRequests.mockResolvedValue([]);
+    mockGithub.getPullRequest.mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' });
 
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
