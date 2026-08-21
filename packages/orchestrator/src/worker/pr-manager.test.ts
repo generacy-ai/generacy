@@ -24,8 +24,9 @@ function createMockGitHubClient(
 ): GitHubClient {
   return {
     // Methods used by PrManager
-    getStatus: vi.fn().mockResolvedValue({ has_changes: false }),
+    getStatus: vi.fn().mockResolvedValue({ has_changes: false, unstaged: [], untracked: [] }),
     stageAll: vi.fn().mockResolvedValue(undefined),
+    stageFiles: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue({ sha: 'abc123', files_committed: [] }),
     push: vi.fn().mockResolvedValue({ ref: 'refs/heads/test', remote: 'origin' }),
     getCurrentBranch: vi.fn().mockResolvedValue('test-branch'),
@@ -408,7 +409,9 @@ describe('PrManager', () => {
 
   describe('commitPushAndEnsurePr() - custom commit message', () => {
     it('uses default phase message when options.message is omitted', async () => {
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: true, unstaged: ['src/x.ts'], untracked: [] });
       github.getCommitsBetween = vi.fn().mockResolvedValue([{ sha: 'abc', message: 'x' }]);
 
       await prManager.commitPushAndEnsurePr('implement');
@@ -419,7 +422,9 @@ describe('PrManager', () => {
     });
 
     it('uses custom message when options.message is provided', async () => {
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: true, unstaged: ['src/x.ts'], untracked: [] });
       github.getCommitsBetween = vi.fn().mockResolvedValue([{ sha: 'abc', message: 'x' }]);
       const customMessage = `wip(speckit): partial implement progress for #${issueNumber} (retry 1)`;
 
@@ -429,7 +434,9 @@ describe('PrManager', () => {
     });
 
     it('existing callers without options still work (backward compatibility)', async () => {
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: true, unstaged: ['src/x.ts'], untracked: [] });
       github.getCommitsBetween = vi.fn().mockResolvedValue([{ sha: 'abc', message: 'x' }]);
 
       // Call with no second argument — should not throw
@@ -445,7 +452,9 @@ describe('PrManager', () => {
   describe('commitPushAndEnsurePr() - change detection', () => {
     it('should detect changes when phase committed directly (no uncommitted changes)', async () => {
       // No uncommitted changes, but phase made its own commit
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: false, unstaged: [], untracked: [] });
       github.getCommitsBetween = vi.fn().mockResolvedValue([
         { sha: 'abc123', message: 'feat: implement feature' },
       ]);
@@ -453,7 +462,7 @@ describe('PrManager', () => {
       const result = await prManager.commitPushAndEnsurePr('implement');
 
       expect(result.hasChanges).toBe(true);
-      expect(github.stageAll).not.toHaveBeenCalled();
+      expect(github.stageFiles).not.toHaveBeenCalled();
       expect(github.commit).not.toHaveBeenCalled();
       expect(github.push).toHaveBeenCalled();
       expect(logger.info).toHaveBeenCalledWith(
@@ -463,7 +472,9 @@ describe('PrManager', () => {
     });
 
     it('should return false when no uncommitted changes and no unpushed commits', async () => {
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: false, unstaged: [], untracked: [] });
       github.getCommitsBetween = vi.fn().mockResolvedValue([]);
 
       const result = await prManager.commitPushAndEnsurePr('implement');
@@ -473,7 +484,9 @@ describe('PrManager', () => {
     });
 
     it('should commit and push when there are uncommitted changes', async () => {
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: true, unstaged: ['src/x.ts'], untracked: [] });
       github.getCommitsBetween = vi.fn().mockResolvedValue([
         { sha: 'new123', message: 'chore(speckit): complete implement phase' },
       ]);
@@ -481,7 +494,7 @@ describe('PrManager', () => {
       const result = await prManager.commitPushAndEnsurePr('implement');
 
       expect(result.hasChanges).toBe(true);
-      expect(github.stageAll).toHaveBeenCalled();
+      expect(github.stageFiles).toHaveBeenCalledWith(['src/x.ts']);
       expect(github.commit).toHaveBeenCalled();
       expect(github.push).toHaveBeenCalled();
     });
@@ -498,7 +511,9 @@ describe('PrManager', () => {
 
     it('should detect changes when remote branch does not exist yet', async () => {
       // Phase committed directly, but origin/branch doesn't exist (first push)
-      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.getStatus = vi
+        .fn()
+        .mockResolvedValue({ has_changes: false, unstaged: [], untracked: [] });
       github.branchExists = vi.fn().mockResolvedValue(false);
       github.getCommitsBetween = vi.fn().mockResolvedValue([
         { sha: 'abc123', message: 'feat: implement feature' },

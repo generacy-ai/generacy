@@ -4,6 +4,7 @@ import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import { isEngineSidecar } from './product-diff.js';
 import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js';
 
 /**
@@ -129,11 +130,15 @@ export class PrManager {
     try {
       let committed = false;
 
-      // Check if there are any uncommitted changes to commit
+      // #1162 FR-001: stage only genuine product paths, never engine sidecars.
+      // Replaces the unscoped `git add -A` that committed `.generacy/review-*`
+      // and `pause-context-*` bookkeeping into product PR diffs. A phase whose
+      // only working-tree change is a sidecar leaves `toStage` empty and
+      // produces no commit (no empty commits).
       const status = await this.github.getStatus();
-      if (status.has_changes) {
-        // Stage all changes
-        await this.github.stageAll();
+      const toStage = [...status.unstaged, ...status.untracked].filter((p) => !isEngineSidecar(p));
+      if (toStage.length > 0) {
+        await this.github.stageFiles(toStage);
 
         // Commit with a phase-specific message
         const message = customMessage ?? `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
