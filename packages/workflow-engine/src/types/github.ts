@@ -222,6 +222,8 @@ export type CiConclusion =
   | 'cancelled'
   | 'timed_out'
   | 'action_required'
+  | 'startup_failure'
+  | 'stale'
   | 'skipped'
   | 'neutral'
   | null;

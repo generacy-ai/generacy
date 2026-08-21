@@ -24,25 +24,44 @@ export interface EvaluateCiReadinessParams {
   repo: string;
   headSha: string;
   branch: string;
+  logger?: Logger;
 }
 
 /**
  * Read the CI runs for a head SHA and aggregate them into a three-state
  * verdict. Never declares green on `pending` (FR-004). A thrown readout
  * propagates — `waitForCiGreen` treats it as transient.
+ *
+ * #1157 FR-007 (Q5→C): the `actions/runs` fallback only enumerates
+ * GitHub-Actions workflow runs for the branch and is blind to third-party
+ * required checks (external status contexts), so a `green` aggregated from it
+ * may be a false green. When `source === 'actions-runs'` (the primary
+ * `check-runs` path failed → token likely lacks `checks:read`) a would-be
+ * `green` is failed-closed to `not-passed`, routing into the recoverable red-CI
+ * pause rather than leaving a false green live. `pending`/`not-passed` and all
+ * `check-runs`-sourced verdicts are returned unchanged.
  */
 export async function evaluateCiReadiness(
   params: EvaluateCiReadinessParams,
 ): Promise<CiReadiness> {
-  const { github, owner, repo, headSha, branch } = params;
+  const { github, owner, repo, headSha, branch, logger } = params;
   const { runs, source } = await github.getCiRunsForSha(
     owner,
     repo,
     headSha,
     branch,
   );
+  let verdict = aggregateCiVerdict(runs);
+  if (source === 'actions-runs' && verdict === 'green') {
+    logger?.warn(
+      { owner, repo, headSha, runCount: runs.length },
+      '#1157 FR-007: actions/runs fallback cannot see third-party required checks; ' +
+        'downgrading would-be green to not-passed (checks:read likely missing)',
+    );
+    verdict = 'not-passed';
+  }
   return {
-    verdict: aggregateCiVerdict(runs),
+    verdict,
     runCount: runs.length,
     source,
   };
@@ -90,7 +109,7 @@ export async function waitForCiGreen(
 
   for (;;) {
     try {
-      const readiness = await evaluateCiReadiness(readinessParams);
+      const readiness = await evaluateCiReadiness({ ...readinessParams, logger });
       if (readiness.verdict === 'green') {
         return { kind: 'green' };
       }

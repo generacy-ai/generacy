@@ -97,7 +97,7 @@ describe('aggregateCiVerdict', () => {
 
   it('unknown terminal conclusion → pending (conservative, not green)', () => {
     expect(
-      aggregateCiVerdict([completed('stale' as CiConclusion)]),
+      aggregateCiVerdict([completed('made_up_conclusion' as CiConclusion)]),
     ).toBe('pending');
   });
 
@@ -105,8 +105,37 @@ describe('aggregateCiVerdict', () => {
     expect(
       aggregateCiVerdict([
         completed('success'),
-        completed('stale' as CiConclusion),
+        completed('made_up_conclusion' as CiConclusion),
       ]),
     ).toBe('green');
+  });
+
+  // #1157 FR-006 (SC-005): startup_failure / stale are recognized failing
+  // conclusions, not unknown-conservative-pending. See
+  // specs/1157-severity-critical-p0/contracts/ci-verdict.md.
+  it('[startup_failure] → not-passed (FR-006)', () => {
+    expect(aggregateCiVerdict([completed('startup_failure')])).toBe('not-passed');
+  });
+
+  it('[stale] → not-passed (FR-006)', () => {
+    expect(aggregateCiVerdict([completed('stale')])).toBe('not-passed');
+  });
+
+  it('[success, startup_failure] → not-passed (failure precedence, FR-006)', () => {
+    expect(
+      aggregateCiVerdict([completed('success'), completed('startup_failure')]),
+    ).toBe('not-passed');
+  });
+
+  it('[success, stale] → not-passed (failure precedence, FR-006)', () => {
+    expect(
+      aggregateCiVerdict([completed('success'), completed('stale')]),
+    ).toBe('not-passed');
+  });
+
+  it('[skipped, neutral] still ignored → pending (unchanged by FR-006)', () => {
+    expect(
+      aggregateCiVerdict([completed('skipped'), completed('neutral')]),
+    ).toBe('pending');
   });
 });

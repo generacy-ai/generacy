@@ -15,6 +15,8 @@ const FAILING_CONCLUSIONS = new Set<string>([
   'cancelled',
   'timed_out',
   'action_required',
+  'startup_failure', // #1157 FR-006
+  'stale', // #1157 FR-006
 ]);
 
 /**

@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Add changeset `.changeset/1157-red-ci-pause.md` — `@generacy-ai/orchestrator`
+- [X] T001 Add changeset `.changeset/1157-red-ci-pause.md` — `@generacy-ai/orchestrator`
   **patch** + `@generacy-ai/workflow-engine` **patch** (defect fix, no new public
   exports; union widening is a semantic correction of already-passed-through values).
   Copy the shape of a comparable existing `.changeset/*.md`.
@@ -18,21 +18,21 @@
 ## Phase 2: Foundational (independent pure changes — no dependency on the P0 phase-loop work)
 <!-- Phase boundary: none of these depend on each other's files; all [P]. They unblock the FR-006/FR-007 tests. -->
 
-- [ ] T002 [P] [US3] FR-006: widen `CiConclusion` union in
+- [X] T002 [P] [US3] FR-006: widen `CiConclusion` union in
   `packages/workflow-engine/src/types/github.ts` (~lines 219-227) to add
   `'startup_failure' | 'stale'` as first-class recognized conclusions.
-- [ ] T003 [P] [US3] FR-006: add `'startup_failure'` and `'stale'` to
+- [X] T003 [P] [US3] FR-006: add `'startup_failure'` and `'stale'` to
   `FAILING_CONCLUSIONS` in
   `packages/workflow-engine/src/actions/github/client/ci-verdict.ts` (~lines 13-18).
   Leave `IGNORED_CONCLUSIONS` (`skipped`, `neutral`) unchanged. Precedence unchanged;
   only rule-1 failing set grows (see contracts/ci-verdict.md truth table).
-- [ ] T004 [P] [US4] FR-007 guard: in `evaluateCiReadiness` in
+- [X] T004 [P] [US4] FR-007 guard: in `evaluateCiReadiness` in
   `packages/orchestrator/src/worker/ci-merge-readiness.ts`, after `aggregateCiVerdict`,
   downgrade a would-be `green` to `not-passed` **only when** `source === 'actions-runs'`
   and log the downgrade at `warn` (see contracts/fr-007-fallback-guard.md). Thread an
   optional `logger?` into `EvaluateCiReadinessParams` if not already available for the
   warn. `pending`/`not-passed` and all `check-runs`-sourced verdicts returned unchanged.
-- [ ] T005 [P] [US4] FR-007 docs: add a documentation comment at the `actions/runs`
+- [X] T005 [P] [US4] FR-007 docs: add a documentation comment at the `actions/runs`
   fallback readout site in
   `packages/workflow-engine/src/actions/github/client/gh-cli.ts` (~lines 1709-1739)
   noting it only enumerates GitHub-Actions workflow runs and is blind to third-party
@@ -43,7 +43,7 @@
 ## Phase 3: Core — P0 red-CI pause (US1 + US2)
 <!-- Phase boundary: complete Phase 2 first (FR-006 not-passed classification feeds this path). T006 must precede T007/T008 (shared helper). -->
 
-- [ ] T006 [US1] Extract private `pauseForCiReadiness({ phase, reason, ...ctx })` in
+- [X] T006 [US1] Extract private `pauseForCiReadiness({ phase, reason, ...ctx })` in
   `packages/orchestrator/src/worker/phase-loop.ts` from the existing inline `timeout`
   branch (~lines 1289-1326). The helper performs, in order: emit `job:paused` with
   `gateLabel: 'waiting-for:ci'`; `await labelManager.onGateHit(phase, 'waiting-for:ci')`
@@ -53,13 +53,13 @@
   alter outcome); set `result.gateHit`, record `completedAt`; update stage comment;
   `return { results, completed: false, lastPhase: phase, gateHit: true }`. Re-point the
   existing `timeout` branch to call it with the timeout reason string (behavior-identical).
-- [ ] T007 [US1] FR-001/FR-002/FR-003: add the `not-passed` branch in the CI
+- [X] T007 [US1] FR-001/FR-002/FR-003: add the `not-passed` branch in the CI
   merge-readiness block of `phase-loop.ts`. When `waitForCiGreen` returns
   `{ kind: 'not-passed' }`, call `pauseForCiReadiness` with the red-CI reason and
   `return` early (before the gate loop and the step-6b `onPhaseComplete` fall-through).
   Never set `ciMergeVerdict` to a value that lets `on-ci-green` fire; never grant
   `completed:validate` (see contracts/ci-pause-behavior.md INV-1/INV-2/INV-3).
-- [ ] T008 [US2] FR-005: add the missing-head-SHA fast-fail **before** `waitForCiGreen`
+- [X] T008 [US2] FR-005: add the missing-head-SHA fast-fail **before** `waitForCiGreen`
   in the same block. Classify the head SHA unusable when `getCurrentCommitSha()` throws,
   yields a falsy value, or yields the literal `'unknown'` sentinel; on unusable, call
   `pauseForCiReadiness` with the SHA-resolution-failure reason and `return` — so
@@ -69,16 +69,16 @@
 ## Phase 4: Tests (FR-009 + SC coverage)
 <!-- Phase boundary: complete Phases 2-3 first. T009/T010/T011 touch different files → all [P]. -->
 
-- [ ] T009 [P] [US3] Extend `ci-verdict.test.ts` (workflow-engine) — SC-005:
+- [X] T009 [P] [US3] Extend `ci-verdict.test.ts` (workflow-engine) — SC-005:
   `startup_failure` → `not-passed`; `stale` → `not-passed`; `success + startup_failure`
   → `not-passed` (failure precedence); `skipped`/`neutral` still ignored → `pending`;
   existing `green`/`pending` rows unchanged.
-- [ ] T010 [P] [US4] Extend
+- [X] T010 [P] [US4] Extend
   `packages/orchestrator/src/worker/__tests__/ci-merge-readiness.test.ts` —
   FR-007: `source === 'actions-runs'` + runs aggregating to `green` → returns
   `not-passed`; `source === 'check-runs'` + `green` → stays `green`;
   `actions-runs` + `pending`/`not-passed` → unchanged.
-- [ ] T011 [P] [US1] Extend
+- [X] T011 [P] [US1] Extend
   `packages/orchestrator/src/worker/__tests__/phase-loop.ci-merge-gate.test.ts`:
   - SC-001/SC-003/FR-009: `validate` success + `not-passed` verdict →
     `{ completed: false, gateHit: true }`, issue labels contain `waiting-for:ci` +
@@ -92,12 +92,12 @@
 
 ## Phase 5: Verification
 
-- [ ] T012 Run the affected suites and typecheck:
+- [X] T012 Run the affected suites and typecheck:
   `pnpm --filter @generacy-ai/workflow-engine test` (ci-verdict),
   `pnpm --filter @generacy-ai/orchestrator test` (ci-merge-readiness +
   phase-loop.ci-merge-gate), plus `pnpm -w typecheck`. Confirm the new `not-passed`,
   missing-SHA, and FR-006/FR-007 cases pass and no existing case regressed.
-- [ ] T013 Confirm the changeset from T001 is a newly-added file in the PR diff
+- [X] T013 Confirm the changeset from T001 is a newly-added file in the PR diff
   (`git status .changeset/`) and lists both `@generacy-ai/orchestrator` and
   `@generacy-ai/workflow-engine` — the changeset-bot gate greps `--diff-filter=A`.
 

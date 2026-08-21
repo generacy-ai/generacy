@@ -1275,7 +1275,14 @@ export class PhaseLoop {
       let ciMergeVerdict: 'green' | 'not-passed' | undefined;
       if (phase === 'validate' && result.success && config.ciMergeGateEnabled) {
         await prManager.markReadyForReview(context.linkedPRs);
-        let headSha = 'unknown';
+
+        // #1157 FR-005: resolve the head SHA first. If it is unusable (the
+        // readout threw, yielded a falsy value, or yielded the `'unknown'`
+        // sentinel), fast-fail into the SAME recoverable pause as red CI —
+        // BEFORE `waitForCiGreen`, so `getCiRunsForSha` never polls
+        // `commits/unknown/check-runs` for the full `ciWaitTimeoutMs`
+        // (contracts/ci-pause-behavior.md "Ordering guarantees").
+        let headSha: string | undefined;
         try {
           headSha = await context.github.getCurrentCommitSha();
         } catch (err) {
@@ -1284,6 +1291,27 @@ export class PhaseLoop {
             '#1133: getCurrentCommitSha failed before CI readiness wait',
           );
         }
+        if (!headSha || headSha === 'unknown') {
+          this.logger.warn(
+            { phase, headSha },
+            '#1157 FR-005: unusable head SHA — pausing for CI readiness without polling',
+          );
+          return await this.pauseForCiReadiness({
+            phase,
+            reason:
+              'Could not resolve the PR head commit SHA; CI merge-readiness cannot be evaluated.',
+            context,
+            deps,
+            results,
+            result,
+            phaseTimestamps,
+            stage,
+            sequence,
+            startIndex,
+            currentIndex: i,
+          });
+        }
+
         const outcome = await waitForCiGreen({
           github: context.github,
           owner: context.item.owner,
@@ -1298,31 +1326,41 @@ export class PhaseLoop {
           '#1133: CI merge-readiness wait resolved',
         );
         if (outcome.kind === 'timeout') {
-          jobEventEmitter?.('job:paused', {
-            jobId: context.jobId,
-            workflowName: context.item.workflowName,
-            owner: context.item.owner,
-            repo: context.item.repo,
-            issueNumber: context.item.issueNumber,
-            status: 'paused',
-            currentStep: phase,
-            gateLabel: 'waiting-for:ci',
-          });
-          await labelManager.onGateHit(phase, 'waiting-for:ci');
-          result.gateHit = {
-            gateLabel: 'waiting-for:ci',
+          return await this.pauseForCiReadiness({
+            phase,
             reason: 'CI did not turn green within the merge-readiness timeout',
-          };
-          const ciTs = phaseTimestamps.get(phase);
-          if (ciTs) ciTs.completedAt = new Date().toISOString();
-          await stageCommentManager.updateStageComment({
+            context,
+            deps,
+            results,
+            result,
+            phaseTimestamps,
             stage,
-            status: 'in_progress',
-            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
-            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-            prUrl: context.prUrl,
+            sequence,
+            startIndex,
+            currentIndex: i,
           });
-          return { results, completed: false, lastPhase: phase, gateHit: true };
+        }
+        // #1157 FR-001/FR-002/FR-003: a red-CI `not-passed` verdict must pause
+        // in the same recoverable state — NOT fall through to the gate loop and
+        // the step-6b `onPhaseComplete` (which would grant `completed:validate`
+        // and let the loop return `completed: true`). Return early here, before
+        // the gate loop, so `on-ci-green` never fires and `completed:validate`
+        // is never granted (INV-1/INV-2/INV-3).
+        if (outcome.kind === 'not-passed') {
+          return await this.pauseForCiReadiness({
+            phase,
+            reason:
+              'CI is red (not-passed) for the head commit; the merge gate will not open until CI is green.',
+            context,
+            deps,
+            results,
+            result,
+            phaseTimestamps,
+            stage,
+            sequence,
+            startIndex,
+            currentIndex: i,
+          });
         }
         ciMergeVerdict = outcome.kind;
       }
@@ -2319,6 +2357,100 @@ export class PhaseLoop {
       outputTail,
       ...(classifier ? { reason: message } : {}),
     };
+  }
+
+  /**
+   * #1157 FR-001..FR-005: pause the workflow in a recoverable, operator-visible
+   * state when CI merge readiness cannot open the gate — red CI (`not-passed`),
+   * the merge-readiness `timeout`, or an unresolvable head SHA. All three land
+   * in the SAME pause state (`waiting-for:ci` + `agent:paused`, no
+   * `completed:validate`), differentiated only by the reason comment/log
+   * (Q2→A / Q4→A). Critically this NEVER calls `labelManager.onPhaseComplete`,
+   * so the red path can never grant `completed:validate` or reach
+   * `completed: true` (INV-1/INV-2). The reason comment is best-effort: a
+   * failure is swallowed and never changes the pause outcome (FR-004 / INV-5).
+   * On the operator's `continue`, `validate` re-runs (it is the first
+   * uncompleted phase — no resolver change, INV-6).
+   */
+  private async pauseForCiReadiness(params: {
+    phase: WorkflowPhase;
+    reason: string;
+    context: WorkerContext;
+    deps: PhaseLoopDeps;
+    results: PhaseResult[];
+    result: PhaseResult;
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>;
+    stage: StageType;
+    sequence: WorkflowPhase[];
+    startIndex: number;
+    currentIndex: number;
+  }): Promise<PhaseLoopResult> {
+    const {
+      phase,
+      reason,
+      context,
+      deps,
+      results,
+      result,
+      phaseTimestamps,
+      stage,
+      sequence,
+      startIndex,
+      currentIndex,
+    } = params;
+    const { labelManager, stageCommentManager, jobEventEmitter } = deps;
+
+    jobEventEmitter?.('job:paused', {
+      jobId: context.jobId,
+      workflowName: context.item.workflowName,
+      owner: context.item.owner,
+      repo: context.item.repo,
+      issueNumber: context.item.issueNumber,
+      status: 'paused',
+      currentStep: phase,
+      gateLabel: 'waiting-for:ci',
+    });
+
+    // Adds `waiting-for:ci` + `agent:paused`, removes `phase:<phase>`. MUST NOT
+    // call `onPhaseComplete` — the phase did not merge-complete (INV-2).
+    await labelManager.onGateHit(phase, 'waiting-for:ci');
+
+    // FR-004: best-effort reason comment. A failure here MUST NOT change the
+    // pause outcome or any other step (INV-5).
+    try {
+      const body = [
+        '## CI merge readiness paused',
+        '',
+        reason,
+        '',
+        'The workflow is paused with `waiting-for:ci` + `agent:paused`. Re-run '
+          + 'validation (CI, tests, PR ready-marking, and the merge gate) by '
+          + 'adding `completed:ci` once CI is green.',
+      ].join('\n');
+      await context.github.addIssueComment(
+        context.item.owner,
+        context.item.repo,
+        context.item.issueNumber,
+        body,
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), phase },
+        '#1157: failed to post CI merge-readiness pause comment — continuing to pause',
+      );
+    }
+
+    result.gateHit = { gateLabel: 'waiting-for:ci', reason };
+    const ciTs = phaseTimestamps.get(phase);
+    if (ciTs) ciTs.completedAt = new Date().toISOString();
+    await stageCommentManager.updateStageComment({
+      stage,
+      status: 'in_progress',
+      phases: this.buildPhaseProgress(sequence, startIndex, currentIndex, phaseTimestamps, 'complete'),
+      startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+      prUrl: context.prUrl,
+    });
+    return { results, completed: false, lastPhase: phase, gateHit: true };
   }
 
   /**
