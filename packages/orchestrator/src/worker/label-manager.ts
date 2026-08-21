@@ -349,12 +349,25 @@ export class LabelManager {
       // Also remove completed: labels for gates being resumed, so re-entering
       // the phase can re-activate the gate if needed (e.g., follow-up
       // clarification questions require another pause cycle).
+      //
+      // #1154 FR-001: human-answer gate completions (`completed:<X>` where X is a
+      // human-gate suffix) MUST survive the resume strip. The remediation-limit
+      // and on-ci-green implementation-review gates re-evaluate AT the resumed
+      // phase and read the surviving `completed:<X>` — stripping it here silently
+      // discards the operator's answer and re-parks the workflow. `isHumanGateCompletion`
+      // + `HUMAN_GATE_SUFFIXES` already exist for exactly this purpose; consult
+      // them so the strip is a no-op for gate completions but still clears the
+      // stale `waiting-for:*` / `agent:paused` labels below.
       const gateSuffixes = currentLabels
         .filter((l) => l.startsWith('waiting-for:'))
         .map((l) => l.slice('waiting-for:'.length));
       for (const suffix of gateSuffixes) {
         const completedLabel = `completed:${suffix}`;
-        if (currentLabels.includes(completedLabel) && !labelsToRemove.includes(completedLabel)) {
+        if (
+          currentLabels.includes(completedLabel) &&
+          !labelsToRemove.includes(completedLabel) &&
+          !isHumanGateCompletion(completedLabel)
+        ) {
           labelsToRemove.push(completedLabel);
         }
       }

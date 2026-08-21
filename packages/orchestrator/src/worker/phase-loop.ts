@@ -56,6 +56,15 @@ import { runFailThenPass } from './fail-then-pass.js';
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
 
 /**
+ * #1154 FR-005: hidden marker prepended to the "Remediation limit reached" gate
+ * body. A resume that re-parks the same cap would otherwise post a duplicate
+ * comment on every cycle. Before posting we grep existing PR comment bodies for
+ * this marker and skip the post when present (same pattern as
+ * `maybePostUntrustedNotice`).
+ */
+const REMEDIATION_LIMIT_MARKER = '<!-- generacy-remediation-limit -->';
+
+/**
  * #1134 (US2): outcome of the speckit-bugfix targeted-validate classification.
  * Carries the resolved effective command plus the raw inputs (`baseRef`,
  * `changedFiles`, `classification`) so the US3 fail-then-pass check can reuse
@@ -1409,6 +1418,7 @@ export class PhaseLoop {
                 return `- ${location} — ${f.title}`;
               });
               const body = [
+                REMEDIATION_LIMIT_MARKER,
                 '## Remediation limit reached',
                 '',
                 `The review↔remediate loop hit its cap of ${maxRemediations} remediation attempts and the latest review still requires changes. The following findings remain open:`,
@@ -1419,12 +1429,28 @@ export class PhaseLoop {
                 '',
                 'Add `completed:remediation-limit` to resume with a fresh remediation budget.',
               ].join('\n');
-              await context.github.addIssueComment(
-                context.item.owner,
-                context.item.repo,
-                context.item.issueNumber,
-                body,
-              );
+              // #1154 FR-005: dedupe on the hidden marker so a re-parked cap does
+              // not re-post the same comment every resume cycle.
+              const prNumber = prManager.getPrNumber();
+              let alreadyPosted = false;
+              if (prNumber !== undefined) {
+                const existingComments = await context.github.listPrCommentBodies(
+                  context.item.owner,
+                  context.item.repo,
+                  prNumber,
+                );
+                alreadyPosted = existingComments.some((b) =>
+                  b.includes(REMEDIATION_LIMIT_MARKER),
+                );
+              }
+              if (!alreadyPosted) {
+                await context.github.addIssueComment(
+                  context.item.owner,
+                  context.item.repo,
+                  context.item.issueNumber,
+                  body,
+                );
+              }
             } catch (error) {
               this.logger.warn(
                 { error: String(error), phase, gateLabel: gate.gateLabel },
@@ -1602,6 +1628,32 @@ export class PhaseLoop {
           }
           if (artifact.verdict === 'clean') {
             await prManager.markReadyForReview(context.linkedPRs);
+            // #1154 FR-006: a clean review means any earlier remediation-limit
+            // answer is spent. Defensively clear a lingering
+            // `completed:remediation-limit` so it cannot silently pre-satisfy a
+            // later cap pause (distinct from and additional to the reset-branch
+            // removal in the gate-resume path). Best-effort — a failure here
+            // must not fail the phase.
+            try {
+              const issueLabels = await context.github.getIssueLabels(
+                context.item.owner,
+                context.item.repo,
+                context.item.issueNumber,
+              );
+              if (issueLabels.includes('completed:remediation-limit')) {
+                await context.github.removeLabels(
+                  context.item.owner,
+                  context.item.repo,
+                  context.item.issueNumber,
+                  ['completed:remediation-limit'],
+                );
+              }
+            } catch (error) {
+              this.logger.warn(
+                { error: String(error) },
+                'Failed to clear lingering completed:remediation-limit on clean review — continuing',
+              );
+            }
           }
         }
       }
