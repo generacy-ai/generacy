@@ -91,31 +91,31 @@ On the `address-pr-feedback` re-entry only, resolve the working branch from the 
 
 Reuse the existing worker / monitor / charter test harnesses.
 
-- [ ] T007 [P] [US1] SC-001 budget-bounding integration test in
+- [X] T007 [P] [US1] SC-001 budget-bounding integration test in
   `packages/orchestrator/src/worker/__tests__/claude-cli-worker.*.test.ts` (or its
   helpers): drive repeated same-feedback `address-pr-feedback` re-entries (N > maxRemediations),
   assert `remediationCount` is monotonic across entries and the PR parks at
   `waiting-for:remediation-limit` + `agent:paused` within `maxRemediations` total
   remediate executions (not per-entry).
 
-- [ ] T008 [P] [US1] SC-002 monitor-skip unit test in
+- [X] T008 [P] [US1] SC-002 monitor-skip unit test in
   `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.*.test.ts`:
   a `failed:review`-labeled issue with unresolved human threads asserts 0 re-enqueues on
   subsequent polls. Add a case for an arbitrary future `failed:<x>` label to pin the
   blanket-prefix (no allow-list) contract.
 
-- [ ] T009 [P] [US2] SC-003 fencing tests: assert seed `detail` is wrapped in
+- [X] T009 [P] [US2] SC-003 fencing tests: assert seed `detail` is wrapped in
   `<untrusted-data …>` in `seed-aware-review-executor.test.ts`, and validate-evidence
   `detail` is wrapped in `phase-loop.*.test.ts`. Assert engine-authored review-finding
   detail is NOT wrapped/altered (INV-4). Assert the crafted text never appears as bare
   charter instructions.
 
-- [ ] T010 [P] [US3] SC-004 head-ref / dup-PR integration test in the worker harness:
+- [X] T010 [P] [US3] SC-004 head-ref / dup-PR integration test in the worker harness:
   with an issue-derived slug that diverges from the PR head branch, assert remediation
   commits land on the PR head branch and exactly 1 PR exists for the issue. Add a unit
   assertion for the `>1 linked open PR` park path.
 
-- [ ] T011 [P] SC-005 flag-OFF parity: confirm the existing flag-OFF path tests pass
+- [X] T011 [P] SC-005 flag-OFF parity: confirm the existing flag-OFF path tests pass
   unchanged (no new test needed — the monitor `failed:*` skip only affects issues already
   carrying a `failed:*` label, and all other changes are on the flag-ON
   `address-pr-feedback` path). Run the flag-OFF suite and record the result.
@@ -124,7 +124,7 @@ Reuse the existing worker / monitor / charter test harnesses.
 
 ## Phase 5: Changeset (CI gate)
 
-- [ ] T012 Add `.changeset/1159-*.md` — `@generacy-ai/orchestrator` **patch**
+- [X] T012 Add `.changeset/1159-*.md` — `@generacy-ai/orchestrator` **patch**
   (`workflow:speckit-bugfix`, defect fix, no new public exports). Must be a newly-added
   file in the PR diff. No `workflow-engine` changeset (its `src/` is not modified;
   `wrapUntrustedData` is only imported). See `research.md` Decision 5.
