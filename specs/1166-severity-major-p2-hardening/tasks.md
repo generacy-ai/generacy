@@ -24,7 +24,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm the two target files and their touch-points before editing:
+- [X] T001 Confirm the two target files and their touch-points before editing:
   `packages/orchestrator/src/worker/phase-loop.ts` (`resolveTargetedValidate`,
   `computeEffectiveValidateCommand`) and
   `packages/orchestrator/src/worker/fail-then-pass.ts` (`runFailThenPass`, `runTests`,
@@ -36,7 +36,7 @@
 
 These tasks all edit the same file (`fail-then-pass.ts`), so they are **sequential** (no [P]).
 
-- [ ] T002 [US3] Add the conservative `isInfraFailure(output: string): boolean` pure
+- [X] T002 [US3] Add the conservative `isInfraFailure(output: string): boolean` pure
   predicate in `packages/orchestrator/src/worker/fail-then-pass.ts`. Returns `true` ONLY
   for a pre-collection failure (vitest collected/ran zero tests): `No test files found`,
   or a module/dist-resolution error before any test runs (`Cannot find module`,
@@ -45,7 +45,7 @@ These tasks all edit the same file (`fail-then-pass.ts`), so they are **sequenti
   lines, `Tests  N failed`/`N passed`) and for anything ambiguous — bias to genuine
   (Q2=A). See `data-model.md` signal table.
 
-- [ ] T003 [US3] Wire the infra signature into the base and branch outcome branches
+- [X] T003 [US3] Wire the infra signature into the base and branch outcome branches
   (`fail-then-pass.ts:94-110, 211`). After the **base** run:
   `!baseOutcome.passed && isInfraFailure(baseOutcome.output)` →
   `{ kind: 'skip', reason: 'infra:<signature> at base ref' }` (never `base-passed`).
@@ -54,7 +54,7 @@ These tasks all edit the same file (`fail-then-pass.ts`), so they are **sequenti
   Genuine base pass still → `fail: base-passed`; genuine branch failure still →
   `fail: branch-failed`. No build step added (FR-004/FR-005; Q1=A).
 
-- [ ] T004 [US3] Add the `BASE_TEST_TIMEOUT_MS = 5 * 60_000` constant (mirroring
+- [X] T004 [US3] Add the `BASE_TEST_TIMEOUT_MS = 5 * 60_000` constant (mirroring
   `BASE_INSTALL_TIMEOUT_MS`) and apply it as `{ timeout: BASE_TEST_TIMEOUT_MS }` on each
   `runTests` `execFile` call (base and branch). Add `timedOut: boolean` to
   `TestRunOutcome`; `runTests` sets it when the rejection is a timeout kill
@@ -62,20 +62,20 @@ These tasks all edit the same file (`fail-then-pass.ts`), so they are **sequenti
   the phase `signal` (which must propagate). A timed-out run maps to
   `{ kind: 'skip', reason: 'timeout' }` (FR-006).
 
-- [ ] T005 [US4] Fix the worktree lifecycle (`fail-then-pass.ts:162-199`). Capture the
+- [X] T005 [US4] Fix the worktree lifecycle (`fail-then-pass.ts:162-199`). Capture the
   `mkdtemp` parent: `const tmpParent = await mkdtemp(join(tmpdir(), 'gen-ftp-'))`,
   `const worktreePath = join(tmpParent, 'wt')`. In `finally`, run each step best-effort,
   **without the abort signal**, guarded so one failure does not skip the next:
   (1) `git worktree remove --force <worktreePath>`, (2) `git worktree prune`,
   (3) `rm(tmpParent, { recursive: true, force: true })` (FR-007/FR-008).
 
-- [ ] T006 [US4] Wrap the `git worktree add` in try/catch (`fail-then-pass.ts:167-170`);
+- [X] T006 [US4] Wrap the `git worktree add` in try/catch (`fail-then-pass.ts:167-170`);
   on failure return `{ kind: 'skip', reason: 'worktree-add-failed' }` instead of throwing.
   The `finally` still runs (cleanup + prune handle a partially-created worktree); the
   caller `runFailThenPassCheck` already treats `skip` as "proceed to normal validate"
   (FR-009).
 
-- [ ] T007 [US3][US4] Emit one structured `event: 'fail-then-pass'` log line for each new
+- [X] T007 [US3][US4] Emit one structured `event: 'fail-then-pass'` log line for each new
   skip decision (`outcome: 'skip'` with `reason` one of `infra:*`, `timeout`,
   `worktree-add-failed`), consistent with the existing install-failure/fail log lines
   (FR-011).
@@ -86,7 +86,7 @@ These tasks all edit the same file (`phase-loop.ts`), so they are **sequential**
 Independent of Phase 2 (different file) — Phase 2 and Phase 3 may proceed in parallel across
 files, but the tasks *within* each phase are ordered.
 
-- [ ] T008 [US1] Existence-filter the diff set in `resolveTargetedValidate`
+- [X] T008 [US1] Existence-filter the diff set in `resolveTargetedValidate`
   (`phase-loop.ts`, between `getFilesChangedBetween` and `classifyDiff`):
   `changedFiles = changedFiles.filter((f) => existsSync(join(context.checkoutPath, f)))`.
   Store the filtered set on `TargetedValidateDecision.changedFiles` so the fail-then-pass
@@ -94,7 +94,7 @@ files, but the tasks *within* each phase are ordered.
   deletion-only diff → empty set → `classifyDiff` returns `full-fallback('empty-diff')`
   → full built-in default (FR-001/FR-002, no extra branch needed).
 
-- [ ] T009 [US2] Add the zero-project probe + fallback in `resolveTargetedValidate`, after
+- [X] T009 [US2] Add the zero-project probe + fallback in `resolveTargetedValidate`, after
   `classifyDiff`, gated on `isBuiltInDefault === true` AND a classification that would emit
   a `pnpm --filter "...[origin/<base>]"` command (`targeted`, `docs-only-skip-tests`).
   Probe `pnpm --filter "...[origin/<base>]" --depth -1 --json` (or `pnpm ls --filter …`)
@@ -103,7 +103,7 @@ files, but the tasks *within* each phase are ordered.
   through the same `execFile` path the tests mock — no new production DI surface
   (FR-003; research Decision 3/7).
 
-- [ ] T010 [US5] Add `<base>` substitution in `computeEffectiveValidateCommand`: for a
+- [X] T010 [US5] Add `<base>` substitution in `computeEffectiveValidateCommand`: for a
   custom (non-built-in-default) `validateCommand`,
   `effectiveCommand = validateCommand.replace(/<base>/g, base)` where
   `base = baseRef.replace(/^origin\//, '')`. Resolve `base` before the diff computation so
@@ -111,14 +111,14 @@ files, but the tasks *within* each phase are ordered.
   `<base>` command is never emitted with the literal placeholder). Mirrors the existing
   merge-conflict `<base>`/`<branch>` substitution (FR-010; Q4=A).
 
-- [ ] T011 [US2] Emit one `event: 'targeted-validate'` info log line on the zero-project
+- [X] T011 [US2] Emit one `event: 'targeted-validate'` info log line on the zero-project
   fallback with `reason: 'zero-project-fallback'` and the full command it fell back to,
   consistent with the existing `#1134: targeted-validate decision` line. The `empty-diff`
   full-fallback path reuses the existing decision log line (no new line needed) (FR-011).
 
 ## Phase 4: Documentation
 
-- [ ] T012 [P] [US5] Update `docs/docs/reference/bugfix-profile-config.md`: replace the
+- [X] T012 [P] [US5] Update `docs/docs/reference/bugfix-profile-config.md`: replace the
   hardcoded `origin/develop` in the custom `validateCommand` example with `origin/<base>`,
   and explain that `<base>` is substituted with the resolved base branch at validate time
   (works on both `develop`- and `main`-based repos). Under `docs/`, not `packages/*/src/`
@@ -126,7 +126,7 @@ files, but the tasks *within* each phase are ordered.
 
 ## Phase 5: Tests
 
-- [ ] T013 [US3][US4] Add fail-then-pass tests in
+- [X] T013 [US3][US4] Add fail-then-pass tests in
   `packages/orchestrator/src/worker/__tests__/fail-then-pass.test.ts`, routing runs through
   the existing `execFile` mock router:
   - Base-ref infra signature (`No test files found` / dist-resolution error, zero tests) →
@@ -141,7 +141,7 @@ files, but the tasks *within* each phase are ordered.
   - `git worktree add` failure → `skip: worktree-add-failed`, not a hard phase failure
     (FR-009).
 
-- [ ] T014 [US1][US2][US5] Add/extend targeted-validate wiring tests in
+- [X] T014 [US1][US2][US5] Add/extend targeted-validate wiring tests in
   `packages/orchestrator/src/worker/__tests__/phase-loop.*.test.ts` (new or extended
   `phase-loop` suite), routing the `pnpm --filter … --json` probe and each `pnpm vitest
   run` through the shared `execFile` handler:
@@ -157,13 +157,13 @@ files, but the tasks *within* each phase are ordered.
 
 ## Phase 6: Verification & Polish
 
-- [ ] T015 Add the changeset `.changeset/1166-bugfix-validate-hardening.md`:
+- [X] T015 Add the changeset `.changeset/1166-bugfix-validate-hardening.md`:
   `@generacy-ai/orchestrator` **patch** (`workflow:speckit-bugfix` defect fix; no new
   public exports). Must be a newly added file. The `docs/` edit and test-only files are
   exempt, but the `.ts` changes to `phase-loop.ts` / `fail-then-pass.ts` require this
   changeset (per CLAUDE.md changeset gate).
 
-- [ ] T016 Run the affected suites and confirm green plus no regression (SC-007):
+- [X] T016 Run the affected suites and confirm green plus no regression (SC-007):
   `pnpm --filter @generacy-ai/orchestrator test fail-then-pass` and
   `pnpm --filter @generacy-ai/orchestrator test phase-loop`. Confirm existing
   validate/classifier suites remain green and `diff-classifier.ts` is untouched in the diff.

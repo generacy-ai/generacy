@@ -36,8 +36,12 @@ import type { FailureFingerprintTracker } from '../services/failure-fingerprint-
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { classifyDiff, isTestFile, type Classification } from './diff-classifier.js';
 import { runFailThenPass } from './fail-then-pass.js';
+
+const execFileAsync = promisify(execFile);
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -2023,10 +2027,14 @@ export class PhaseLoop {
     ).validateCommand;
     const isBuiltInDefault = resolvedValidateCommand === DEFAULT_VALIDATE_COMMAND;
 
+    // #1166 (FR-010): resolve the base ref up front, in its own try, so a custom
+    // command's `<base>` placeholder is substituted even when the diff
+    // computation below fails — a `<base>` command must never reach the shell
+    // with the literal placeholder. `resolveBaseRef` (base selection from PR
+    // metadata/config) succeeds even when `origin/<base>` isn't fetched locally;
+    // the git diff is the part that throws in that case.
     let baseRef: string;
     let base: string;
-    let changedFiles: string[];
-    let classification: Classification;
     try {
       baseRef = await resolveBaseRef(
         context.github,
@@ -2035,7 +2043,36 @@ export class PhaseLoop {
         context.item.repo,
       );
       base = baseRef.startsWith('origin/') ? baseRef.slice('origin/'.length) : baseRef;
+    } catch (error) {
+      this.logger.warn(
+        { event: 'targeted-validate', error: String(error) },
+        '#1134: targeted-validate base ref resolution failed — falling back to plain validate command',
+      );
+      return {
+        effectiveCommand: this.computeEffectiveValidateCommand(
+          { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+          resolvedValidateCommand,
+          '',
+          isBuiltInDefault,
+        ),
+        baseRef: '',
+        base: '',
+        changedFiles: [],
+        classification: { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+      };
+    }
+
+    let changedFiles: string[];
+    let classification: Classification;
+    try {
       changedFiles = await context.github.getFilesChangedBetween(baseRef, 'HEAD');
+      // #1166 (FR-001/FR-002): keep only paths that still exist in the branch
+      // checkout. A deletion-only or rename diff otherwise reaches the classifier
+      // (and the fail-then-pass `changedFiles.filter(isTestFile)` caller) with
+      // phantom paths, yielding a `pnpm vitest run <nonexistent-file>`. An
+      // all-filtered diff → empty set → `classifyDiff` returns
+      // `full-fallback('empty-diff')` → the full built-in default runs.
+      changedFiles = changedFiles.filter((f) => existsSync(join(context.checkoutPath, f)));
       const isWorkspace = existsSync(join(context.checkoutPath, 'pnpm-workspace.yaml'));
       classification = classifyDiff({ changedFiles, isWorkspace });
     } catch (error) {
@@ -2044,20 +2081,50 @@ export class PhaseLoop {
         '#1134: targeted-validate diff resolution failed — falling back to plain validate command',
       );
       return {
-        effectiveCommand: resolvedValidateCommand,
-        baseRef: '',
-        base: '',
+        effectiveCommand: this.computeEffectiveValidateCommand(
+          { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+          resolvedValidateCommand,
+          base,
+          isBuiltInDefault,
+        ),
+        baseRef,
+        base,
         changedFiles: [],
         classification: { kind: 'full-fallback', reason: 'diff-resolution-failed' },
       };
     }
 
-    const effectiveCommand = this.computeEffectiveValidateCommand(
+    let effectiveCommand = this.computeEffectiveValidateCommand(
       classification,
       resolvedValidateCommand,
       base,
       isBuiltInDefault,
     );
+
+    // #1166 (FR-003): zero-project fallback. A root-only non-package change (root
+    // `package.json`, `scripts/**`, root `vitest.config.ts`) can classify
+    // `targeted`/`docs-only-skip-tests` yet select zero pnpm projects, producing
+    // a vacuous `pnpm --filter … build/test`. Probe the selection; an empty
+    // selection — or a probe error (fail-safe) — overrides to the full default.
+    if (
+      isBuiltInDefault &&
+      (classification.kind === 'targeted' || classification.kind === 'docs-only-skip-tests')
+    ) {
+      const selectsZero = await this.probeSelectsZeroProjects(context.checkoutPath, base);
+      if (selectsZero) {
+        effectiveCommand = resolvedValidateCommand;
+        this.logger.info(
+          {
+            event: 'targeted-validate',
+            reason: 'zero-project-fallback',
+            base,
+            effectiveCommand,
+          },
+          '#1166: targeted-validate selected zero projects — falling back to full validate command',
+        );
+        return { effectiveCommand, baseRef, base, changedFiles, classification };
+      }
+    }
 
     this.logger.info(
       {
@@ -2074,6 +2141,26 @@ export class PhaseLoop {
   }
 
   /**
+   * #1166 (FR-003): probe whether the targeted pnpm filter selects any project.
+   * Routes through the same `execFile` path the tests mock — no new production
+   * DI surface. Returns `true` when the selection is empty OR the probe errors
+   * (fail-safe — never emit an unverified targeted command).
+   */
+  private async probeSelectsZeroProjects(checkoutPath: string, base: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'pnpm',
+        ['ls', '--filter', `...[origin/${base}]`, '--depth', '-1', '--json'],
+        { cwd: checkoutPath },
+      );
+      const parsed: unknown = JSON.parse(stdout);
+      return !Array.isArray(parsed) || parsed.length === 0;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * #1134 (US2): pure resolution of the effective validate command from the
    * classification (see `data-model.md` resolution table). Custom commands run
    * verbatim; only the built-in default is narrowed.
@@ -2085,7 +2172,11 @@ export class PhaseLoop {
     isBuiltInDefault: boolean,
   ): string {
     if (!isBuiltInDefault) {
-      return validateCommand;
+      // #1166 (FR-010): custom commands run verbatim except for the `<base>`
+      // placeholder, substituted with the resolved base branch (mirrors the
+      // merge-conflict `<base>`/`<branch>` substitution). Works on both
+      // `develop`- and `main`-based repos without hardcoding the base.
+      return validateCommand.replace(/<base>/g, base);
     }
     const filter = `"...[origin/${base}]"`;
     switch (classification.kind) {
