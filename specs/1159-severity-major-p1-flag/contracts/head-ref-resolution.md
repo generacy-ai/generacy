@@ -13,9 +13,23 @@ follows the zero/one/many rule:
 |---|---|---|
 | exactly one | `getPullRequest(prNumber).head.ref` → `repoCheckout.switchBranch(checkoutPath, headRef)` | preserved (existing artifact) |
 | zero | fresh-request: keep current `createFeature({ number })` path | 0 |
-| more than one | park this poll (skip), surface for operator attention | n/a — no mutation |
+| more than one | park this poll (skip), apply `blocked:ambiguous-linked-prs`, surface for operator attention | n/a — no mutation |
 
 Every command other than `address-pr-feedback` keeps `createFeature` unchanged.
+
+**Padding-tolerant counting**: linked open PRs are counted by matching the head
+ref's **leading numeric segment by value** (`/^(\d+)-/` → `parseInt`), not a
+literal `^<N>-` regex. The default branch pattern is `{paddedNumber}-{slug}` with
+`numberPadding: 3`, so issue #42's real branch is `042-slug`; a literal `^42-`
+test would miss it, mis-count as zero, and fall through to the duplicate-PR
+`createFeature` path (the #1043 regression this contract prevents).
+
+**Many-PR park suppression**: the `>1` park applies a `blocked:ambiguous-linked-prs`
+label on the issue so the PR-feedback monitor's `blocked:*` short-circuit
+suppresses re-enqueue on subsequent polls (the ambiguity surfaces once rather than
+churning each poll). The label apply is best-effort — a failure logs and lets the
+next poll retry rather than turning the mutation-free park into a throw. The
+operator resolves the duplicate PRs and removes the label to re-arm.
 
 **Precedent**: `pr-feedback-handler.ts:225` (`const branchName = pr.head.ref;` →
 `switchBranch`). The single-PR PR number is already known

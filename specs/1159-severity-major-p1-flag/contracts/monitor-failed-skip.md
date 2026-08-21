@@ -16,6 +16,17 @@ re-enqueue for any issue carrying a label whose name starts with `failed:`.
 - Clear convention: operator removes the `failed:*` label (already the resume
   convention for `failed:review` / `failed:validate-repeated`).
 
+### Review follow-up — extend to the other non-completing pause gates
+
+Spec §Defect 1 also names `waiting-for:merge-conflicts` (base-merge-conflict
+pause) and `waiting-for:ci` (on-ci-green pause) as loop exits that bypass the
+convergence resolver. These are neither `blocked:*`, `waiting-for:remediation-limit`,
+nor `failed:*`, so the `failed:*` skip alone would let them re-enqueue and reset the
+budget every poll. The monitor MUST also skip re-enqueue while either of these
+gates is present (exact-name match via a `NON_COMPLETING_PAUSE_GATES` set, placed
+immediately after the `failed:*` branch). The gate clears when the underlying
+pause resolves (conflict fixed / CI green) or an operator removes it.
+
 ## Preconditions
 
 - The issue is otherwise re-enqueue-eligible (Case A "trust-live thread present"

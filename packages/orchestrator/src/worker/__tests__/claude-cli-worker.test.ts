@@ -1547,10 +1547,12 @@ describe('ClaudeCliWorker (integration)', () => {
     it('checks out the PR head ref (not the issue-derived slug) when exactly one linked open PR exists', async () => {
       // The issue is #42; createFeature would derive `042-test-feature` (the
       // module-mock default) — a slug that DIVERGES from the real PR head ref.
-      const headRef = '42-real-slug-from-first-run';
+      // The head ref is ZERO-PADDED (`042-…`) as the default `{paddedNumber}`
+      // pattern (numberPadding: 3) produces — the count must still match #42.
+      const headRef = '042-real-slug-from-first-run';
       mockGithub.listOpenPullRequests.mockResolvedValue([
         { number: 100, head: { ref: headRef }, base: { ref: 'main' }, state: 'open' },
-        // An unrelated open PR that must be excluded by the `^42-` prefix filter.
+        // An unrelated open PR that must be excluded by the numeric-prefix filter.
         { number: 200, head: { ref: '99-unrelated' }, base: { ref: 'main' }, state: 'open' },
       ]);
       mockGithub.getPullRequest.mockResolvedValue({
@@ -1587,9 +1589,12 @@ describe('ClaudeCliWorker (integration)', () => {
       expect(mockGithub.createPullRequest).not.toHaveBeenCalled();
     });
 
-    it('parks without mutation when more than one linked open PR exists', async () => {
+    it('parks without mutation (but applies blocked:ambiguous-linked-prs) when more than one linked open PR exists', async () => {
+      // Mixed padding — a zero-padded (`042-…`) and an unpadded (`42-…`) branch
+      // both count for issue #42, so the ambiguity is detected regardless of
+      // the branch pattern's numberPadding.
       mockGithub.listOpenPullRequests.mockResolvedValue([
-        { number: 100, head: { ref: '42-slug-a' }, base: { ref: 'main' }, state: 'open' },
+        { number: 100, head: { ref: '042-slug-a' }, base: { ref: 'main' }, state: 'open' },
         { number: 101, head: { ref: '42-slug-b' }, base: { ref: 'main' }, state: 'open' },
       ]);
 
@@ -1605,11 +1610,19 @@ describe('ClaudeCliWorker (integration)', () => {
 
       const result = await worker.handle(item);
 
-      // Parks the poll for operator attention — completes with zero mutation.
+      // Parks the poll for operator attention — completes with no branch/PR
+      // mutation, but applies a blocked:* label so the monitor's blocked:*
+      // skip suppresses re-enqueue churn and the ambiguity surfaces once.
       expect(result).toEqual({ status: 'completed' });
       expect(mockSwitchBranch).not.toHaveBeenCalled();
       expect(createFeature).not.toHaveBeenCalled();
       expect(mockGithub.createPullRequest).not.toHaveBeenCalled();
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        item.owner,
+        item.repo,
+        item.issueNumber,
+        ['blocked:ambiguous-linked-prs'],
+      );
       // Never spawns a CLI / enters the review loop.
       expect(spawnFn).not.toHaveBeenCalled();
       // Never even reaches the external-feedback parse (return is before it).

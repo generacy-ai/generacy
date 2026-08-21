@@ -154,4 +154,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
     color: 'D73A4A',
     description: 'Merge-conflict resolver (#898) exhausted its one autonomous attempt. Remove to retry.',
   },
+  {
+    name: 'blocked:ambiguous-linked-prs',
+    color: 'D73A4A',
+    description: 'Address-pr-feedback found >1 open PR on this issue\'s branches (#1159). Resolve the duplicates, then remove to retry.',
+  },
 ];

@@ -87,6 +87,22 @@ async function loadLinkedPRsFromState(checkoutPath: string, logger: Logger): Pro
 }
 
 /**
+ * True when `headRef` is a `<N>-…` feature branch for `issueNumber`, tolerant
+ * of the zero-padding the default branch pattern applies. The default config
+ * uses `{paddedNumber}-{slug}` with `numberPadding: 3`, so issue #42's real
+ * branch is `042-slug`. A literal `^42-` prefix test misses `042-slug`,
+ * mis-counts linked PRs as zero, and drops the head-ref checkout into the
+ * `createFeature` fresh-slug path — the #1043 duplicate-PR regression this
+ * head-ref resolution (SC-004) exists to prevent. Compare the leading numeric
+ * segment by value so any padding width matches.
+ */
+function headRefMatchesIssue(headRef: string, issueNumber: number): boolean {
+  const match = /^(\d+)-/.exec(headRef);
+  if (!match || !match[1]) return false;
+  return Number.parseInt(match[1], 10) === issueNumber;
+}
+
+/**
  * Default ProcessFactory that uses Node's child_process.spawn.
  */
 export const defaultProcessFactory: ProcessFactory = {
@@ -518,10 +534,12 @@ export class ClaudeCliWorker {
 
         // Count linked open PRs on this issue's `<N>-*` branches (the #1043
         // enumeration pattern). Only the count drives the zero/one/many rule;
-        // the head ref itself comes from the known metadata prNumber.
-        const linkedBranchPrefix = new RegExp('^' + item.issueNumber + '-');
+        // the head ref itself comes from the known metadata prNumber. Match by
+        // numeric prefix value (not a literal `^<N>-` regex) so zero-padded
+        // branches like `042-slug` count for issue #42 under the default
+        // `{paddedNumber}` pattern (numberPadding: 3).
         const openPrs = await github.listOpenPullRequests(item.owner, item.repo);
-        const linkedOpenPrs = openPrs.filter((pr) => linkedBranchPrefix.test(pr.head.ref));
+        const linkedOpenPrs = openPrs.filter((pr) => headRefMatchesIssue(pr.head.ref, item.issueNumber));
 
         if (linkedOpenPrs.length > 1) {
           workerLogger.warn(
@@ -534,6 +552,23 @@ export class ClaudeCliWorker {
             },
             '#1159: parking address-pr-feedback poll — >1 linked open PR, operator attention required (no mutation)',
           );
+          // Apply a blocked:* label so the ambiguity surfaces once for the
+          // operator instead of re-enqueuing + re-parking on every monitor
+          // poll. The PR-feedback monitor's `blocked:*` short-circuit then
+          // suppresses re-enqueue while the label persists; removing it (after
+          // closing/merging the duplicate PRs) re-arms the trigger. Best-effort:
+          // a label-apply failure must not turn the mutation-free park into a
+          // throw, so we swallow and let the next poll retry.
+          try {
+            await github.addLabels(item.owner, item.repo, item.issueNumber, [
+              'blocked:ambiguous-linked-prs',
+            ]);
+          } catch (labelError) {
+            workerLogger.warn(
+              { issueNumber: item.issueNumber, err: labelError },
+              '#1159: failed to apply blocked:ambiguous-linked-prs on park — non-fatal, will re-check next poll',
+            );
+          }
           return { status: 'completed' };
         }
 

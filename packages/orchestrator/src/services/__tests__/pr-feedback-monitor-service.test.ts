@@ -2316,6 +2316,91 @@ describe('PrFeedbackMonitorService', () => {
   });
 
   // ==========================================================================
+  // #1159 review follow-up / FR-003: non-completing pause-gate skip.
+  // waiting-for:merge-conflicts and waiting-for:ci are the two OTHER
+  // non-completing loop exits named in the spec (§Defect 1). Like failed:* they
+  // bypass the convergence resolver, so re-enqueuing while present resets the
+  // remediation budget every poll (#883 runaway). They must skip too.
+  // ==========================================================================
+
+  describe('#1159 non-completing pause-gate skip (merge-conflicts / ci)', () => {
+    function trustLiveThreads() {
+      return [
+        {
+          id: 'PRRT_1159_pause',
+          rootCommentId: 11591,
+          isResolved: false,
+          comments: [{
+            id: 11591, body: 'address this', author: 'reviewer',
+            authorAssociation: 'MEMBER', created_at: '', updated_at: '',
+          }],
+        },
+      ];
+    }
+
+    it.each([
+      'waiting-for:merge-conflicts',
+      'waiting-for:ci',
+    ])('skip: %s present + unresolved threads → no enqueue', async (gateLabel) => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([gateLabel]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+
+      // waiting-for:address-pr-feedback NOT added on this skip poll.
+      const waitingForCall = (mockClient.addLabels as ReturnType<typeof vi.fn>).mock.calls
+        .find((c: unknown[]) => Array.isArray(c[3]) && (c[3] as string[]).includes('waiting-for:address-pr-feedback'));
+      expect(waitingForCall).toBeUndefined();
+
+      // Structured skip log emitted with the pause-gate name.
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => typeof c[1] === 'string' && c[1].includes('non-completing pause gate is present'),
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({
+        pauseGate: gateLabel,
+        reason: 'non-completing-pause-gate-present',
+      });
+    });
+
+    it('subsequent polls: repeated waiting-for:merge-conflicts polls never re-enqueue', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'waiting-for:merge-conflicts',
+      ]);
+
+      const event = createPrReviewEvent();
+      await service.processPrReviewEvent(event);
+      await service.processPrReviewEvent(event);
+      await service.processPrReviewEvent(event);
+
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('passthrough: an unrelated waiting-for:* gate does NOT skip', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'agent:in-progress',
+        'workflow:speckit-feature',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+
+      const infoMessages = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => String(c[1] ?? ''));
+      expect(infoMessages.some((m) => m.includes('non-completing pause gate is present'))).toBe(false);
+    });
+  });
+
+  // ==========================================================================
   // #1070: fixer-timeout retry-eligible branch + counter map
   // ==========================================================================
 
