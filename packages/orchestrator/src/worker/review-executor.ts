@@ -20,7 +20,7 @@ import type { ReviewIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { WorkerConfig } from './config.js';
 import {
-  resolveAgentForPhase,
+  resolveReviewLikeAgent,
   resolvePhaseTimeoutMs,
   resolveWorkflowOverrides,
 } from './config.js';
@@ -121,12 +121,13 @@ export class ReviewExecutor implements ReviewExecutorLike {
       ...(reviewScope ? { diffWindow: reviewScope } : {}),
     });
 
-    // 4. Resolve the agent for this review — reuse the `implement` agent so the
-    //    same model that wrote the code reviews it (mirrors pr-feedback, #814).
-    const { provider, model, effort } = resolveAgentForPhase(
+    // 4. Resolve the agent for this review — prefer the `phases.review` tier and
+    //    fall back field-by-field to the `implement` agent so the same model that
+    //    wrote the code reviews it when unset (#1160 FR-005; mirrors pr-feedback #814).
+    const { provider, model, effort } = resolveReviewLikeAgent(
       this.config,
       workflowName,
-      'implement',
+      'review',
     );
 
     warnIfEffortDropped(this.logger, {

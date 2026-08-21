@@ -246,6 +246,45 @@ describe('orchestrator.workflows overrides (issue #1122)', () => {
   });
 });
 
+describe('WorkflowOverrideSchema.ciWaitTimeoutMs (issue #1160, FR-006)', () => {
+  it('accepts a legal ciWaitTimeoutMs (>= 30_000 integer)', () => {
+    const result = WorkflowOverrideSchema.parse({ ciWaitTimeoutMs: 1_800_000 });
+    expect(result.ciWaitTimeoutMs).toBe(1_800_000);
+  });
+
+  it('accepts exactly the 30_000 floor', () => {
+    const result = WorkflowOverrideSchema.parse({ ciWaitTimeoutMs: 30_000 });
+    expect(result.ciWaitTimeoutMs).toBe(30_000);
+  });
+
+  it('leaves ciWaitTimeoutMs undefined when omitted', () => {
+    const result = WorkflowOverrideSchema.parse({ validateCommand: 'pnpm build' });
+    expect(result.ciWaitTimeoutMs).toBeUndefined();
+  });
+
+  it('rejects a value below the 30_000 floor', () => {
+    expect(() => WorkflowOverrideSchema.parse({ ciWaitTimeoutMs: 29_999 })).toThrow();
+  });
+
+  it('rejects a non-integer ciWaitTimeoutMs', () => {
+    expect(() => WorkflowOverrideSchema.parse({ ciWaitTimeoutMs: 30_000.5 })).toThrow();
+  });
+
+  it('still rejects an unknown key alongside ciWaitTimeoutMs (.strict() preserved)', () => {
+    let caught: unknown;
+    try {
+      WorkflowOverrideSchema.parse({
+        ciWaitTimeoutMs: 30_000,
+        unknownKey: 'x',
+      } as unknown as Record<string, unknown>);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).toContain('unknownKey');
+  });
+});
+
 describe('EffortSchema + AgentEntrySchema (issue #1095)', () => {
   it('EffortSchema accepts all five vocabulary values', () => {
     expect(EffortSchema.parse('low')).toBe('low');

@@ -39,6 +39,7 @@ export interface ResolvedWorkflowConfig {
   validateCommand: string;
   preValidateCommand: string;
   maxRemediations: number;
+  ciWaitTimeoutMs: number;
   review: {
     profile: 'standard' | 'verification';
     blockingSeverity: 'critical' | 'major' | 'minor';
@@ -58,6 +59,7 @@ export interface ResolvedWorkflowConfig {
  * - `validateCommand`: workflow → repo (`settings.validateCommand`) → cluster (`config.validateCommand`)
  * - `preValidateCommand`: workflow → repo → cluster
  * - `maxRemediations`: workflow → `defaultMaxRemediations(w)` (no repo tier)
+ * - `ciWaitTimeoutMs`: workflow → cluster (`config.ciWaitTimeoutMs`) (no repo tier)
  * - `review.*`: workflow → `DEFAULT_REVIEW.*` (no repo tier)
  */
 export function resolveWorkflowOverrides(
@@ -73,6 +75,7 @@ export function resolveWorkflowOverrides(
     preValidateCommand:
       wf?.preValidateCommand ?? settings?.preValidateCommand ?? config.preValidateCommand,
     maxRemediations: wf?.maxRemediations ?? defaultMaxRemediations(workflowName),
+    ciWaitTimeoutMs: wf?.ciWaitTimeoutMs ?? config.ciWaitTimeoutMs,
     review: {
       profile: review?.profile ?? DEFAULT_REVIEW.profile,
       blockingSeverity: review?.blockingSeverity ?? DEFAULT_REVIEW.blockingSeverity,
@@ -152,7 +155,9 @@ export const WorkerConfigSchema = z.object({
   /**
    * Max wall-clock (ms) to wait for CI to resolve to green/not-passed on the
    * ready PR before pausing with `waiting-for:ci` (#1133, Q1-C). Default 15 min.
-   * Per-workflow-overridable, mirrors `phaseTimeoutMs`.
+   * This is the cluster-level base; a per-workflow override under
+   * `orchestrator.workflows.<name>.ciWaitTimeoutMs` takes precedence via
+   * `resolveWorkflowOverrides` (#1160).
    */
   ciWaitTimeoutMs: z.number().int().min(30_000).default(900_000),
   /** Per-phase timeout overrides keyed by phase name */
@@ -415,6 +420,41 @@ export function resolveAgentForPhase(
   const provider = providerFromTiers ?? config.defaultsAgent ?? DEFAULT_PROVIDER;
   const model = tiers.find((t) => t?.model !== undefined)?.model;
   const effort = tiers.find((t) => t?.effort !== undefined)?.effort;
+  const out: { provider: string; model?: string; effort?: Effort } = { provider };
+  if (model !== undefined) out.model = model;
+  if (effort !== undefined) out.effort = effort;
+  return out;
+}
+
+/**
+ * Resolve `{ provider, model, effort }` for the `review` / `remediate` phases
+ * with field-by-field fallback to the `implement` agent (#1160, FR-005).
+ *
+ * `resolveAgentForPhase(config, w, 'review')` walks only the `phases.review`
+ * tier → workflow `default` → `agents.default` — it never consults
+ * `phases.implement`, so an unset `phases.review` would silently drop the
+ * implement-tier agent. This helper instead:
+ *
+ * 1. `base = resolveAgentForPhase(config, workflowName, 'implement')` — the full
+ *    implement-tier resolution (its own precedence + `DEFAULT_PROVIDER`).
+ * 2. `tier = config.agents?.workflows?.[workflowName]?.phases?.[phase]` — the
+ *    `phases.<phase>` entry (may be undefined or partial).
+ * 3. Per field prefer the phase tier, else fall back to `base`.
+ *
+ * For `phase: 'remediate'` the `base` is always the `implement` resolution — the
+ * `review` tier is never consulted (Q3=A), so a cheaper `phases.review` model
+ * cannot downgrade the code-writing remediate phase.
+ */
+export function resolveReviewLikeAgent(
+  config: WorkerConfig,
+  workflowName: string,
+  phase: 'review' | 'remediate',
+): { provider: string; model?: string; effort?: Effort } {
+  const base = resolveAgentForPhase(config, workflowName, 'implement');
+  const tier = config.agents?.workflows?.[workflowName]?.phases?.[phase];
+  const provider = tier?.provider ?? base.provider;
+  const model = tier?.model ?? base.model;
+  const effort = tier?.effort ?? base.effort;
   const out: { provider: string; model?: string; effort?: Effort } = { provider };
   if (model !== undefined) out.model = model;
   if (effort !== undefined) out.effort = effort;

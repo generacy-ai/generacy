@@ -594,9 +594,18 @@ export class PhaseLoop {
       let result: PhaseResult;
       // #1158 T012: hoisted to per-iteration scope so the validate failure-routing
       // block below (~:990) can cite the effective (possibly targeted) command in
-      // the fingerprint reason + synthesized finding. Defaults to the flat command;
-      // the validate branch narrows it for speckit-bugfix. No shadow re-declaration.
-      let effectiveValidateCommand = config.validateCommand;
+      // the fingerprint reason + synthesized finding. No shadow re-declaration.
+      // #1160 (FR-001/FR-002): seed from the per-workflow resolution so a
+      // `workflows.<name>.validateCommand` override reaches the spawn (this falls
+      // back to the flat `config.validateCommand`). The speckit-bugfix branch below
+      // overwrites this with the targeted-validate decision, which itself resolves
+      // per-workflow — so FR-002 (targeted narrowing composing over the resolved
+      // base) holds by construction.
+      let effectiveValidateCommand = resolveWorkflowOverrides(
+        config,
+        deps.settings ?? null,
+        context.item.workflowName,
+      ).validateCommand;
       try {
         if (phase === 'review') {
           if (pendingValidateRemediation) {
@@ -654,11 +663,20 @@ export class PhaseLoop {
             hasBaseMergedThisCycle = true;
           }
 
-          // Pre-validate: install dependencies if configured
-          if (config.preValidateCommand) {
+          // Pre-validate: install dependencies if configured.
+          // #1160 (FR-003/FR-004): resolve per-workflow so a
+          // `workflows.<name>.preValidateCommand` override reaches the install
+          // step. `??` preserves an explicit `""` (skip) vs unset (cluster default);
+          // the `if (cmd)` truthiness guard below already skips on empty-string.
+          const effectivePreValidateCommand = resolveWorkflowOverrides(
+            config,
+            deps.settings ?? null,
+            context.item.workflowName,
+          ).preValidateCommand;
+          if (effectivePreValidateCommand) {
             const installResult = await cliSpawner.runPreValidateInstall(
               context.checkoutPath,
-              config.preValidateCommand,
+              effectivePreValidateCommand,
               context.signal,
             );
             if (!installResult.success) {
@@ -668,7 +686,7 @@ export class PhaseLoop {
               );
               results.push(installResult);
               const evidence = this.buildErrorEvidence(
-                config.preValidateCommand,
+                effectivePreValidateCommand,
                 installResult,
                 DEFAULT_INSTALL_TIMEOUT_MS,
                 undefined,
@@ -689,8 +707,9 @@ export class PhaseLoop {
           // #1134 (US2): for speckit-bugfix, classify the diff and narrow the
           // built-in default validate command to a pnpm workspace-filter form.
           // Every other workflow reaches the plain default unchanged (SC-005).
-          // #1158 T012: `effectiveValidateCommand` is hoisted to the iteration
-          // scope above; assign (not re-declare) the targeted narrowing here.
+          // #1158 T012 / #1160: `effectiveValidateCommand` is hoisted to the
+          // iteration scope above (seeded from the per-workflow resolution);
+          // assign (not re-declare) the targeted narrowing here.
           let targetedValidate: TargetedValidateDecision | undefined;
           if (context.item.workflowName === 'speckit-bugfix') {
             targetedValidate = await this.resolveTargetedValidate(
@@ -1331,17 +1350,24 @@ export class PhaseLoop {
           });
         }
 
+        // #1160 (FR-006): resolve per-workflow so a
+        // `workflows.<name>.ciWaitTimeoutMs` override reaches the wait budget.
+        const effectiveCiWaitTimeoutMs = resolveWorkflowOverrides(
+          config,
+          deps.settings ?? null,
+          context.item.workflowName,
+        ).ciWaitTimeoutMs;
         const outcome = await waitForCiGreen({
           github: context.github,
           owner: context.item.owner,
           repo: context.item.repo,
           headSha,
           branch: context.branch ?? '',
-          ciWaitTimeoutMs: config.ciWaitTimeoutMs,
+          ciWaitTimeoutMs: effectiveCiWaitTimeoutMs,
           logger: this.logger,
         });
         this.logger.info(
-          { phase, outcome: outcome.kind, ciWaitTimeoutMs: config.ciWaitTimeoutMs },
+          { phase, outcome: outcome.kind, ciWaitTimeoutMs: effectiveCiWaitTimeoutMs },
           '#1133: CI merge-readiness wait resolved',
         );
         if (outcome.kind === 'timeout') {
