@@ -96,4 +96,35 @@ describe('resolveWorkflowOverrides (issue #1122)', () => {
     const resolved = resolveWorkflowOverrides(config, null, 'speckit-epic');
     expect(resolved.maxRemediations).toBe(3);
   });
+
+  describe('ciWaitTimeoutMs precedence (issue #1160, FR-006)', () => {
+    it('settings=null → cluster base ciWaitTimeoutMs', () => {
+      const config = makeConfig();
+      const resolved = resolveWorkflowOverrides(config, null, 'speckit-feature');
+      expect(resolved.ciWaitTimeoutMs).toBe(config.ciWaitTimeoutMs);
+      expect(resolved.ciWaitTimeoutMs).toBe(900_000);
+    });
+
+    it('workflow-level override wins over cluster base', () => {
+      const config = makeConfig();
+      const settings: OrchestratorSettings = {
+        workflows: {
+          'speckit-feature': { ciWaitTimeoutMs: 1_800_000 },
+        },
+      };
+      const feature = resolveWorkflowOverrides(config, settings, 'speckit-feature');
+      expect(feature.ciWaitTimeoutMs).toBe(1_800_000);
+
+      // A workflow without its own override falls through to the cluster base.
+      const bugfix = resolveWorkflowOverrides(config, settings, 'speckit-bugfix');
+      expect(bugfix.ciWaitTimeoutMs).toBe(config.ciWaitTimeoutMs);
+    });
+
+    it('no repo tier — settings.workflows absent → cluster base', () => {
+      const config = makeConfig();
+      const settings: OrchestratorSettings = { validateCommand: 'pnpm build' };
+      const resolved = resolveWorkflowOverrides(config, settings, 'speckit-feature');
+      expect(resolved.ciWaitTimeoutMs).toBe(config.ciWaitTimeoutMs);
+    });
+  });
 });

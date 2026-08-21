@@ -237,6 +237,12 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
     expect(persisted!.findings).toHaveLength(1);
     expect(persisted!.findings[0]!.status).toBe('open'); // defaulted by engine
     expect(persisted!.findings[0]!.round).toBe(1); // stamped by engine
+    // #1159 INV-4 / SC-003: engine-authored review findings are NOT fenced —
+    // only the two external-ingestion sites (seed comment body, validate
+    // output) wrap with `wrapUntrustedData`. The agent-written detail lands
+    // verbatim, with no `<untrusted-data …>` wrapper.
+    expect(persisted!.findings[0]!.detail).toBe('Crashes on empty input.');
+    expect(persisted!.findings[0]!.detail).not.toContain('<untrusted-data');
   });
 
   it('SC-004: only-minor findings recompute to clean under the default critical threshold, ignoring verdict:changes-required', async () => {

@@ -20,7 +20,6 @@ export type {
   ShellIntent,
   PhaseIntent,
   PrFeedbackIntent,
-  ValidateFixIntent,
   MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,

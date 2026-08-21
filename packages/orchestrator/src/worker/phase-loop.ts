@@ -8,7 +8,7 @@ import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
-import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, deriveFindingId, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
+import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, deriveFindingId, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
 import { waitForCiGreen } from './ci-merge-readiness.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
@@ -18,10 +18,9 @@ import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-s
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
 import type { ReviewPoster } from './review-poster.js';
-import type { ValidateFixHandler, ValidateFailureEvidence } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
-import { PENDING_ANSWER_LITERAL } from '@generacy-ai/workflow-engine';
+import { PENDING_ANSWER_LITERAL, wrapUntrustedData } from '@generacy-ai/workflow-engine';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, EXCLUDED_EXACT_PATHS, computePhaseScopedProductDiff, resolveBaseRef } from './product-diff.js';
@@ -32,6 +31,7 @@ import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './bas
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
 import { writePauseContext } from './pause-context.js';
 import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
+import { hashValidationEvidence } from './evidence-hash.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -115,15 +115,6 @@ export interface PhaseLoopDeps {
    * that returns canned `BaseMergeResult` values without exercising real git.
    */
   baseMergeRunner?: BaseMergeRunner;
-  /**
-   * Thin remediate adapter (#1129). Dispatched ONLY at the off-sequence
-   * remediate seam when a validate failure routed into the review→remediate
-   * loop (`pendingValidateRemediation` set) — never on the validate failure
-   * path itself and no longer coupled to `resumeReason === 'base-advance'`.
-   * The phase loop owns escalation now; the adapter is best-effort (its throw
-   * is logged and the loop continues).
-   */
-  validateFixHandler?: ValidateFixHandler;
   /**
    * #942: Optional repeat-failure history tracker. When absent, escalation
    * degrades to a no-op (occurrence is always 1, `-repeated` never fires).
@@ -326,14 +317,14 @@ export class PhaseLoop {
     let currentModel: string | undefined;
     let implementRetryCount = 0;
 
-    // #1129: block-local one-shot control for a validate-origin remediation.
+    // #1129/#1158: block-local one-shot flag for a validate-origin remediation.
     // When a failing `validate` routes into the review→remediate loop, it
-    // synthesizes a changes-required artifact and stashes the fix inputs here.
-    // The remediate seam consumes and clears it (dispatching the thin adapter
-    // instead of the review-origin stub). Not persisted, not on WorkerContext.
-    let pendingValidateRemediation:
-      | undefined
-      | { evidence: ValidateFailureEvidence; prNumber: number; baseBranch: string } = undefined;
+    // synthesizes a changes-required artifact (the sole hand-off to the
+    // remediate executor) and sets this flag. The review branch reads it to
+    // stub the convergence pass (preserving the synthesized finding); the
+    // remediate seam clears it after the executor runs so the following review
+    // re-entry runs the real executor to verify the fix. Not persisted.
+    let pendingValidateRemediation = false;
 
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
@@ -590,6 +581,20 @@ export class PhaseLoop {
 
       // 3. Execute the phase
       let result: PhaseResult;
+      // #1158 T012: hoisted to per-iteration scope so the validate failure-routing
+      // block below (~:990) can cite the effective (possibly targeted) command in
+      // the fingerprint reason + synthesized finding. No shadow re-declaration.
+      // #1160 (FR-001/FR-002): seed from the per-workflow resolution so a
+      // `workflows.<name>.validateCommand` override reaches the spawn (this falls
+      // back to the flat `config.validateCommand`). The speckit-bugfix branch below
+      // overwrites this with the targeted-validate decision, which itself resolves
+      // per-workflow — so FR-002 (targeted narrowing composing over the resolved
+      // base) holds by construction.
+      let effectiveValidateCommand = resolveWorkflowOverrides(
+        config,
+        deps.settings ?? null,
+        context.item.workflowName,
+      ).validateCommand;
       try {
         if (phase === 'review') {
           if (pendingValidateRemediation) {
@@ -642,11 +647,20 @@ export class PhaseLoop {
             hasBaseMergedThisCycle = true;
           }
 
-          // Pre-validate: install dependencies if configured
-          if (config.preValidateCommand) {
+          // Pre-validate: install dependencies if configured.
+          // #1160 (FR-003/FR-004): resolve per-workflow so a
+          // `workflows.<name>.preValidateCommand` override reaches the install
+          // step. `??` preserves an explicit `""` (skip) vs unset (cluster default);
+          // the `if (cmd)` truthiness guard below already skips on empty-string.
+          const effectivePreValidateCommand = resolveWorkflowOverrides(
+            config,
+            deps.settings ?? null,
+            context.item.workflowName,
+          ).preValidateCommand;
+          if (effectivePreValidateCommand) {
             const installResult = await cliSpawner.runPreValidateInstall(
               context.checkoutPath,
-              config.preValidateCommand,
+              effectivePreValidateCommand,
               context.signal,
             );
             if (!installResult.success) {
@@ -656,7 +670,7 @@ export class PhaseLoop {
               );
               results.push(installResult);
               const evidence = this.buildErrorEvidence(
-                config.preValidateCommand,
+                effectivePreValidateCommand,
                 installResult,
                 DEFAULT_INSTALL_TIMEOUT_MS,
                 undefined,
@@ -677,7 +691,9 @@ export class PhaseLoop {
           // #1134 (US2): for speckit-bugfix, classify the diff and narrow the
           // built-in default validate command to a pnpm workspace-filter form.
           // Every other workflow reaches the plain default unchanged (SC-005).
-          let effectiveValidateCommand = config.validateCommand;
+          // #1158 T012 / #1160: `effectiveValidateCommand` is hoisted to the
+          // iteration scope above (seeded from the per-workflow resolution);
+          // assign (not re-declare) the targeted narrowing here.
           let targetedValidate: TargetedValidateDecision | undefined;
           if (context.item.workflowName === 'speckit-bugfix') {
             targetedValidate = await this.resolveTargetedValidate(
@@ -955,7 +971,7 @@ export class PhaseLoop {
         if (phase === 'validate' && config.reviewPhaseEnabled === true) {
           const prNumber = prManager.getPrNumber();
           if (prNumber !== undefined) {
-            const validateEvidence: ValidateFailureEvidence = {
+            const validateEvidence = {
               stdout: result.capturedStdout ?? '',
               // #890 renamed `error.stderr` → `error.output` (merged tail);
               // fall back to it when the raw stderr buffer is empty.
@@ -969,11 +985,20 @@ export class PhaseLoop {
             // backstop that terminates. Build CommandExitEvidence for the
             // fingerprint + alert (the helpers key on it, not on the raw
             // stdout/stderr/exitCode triple).
+            //
+            // #1158 T007 (FR-004/FR-005): stamp a STABLE fingerprint reason so
+            // `computeFailureFingerprint` (keys on `reason ?? outputTail`) yields
+            // the same fingerprint for the same defect across test-output
+            // nondeterminism (timings, parallel ordering). The reason pairs the
+            // effective (possibly targeted, T013) command with a content hash of
+            // the failing-test identifiers.
+            const stableReason = `${effectiveValidateCommand} :: ${hashValidationEvidence(validateEvidence.stdout).hash}`;
             const cmdEvidence = this.buildErrorEvidence(
-              config.validateCommand,
+              effectiveValidateCommand,
               result,
               DEFAULT_VALIDATE_TIMEOUT_MS,
               undefined,
+              stableReason,
             );
             const fingerprint = computeFailureFingerprint({
               phase: 'validate',
@@ -1017,9 +1042,19 @@ export class PhaseLoop {
             const finding: ReviewFinding = {
               id: deriveFindingId(config.validateCommand, 'validate phase failed'),
               severity: 'critical',
-              file: config.validateCommand,
+              // #1158 T013 (FR-008): cite the effective (possibly targeted)
+              // command, not the flat `config.validateCommand`.
+              file: effectiveValidateCommand,
               title: 'validate phase failed',
-              detail: boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+              // #1159 FR-005: raw validate stdout/stderr can contain
+              // attacker-influenced content (e.g. a test name or assertion
+              // message echoing a PR-controlled string) that lands verbatim in
+              // the remediate charter. Fence it at ingestion so it renders as
+              // data, mirroring validate-fix-handler.ts:235.
+              detail: wrapUntrustedData(
+                boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+                'validate-output',
+              ),
               round,
               status: 'open',
             };
@@ -1039,21 +1074,12 @@ export class PhaseLoop {
               markedReadyByEngine: prior?.markedReadyByEngine ?? false,
             });
 
-            // resolveBaseBranch returns `origin/<name>`; strip prefix to match
-            // the base-branch string used in listOpenPullRequests results.
-            const baseRefFull = await resolveBaseBranch(
-              context.github,
-              prManager,
-              context.checkoutPath,
-              context.item.owner,
-              context.item.repo,
-              this.logger,
-            );
-            const baseBranch = baseRefFull.startsWith('origin/')
-              ? baseRefFull.slice('origin/'.length)
-              : baseRefFull;
-
-            pendingValidateRemediation = { evidence: validateEvidence, prNumber, baseBranch };
+            // #1158 T014: mark the validate-origin backtrack. The synthesized
+            // `changes-required` finding above feeds `RemediateExecutor`'s
+            // charter via `readReviewArtifact` at the remediate seam — the
+            // former payload (evidence/prNumber/baseBranch) had no consumer once
+            // the `ValidateFixHandler` adapter was retired (remediate-seam.md).
+            pendingValidateRemediation = true;
             this.logger.info(
               { phase, prNumber, round, occurrence, fingerprint },
               '#1129: routing validate failure into review→remediate loop',
@@ -1309,17 +1335,24 @@ export class PhaseLoop {
           });
         }
 
+        // #1160 (FR-006): resolve per-workflow so a
+        // `workflows.<name>.ciWaitTimeoutMs` override reaches the wait budget.
+        const effectiveCiWaitTimeoutMs = resolveWorkflowOverrides(
+          config,
+          deps.settings ?? null,
+          context.item.workflowName,
+        ).ciWaitTimeoutMs;
         const outcome = await waitForCiGreen({
           github: context.github,
           owner: context.item.owner,
           repo: context.item.repo,
           headSha,
           branch: context.branch ?? '',
-          ciWaitTimeoutMs: config.ciWaitTimeoutMs,
+          ciWaitTimeoutMs: effectiveCiWaitTimeoutMs,
           logger: this.logger,
         });
         this.logger.info(
-          { phase, outcome: outcome.kind, ciWaitTimeoutMs: config.ciWaitTimeoutMs },
+          { phase, outcome: outcome.kind, ciWaitTimeoutMs: effectiveCiWaitTimeoutMs },
           '#1133: CI merge-readiness wait resolved',
         );
         if (outcome.kind === 'timeout') {
@@ -1411,6 +1444,26 @@ export class PhaseLoop {
           // exhaustion — the remediate seam would correctly proceed to
           // `validate`, so this gate must not pre-empt it. Runs BEFORE the seam.
           const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+          // #1162 FR-003 reconcile: after a worker restart or fresh re-clone the
+          // disk sidecar may be absent (count reads 0) while Redis still holds
+          // the count spent before the restart. Seed the disk sidecar from the
+          // durable mirror when Redis > disk (max(disk, redis) — never lowers a
+          // spent budget) BEFORE the synchronous gate read, so the existing
+          // `readReviewArtifactSync` observes the durable value. Best-effort:
+          // Redis-down ⇒ `getValueRaw` returns null ⇒ falls back to disk (G3).
+          {
+            const { owner, repo, issueNumber } = context.item;
+            const branch = context.branch ?? 'no-branch';
+            const remediationCountKey = `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`;
+            const rawRedis = await deps.phaseTracker?.getValueRaw(remediationCountKey);
+            const redisCount = rawRedis != null ? Number.parseInt(rawRedis, 10) : NaN;
+            if (Number.isInteger(redisCount)) {
+              const diskCount = readReviewArtifactSync(context.checkoutPath, workflowId)?.remediationCount ?? 0;
+              if (redisCount > diskCount) {
+                await seedRemediationCount(context.checkoutPath, workflowId, redisCount);
+              }
+            }
+          }
           const artifact = readReviewArtifactSync(context.checkoutPath, workflowId);
           const { maxRemediations } = resolveWorkflowOverrides(
             config,
@@ -1528,12 +1581,20 @@ export class PhaseLoop {
           // stays { phase: 'review', resumeFrom: 'review' } unchanged. Every
           // other gate keeps today's plain skip-and-continue.
           if (completedLabel === 'completed:remediation-limit') {
-            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+            const { owner, repo, issueNumber } = context.item;
+            const workflowId = `${owner}/${repo}#${issueNumber}`;
             await resetRemediationCount(context.checkoutPath, workflowId);
+            // #1162 FR-003 reset: clear the durable Redis mirror so a fresh
+            // budget also clears the persisted count (best-effort no-op when
+            // Redis is down). Mirrors the disk `resetRemediationCount` above.
+            const branch = context.branch ?? 'no-branch';
+            await deps.phaseTracker?.clearRaw(
+              `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`,
+            );
             await context.github.removeLabels(
-              context.item.owner,
-              context.item.repo,
-              context.item.issueNumber,
+              owner,
+              repo,
+              issueNumber,
               ['completed:remediation-limit'],
             );
             this.logger.info(
@@ -1697,45 +1758,23 @@ export class PhaseLoop {
         // ready (never demotes a human-marked-ready PR).
         await prManager.convertToDraftIfEngineMarkedReady(context.linkedPRs);
         await labelManager.onPhaseStart('remediate');
-        // #1129 + #1128 composed: the remediate seam serves two origins,
-        // mutually exclusive by `pendingValidateRemediation`.
-        let remediateResult: PhaseResult;
-        if (pendingValidateRemediation) {
-          // #1129: validate-origin remediation — dispatch the thin adapter at
-          // this seam (the sole invocation site — FR-008 structural mutual
-          // exclusion) instead of the inert review-origin stub. The adapter
-          // makes the fix and self-commits + pushes on this branch, so the
-          // #1128 generic executor + commit/push cycle below is skipped (running
-          // both would double-remediate the same synthesized finding). T007: the
-          // adapter is best-effort — a throw is logged and the loop continues;
-          // the subsequent delta-scoped review + validate re-run (or the
-          // fingerprint backstop on a repeated-identical failure) is the
-          // terminal safety net.
-          const { evidence, prNumber, baseBranch } = pendingValidateRemediation;
-          try {
-            await deps.validateFixHandler?.handle(
-              context.item,
-              context.checkoutPath,
-              { prNumber, baseBranch },
-              evidence,
-              context.github,
-              context.item.workflowName,
-            );
-          } catch (err) {
-            this.logger.warn(
-              { err: String(err), phase, issueNumber: context.item.issueNumber },
-              '#1129: validate-fix adapter threw — continuing (review + validate re-run is the safety net)',
-            );
-          }
-          pendingValidateRemediation = undefined;
-          remediateResult = this.runStubPhase('remediate');
-        } else {
-          // #1128: real remediation executor (defaults undefined → stub, keeping
-          // the seam production-inert until wired). The executor makes the code
-          // changes; verification happens on the next review round.
-          remediateResult = deps.remediateExecutor
-            ? await deps.remediateExecutor.execute(context)
-            : this.runStubPhase('remediate');
+        // #1158 (US1, G1/G2): both origins — review-origin AND validate-origin —
+        // now converge on the single `RemediateExecutor` (falling back to the
+        // inert stub when no executor is wired). The retired `ValidateFixHandler`
+        // adapter and its separate self-commit path are gone; the synthesized
+        // `changes-required` finding written at the validate-routing block feeds
+        // the executor's charter via `readReviewArtifact`. This makes both
+        // origins consume the shared `remediationCount` budget identically.
+        const remediateResult = deps.remediateExecutor
+          ? await deps.remediateExecutor.execute(context)
+          : this.runStubPhase('remediate');
+        // #1158 (US1, G3/G4 / FR-007): gate commit/push on the executor outcome.
+        // Push a clean-run zero exit OR a timeout-kill (partial work is worth
+        // keeping); a clean-run NON-zero exit means the fixer failed without
+        // producing usable changes, so leave the branch untouched.
+        const shouldPush =
+          remediateResult.exitCode === 0 || remediateResult.timedOut === true;
+        if (shouldPush) {
           // #1128 FR-003: commit + push the remediation changes (and whatever
           // partial work a timed-out CLI left behind) before re-reviewing.
           const remediateCommitOutcome = await prManager.commitPushAndEnsurePr('remediate');
@@ -1751,7 +1790,57 @@ export class PhaseLoop {
           if (remediateCommitOutcome.prUrl) {
             context.prUrl = remediateCommitOutcome.prUrl;
           }
+          // #1162 FR-003 mirror: the executor bumped `remediationCount` on the
+          // disk sidecar; persist that post-bump count to the durable Redis
+          // mirror so it survives a worker restart / re-clone (the disk sidecar
+          // is no longer committed to the branch after this fix). Best-effort —
+          // no-op when Redis is down (G3). Keyed identically to the reconcile +
+          // reset sites so all three operate on the same durable value.
+          const { owner, repo, issueNumber } = context.item;
+          const workflowId = `${owner}/${repo}#${issueNumber}`;
+          const remediationCount = readReviewArtifactSync(
+            context.checkoutPath,
+            workflowId,
+          )?.remediationCount;
+          if (remediationCount !== undefined) {
+            const branch = context.branch ?? 'no-branch';
+            await deps.phaseTracker?.setValueRaw(
+              `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`,
+              String(remediationCount),
+              PHASE_START_REF_TTL_SECONDS,
+            );
+          }
+        } else {
+          this.logger.warn(
+            { phase: 'remediate', exitCode: remediateResult.exitCode },
+            '#1158: remediate exited non-zero without a timeout — skipping commit/push (branch untouched)',
+          );
+          // #1158 FR-007 / SC-005: honoring "branch untouched" requires
+          // reverting the working tree, not just skipping the commit. A
+          // clean-run fixer that exits non-zero may still have left dirty
+          // tracked files and/or new untracked files behind. On the `i--`
+          // re-entry, step 5's `commitPushAndEnsurePr('review')` runs
+          // getStatus → has_changes → stageAll → commit, which would stage
+          // ALL working-tree changes — landing the abandoned partial fix on
+          // the branch under a 'complete review phase' commit. Hard-reset +
+          // clean first, excluding `.generacy` so the review sidecar (round /
+          // markedReadyByEngine carry-forward) survives. If the revert itself
+          // fails we cannot guarantee a clean branch, so abort rather than
+          // risk committing the garbage the guarantee exists to keep off.
+          try {
+            await context.github.discardWorkingTreeChanges(['.generacy']);
+          } catch (error) {
+            this.logger.error(
+              { phase: 'remediate', error: String(error) },
+              '#1158: failed to revert working tree after skipped remediate push — aborting to preserve branch-untouched guarantee',
+            );
+            return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+          }
         }
+        // #1158 T014: clear the validate-origin flag AFTER the executor runs so
+        // the following review re-entry runs the REAL executor to verify the fix
+        // (a validate-origin backtrack stubs only the first review pass).
+        pendingValidateRemediation = false;
         await labelManager.onPhaseComplete('remediate');
         results.push(remediateResult);
         outputCapture.clear();
@@ -2285,6 +2374,7 @@ export class PhaseLoop {
     result: PhaseResult,
     resolvedTimeoutMs?: number,
     classifier?: string,
+    explicitReason?: string,
   ): CommandExitEvidence {
     const message = result.error?.message ?? '';
     const exitDescriptor = classifier
@@ -2303,11 +2393,16 @@ export class PhaseLoop {
     const outputTail = rawOutput.length > 0
       ? boundOutputTail(rawOutput)
       : synthesizeOutputTail(result.output);
+    // #1158 T005: `classifier` still wins (post-exit classification message);
+    // `explicitReason` is the opt-in stable fingerprint reason from the
+    // validate-routing block. No other call site passes it, so every existing
+    // evidence payload stays byte-identical.
+    const reason = classifier ? message : explicitReason;
     return {
       command,
       exitDescriptor,
       outputTail,
-      ...(classifier ? { reason: message } : {}),
+      ...(reason !== undefined ? { reason } : {}),
     };
   }
 

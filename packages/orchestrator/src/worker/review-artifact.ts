@@ -182,6 +182,28 @@ export async function resetRemediationCount(
 }
 
 /**
+ * #1162: read → set `remediationCount := count` → atomic write. Null-safe no-op
+ * when the artifact is missing/invalid. Used by the phase-loop reconcile to
+ * seed the disk sidecar from the durable Redis mirror after a re-clone so the
+ * synchronous gate reader observes the count spent before the restart (FR-003).
+ * Leaves every other field untouched; stays Redis-free (G5).
+ */
+export async function seedRemediationCount(
+  checkoutPath: string,
+  workflowId: string,
+  count: number,
+): Promise<void> {
+  const artifact = await readReviewArtifact(checkoutPath, workflowId);
+  if (!artifact) {
+    return;
+  }
+  await writeReviewArtifact(checkoutPath, workflowId, {
+    ...artifact,
+    remediationCount: count,
+  });
+}
+
+/**
  * #1156: read → set → atomic write of `markedReadyByEngine` (FR-006). Null-safe
  * no-op when the artifact is missing/invalid (D-6). Leaves every other field
  * untouched. Called best-effort by `PrManager` on mark-ready / convert-to-draft

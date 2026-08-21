@@ -400,9 +400,17 @@ export interface GitHubClient {
   stageAll(): Promise<void>;
 
   /**
-   * Commit staged changes
+   * Commit changes.
+   *
+   * @param message Commit message.
+   * @param pathspec Optional path list. When provided, only these paths are
+   *   committed (`git commit -m <msg> -- <pathspec>`), bypassing any other
+   *   content staged in the index — so a caller can guarantee an unrelated
+   *   pre-staged path (e.g. an engine bookkeeping sidecar, #1162) is never
+   *   folded into the commit. When omitted, the whole index is committed
+   *   (unchanged legacy behavior).
    */
-  commit(message: string): Promise<CommitResult>;
+  commit(message: string, pathspec?: string[]): Promise<CommitResult>;
 
   /**
    * Push to remote
@@ -433,6 +441,17 @@ export interface GitHubClient {
    * Pop stashed changes
    */
   stashPop(): Promise<{ success: boolean; conflicts: boolean }>;
+
+  /**
+   * Discard all working-tree changes: hard-reset tracked files to HEAD and
+   * remove untracked files/directories. Used to guarantee "branch untouched"
+   * when abandoning a phase's partial work.
+   *
+   * @param excludePaths gitignore-style patterns forwarded to `git clean -e`
+   *   so caller-owned state (e.g. orchestrator sidecars under `.generacy/`)
+   *   survives the clean.
+   */
+  discardWorkingTreeChanges(excludePaths?: string[]): Promise<void>;
 
   /**
    * Get list of files with merge conflicts

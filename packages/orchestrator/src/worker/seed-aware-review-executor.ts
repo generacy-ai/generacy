@@ -14,6 +14,7 @@
  * delegates to the real executor, which re-derives the verdict from the actual diff
  * and, when clean, flips the PR back to ready-for-review.
  */
+import { wrapUntrustedData } from '@generacy-ai/workflow-engine';
 import { clearExternalFeedbackSeed, readExternalFeedbackSeed } from './external-feedback-seed.js';
 import type { ReviewExecutor, ReviewExecutorLike } from './review-executor.js';
 import {
@@ -80,7 +81,12 @@ export class SeedAwareReviewExecutor implements ReviewExecutorLike {
         file,
         ...(f.line !== undefined ? { line: f.line } : {}),
         title,
-        detail: f.body,
+        // #1159 FR-004: the review comment body is attacker-controllable content
+        // that lands verbatim in the remediate charter. Fence it at ingestion so
+        // it renders as data, not charter instructions. The source label is
+        // escaped by the fence, so a crafted author login cannot break out of the
+        // source="…" attribute.
+        detail: wrapUntrustedData(f.body, `pr-review-comment from ${f.author}`),
         round,
         status: 'open' as const,
       };

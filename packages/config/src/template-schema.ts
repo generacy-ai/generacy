@@ -94,8 +94,9 @@ export type WorkflowReview = z.infer<typeof WorkflowReviewSchema>;
 /**
  * Per-workflow orchestrator overrides under `orchestrator.workflows.<name>`.
  * Lets a target repo vary `validateCommand` / `preValidateCommand` /
- * `maxRemediations` / `review` per workflow (e.g. `speckit-feature` vs
- * `speckit-bugfix`). All fields optional; `.strict()` rejects unknown keys.
+ * `maxRemediations` / `review` / `ciWaitTimeoutMs` per workflow (e.g.
+ * `speckit-feature` vs `speckit-bugfix`). All fields optional; `.strict()`
+ * rejects unknown keys.
  */
 export const WorkflowOverrideSchema = z
   .object({
@@ -103,6 +104,12 @@ export const WorkflowOverrideSchema = z
     preValidateCommand: z.string().optional(),
     maxRemediations: z.number().int().min(0).optional(),
     review: WorkflowReviewSchema.optional(),
+    /**
+     * Per-workflow override for the CI-green wait budget (ms). `.min(30_000)`
+     * mirrors the `WorkerConfigSchema.ciWaitTimeoutMs` cluster floor so an
+     * override cannot undercut it. Absent → falls through to the cluster value.
+     */
+    ciWaitTimeoutMs: z.number().int().min(30_000).optional(),
   })
   .strict();
 export type WorkflowOverride = z.infer<typeof WorkflowOverrideSchema>;
