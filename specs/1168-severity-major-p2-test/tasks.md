@@ -19,7 +19,7 @@ seam requiring a ≤ small production fix) must be flagged before landing.
 
 <!-- These three artifacts are the shared substrate for US1 and US3. Everything downstream depends on them. -->
 
-- [ ] T001 [P] [US1] Create the real spawnable scripted agent-CLI fixture at
+- [X] T001 [P] [US1] Create the real spawnable scripted agent-CLI fixture at
   `packages/orchestrator/src/worker/__tests__/fixtures/scripted-review-cli.mjs`.
   Per `contracts/scripted-cli-fixture.md`: read `FIXTURE_CHECKOUT_PATH`, `FIXTURE_WORKFLOW_ID`,
   `FIXTURE_MODE` (`write` | `withhold`), `FIXTURE_CANDIDATE_JSON` from env. Sanitize the workflow
@@ -28,7 +28,7 @@ seam requiring a ≤ small production fix) must be flagged before landing.
   candidate JSON verbatim, `process.exit(0)`. `withhold` → write nothing, `process.exit(0)`.
   Writes only within `FIXTURE_CHECKOUT_PATH`; no network; no stdout contract.
 
-- [ ] T002 [P] [US1] Create the spawning `AgentLauncher` test double at
+- [X] T002 [P] [US1] Create the spawning `AgentLauncher` test double at
   `packages/orchestrator/src/worker/__tests__/helpers/spawning-agent-launcher.ts`.
   Per `contracts/spawning-agent-launcher-double.md`: expose `launch(request): Promise<LaunchHandle>`
   that `child_process.spawn(process.execPath, [FIXTURE_PATH], { cwd: request.cwd, env: { ...process.env,
@@ -38,7 +38,7 @@ seam requiring a ≤ small production fix) must be flagged before landing.
   `{ process, outputParser: { processChunk(){}, flush(){} }, metadata: { pluginId: 'test-spawning-double', intentKind: 'review' } }`.
   No verdict logic, no findings synthesis.
 
-- [ ] T003 [US1] Create the composition harness at
+- [X] T003 [US1] Create the composition harness at
   `packages/orchestrator/src/worker/__tests__/helpers/review-composition-harness.ts`.
   `mkdtemp` a real checkout containing `.generacy/`, set an isolated `HOME` / `GIT_CONFIG_GLOBAL`
   pointed at the temp dir, `git init` + identity (follow the real-git pattern in
