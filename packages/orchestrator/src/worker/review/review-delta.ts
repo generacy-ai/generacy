@@ -1,4 +1,4 @@
-import type { FindingsArtifact } from './findings-artifact.js';
+import type { ReviewArtifact } from '../review-artifact.js';
 
 /**
  * The base/head pair the re-review diff is scoped to, tagged by which selection
@@ -30,7 +30,7 @@ export interface ReviewDeltaGitHub {
 
 export interface ComputeReviewDeltaInput {
   github: ReviewDeltaGitHub;
-  artifact: FindingsArtifact;
+  artifact: ReviewArtifact;
   /** #1131 populates these on a merge-conflict re-arm; read-side only here */
   pauseContext?: { resolutionBaseSha?: string; resolutionHeadSha?: string };
   /** default-branch base for the full-diff fallback */
@@ -43,7 +43,7 @@ export interface ComputeReviewDeltaInput {
  * Base-selection order (first that applies wins):
  *   1. `pauseContext.resolutionBaseSha && pauseContext.resolutionHeadSha`
  *      ⇒ `source: 'resolution'` (FR-007).
- *   2. `artifact.lastReviewedSha` **and** `commitExistsInCheckout(sha)`
+ *   2. `artifact.lastReviewedCommitSha` **and** `commitExistsInCheckout(sha)`
  *      ⇒ `source: 'last-reviewed'`, head = `getCurrentCommitSha()` (FR-002).
  *   3. Otherwise ⇒ `source: 'full-diff'`, base = `prBaseRef`,
  *      head = `getCurrentCommitSha()` (FR-009 widened verification pass).
@@ -52,7 +52,7 @@ export interface ComputeReviewDeltaInput {
  * - `round === artifact.round + 1` on every branch (Q5 — no round-1 reset).
  * - `base === head` ⇒ `files: []` (SC-001).
  * - A genuine git failure from `getFilesChangedBetween` propagates; only a
- *   *missing* `lastReviewedSha` (via `commitExistsInCheckout === false`)
+ *   *missing* `lastReviewedCommitSha` (via `commitExistsInCheckout === false`)
  *   triggers the FR-009 fallback.
  */
 export async function computeReviewDelta(
@@ -72,12 +72,12 @@ export async function computeReviewDelta(
     };
   } else if (
     // 2. FR-002: artifact last-reviewed SHA, only if it still resolves.
-    artifact.lastReviewedSha != null &&
-    (await github.commitExistsInCheckout(artifact.lastReviewedSha))
+    artifact.lastReviewedCommitSha != null &&
+    (await github.commitExistsInCheckout(artifact.lastReviewedCommitSha))
   ) {
     base = {
       source: 'last-reviewed',
-      base: artifact.lastReviewedSha,
+      base: artifact.lastReviewedCommitSha,
       head: await github.getCurrentCommitSha(),
     };
   } else {

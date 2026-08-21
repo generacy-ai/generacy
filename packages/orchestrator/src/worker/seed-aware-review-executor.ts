@@ -19,6 +19,7 @@ import { clearExternalFeedbackSeed, readExternalFeedbackSeed } from './external-
 import type { ReviewExecutor, ReviewExecutorLike } from './review-executor.js';
 import {
   computeVerdict,
+  deriveFindingId,
   readReviewArtifact,
   writeReviewArtifact,
   type ReviewFinding,
@@ -68,25 +69,30 @@ export class SeedAwareReviewExecutor implements ReviewExecutorLike {
     }
 
     // Seeding round: synthesize the findings artifact directly from the seed.
-    const findings: ReviewFinding[] = seed.findings.map((f) => ({
-      severity: SEEDED_FINDING_SEVERITY,
-      file: f.path ?? NO_ANCHOR_FILE_PLACEHOLDER,
-      ...(f.line !== undefined ? { line: f.line } : {}),
-      title: `External feedback from ${f.author}`,
-      // #1159 FR-004: the review comment body is attacker-controllable content
-      // that lands verbatim in the remediate charter. Fence it at ingestion so
-      // it renders as data, not charter instructions. The source label is
-      // escaped by the fence, so a crafted author login cannot break out of the
-      // source="…" attribute.
-      detail: wrapUntrustedData(f.body, `pr-review-comment from ${f.author}`),
-      round: 0,
-      status: 'open' as const,
-    }));
-
-    const verdict = computeVerdict(findings, SEEDED_FINDING_SEVERITY);
-
     const prior = await readReviewArtifact(checkoutPath, workflowId);
     const round = (prior?.round ?? 0) + 1;
+
+    const findings: ReviewFinding[] = seed.findings.map((f) => {
+      const file = f.path ?? NO_ANCHOR_FILE_PLACEHOLDER;
+      const title = `External feedback from ${f.author}`;
+      return {
+        id: deriveFindingId(file, title),
+        severity: SEEDED_FINDING_SEVERITY,
+        file,
+        ...(f.line !== undefined ? { line: f.line } : {}),
+        title,
+        // #1159 FR-004: the review comment body is attacker-controllable content
+        // that lands verbatim in the remediate charter. Fence it at ingestion so
+        // it renders as data, not charter instructions. The source label is
+        // escaped by the fence, so a crafted author login cannot break out of the
+        // source="…" attribute.
+        detail: wrapUntrustedData(f.body, `pr-review-comment from ${f.author}`),
+        round,
+        status: 'open' as const,
+      };
+    });
+
+    const verdict = computeVerdict(findings, SEEDED_FINDING_SEVERITY);
 
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 

@@ -276,7 +276,7 @@ describe('#1128 — remediation cap gate + operator resume', () => {
     // instead of pausing. round 1 → changes-required (keeps the gate active);
     // round 2 → clean (converges to validate).
     await writeReviewArtifact(checkoutPath, WORKFLOW_ID, {
-      findings: [{ severity: 'critical', file: 'src/a.ts', title: 't', detail: 'd', round: 0, status: 'open' }],
+      findings: [{ severity: 'critical', file: 'src/a.ts', title: 't', detail: 'd', round: 1, status: 'open' }],
       verdict: 'changes-required',
       round: 1,
       lastReviewedCommitSha: 'seed',

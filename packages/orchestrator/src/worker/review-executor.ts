@@ -36,6 +36,13 @@ import {
   readReviewArtifact,
   writeReviewArtifact,
 } from './review-artifact.js';
+import type { ReviewArtifact } from './review-artifact.js';
+import {
+  advanceArtifact,
+  composeVerificationInput,
+  computeReviewDelta,
+  buildVerificationPrompt,
+} from './review/index.js';
 import type { Logger, PhaseResult, WorkerContext } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -109,16 +116,59 @@ export class ReviewExecutor implements ReviewExecutorLike {
     const priorRound = await readReviewArtifact(checkoutPath, workflowId);
     const round = (priorRound?.round ?? 0) + 1;
 
+    // 2b. Compute the delta window this re-review is scoped to (#1126/#1161,
+    //     FR-007). Round 1 (no prior) uses a round-0 stand-in so the delta falls
+    //     to the full-diff fallback; round >= 2 reads
+    //     `prior.lastReviewedCommitSha` (INV-C2). A supplied `reviewScope`
+    //     (#1131 merge-conflict re-arm) scopes the delta to the resolution range.
+    const priorForDelta: ReviewArtifact = priorRound ?? {
+      findings: [],
+      verdict: 'clean',
+      round: 0,
+      lastReviewedCommitSha: '',
+      remediationCount: 0,
+      markedReadyByEngine: false,
+    };
+    const prBaseRef = await this.resolvePrBaseRef(context);
+    const delta = await computeReviewDelta({
+      github: context.github,
+      artifact: priorForDelta,
+      prBaseRef,
+      ...(reviewScope
+        ? {
+            pauseContext: {
+              resolutionBaseSha: reviewScope.baseSha,
+              resolutionHeadSha: reviewScope.headSha,
+            },
+          }
+        : {}),
+    });
+
     // 3. Build the in-process charter naming the agent's sidecar write target.
     //    #1155: the agent writes the *candidate* path; the engine reads it and
     //    writes the authoritative artifact separately (INV-5).
+    //    Round >= 2 (a prior artifact exists) is delta-scoped and
+    //    verification-framed: `buildVerificationPrompt` output is fed into the
+    //    charter — NOT discarded (#1126/#1161, FR-005 / INV-C3). Round 1 keeps
+    //    the whole-PR profile (data-model "Round-1 special case").
     const sidecarRelPath = getReviewCandidateRelPath(workflowId);
+    const verification = priorRound
+      ? {
+          prompt: buildVerificationPrompt({
+            round: delta.round,
+            openFindings: composeVerificationInput(delta, priorRound).openFindings,
+            charter: 'verification' as const,
+          }),
+          deltaFiles: delta.files,
+        }
+      : undefined;
     const charter = buildReviewCharter({
       profile,
       sidecarRelPath,
       blockingSeverity,
       round,
       ...(reviewScope ? { diffWindow: reviewScope } : {}),
+      ...(verification ? { verification } : {}),
     });
 
     // 4. Resolve the agent for this review — prefer the `phases.review` tier and
@@ -262,19 +312,40 @@ export class ReviewExecutor implements ReviewExecutorLike {
     }
 
     // 9. Success: exit 0 AND a fresh candidate this round (possibly `[]`).
-    //    Compute the verdict from the findings — ignore any agent claim (FR-007).
-    const verdict = computeVerdict(findings, blockingSeverity);
+    //    Run the #1126 convergence merge (activated #1161, INV-C3/INV-C5). The
+    //    candidate carries `status: 'resolved'` for findings the agent confirms
+    //    the delta addressed and `status: 'open'` for still-open / new ones.
+    //    `advanceArtifact` transitions a prior open finding to `resolved` ONLY
+    //    when its file is in the delta AND the agent supplied a matching
+    //    resolution (evidence-based); an unaddressed prior finding is carried
+    //    forward unchanged (anti-vanish, SC-005), so a round-1 finding the
+    //    round-2 agent silently omits stays `open` and the verdict stays
+    //    `changes-required`. New findings are severity-filtered on round >= 2.
+    const reviewerAddressed = findings.filter((f) => f.status === 'resolved');
+    const reviewerNewFindings = findings.filter((f) => f.status === 'open');
+    const merged = advanceArtifact(
+      priorRound,
+      delta,
+      reviewerAddressed,
+      reviewerNewFindings,
+      blockingSeverity,
+    );
 
-    // 10. Stamp the commit reviewed.
+    // 9b. Compute the verdict from the MERGED findings — ignore any agent claim
+    //     (FR-007). Single source (`computeVerdict`), single severity threshold.
+    const verdict = computeVerdict(merged, blockingSeverity);
+
+    // 10. Stamp the commit reviewed (INV-C2 — the next round's delta base).
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 
-    // 11. Persist the engine-authoritative artifact atomically (round advances).
-    //     Carry forward #1128's `remediationCount` and #1156's
-    //     `markedReadyByEngine` — the review executor rewrites the artifact each
-    //     round, and dropping either field here would silently reset the
-    //     review↔remediate cap / the cross-run ready flag on every re-review pass.
+    // 11. Persist the engine-authoritative artifact atomically (round advances
+    //     only on a successful review — FR-006). Carry forward #1128's
+    //     `remediationCount` and #1156's `markedReadyByEngine` — the review
+    //     executor rewrites the artifact each round, and dropping either field
+    //     here would silently reset the review↔remediate cap / the cross-run
+    //     ready flag on every re-review pass.
     await writeReviewArtifact(checkoutPath, workflowId, {
-      findings,
+      findings: merged,
       verdict,
       round,
       lastReviewedCommitSha,
@@ -286,7 +357,14 @@ export class ReviewExecutor implements ReviewExecutorLike {
     await clearReviewCandidate(checkoutPath, workflowId);
 
     this.logger.info(
-      { verdict, round, findingCount: findings.length, exitCode, lastReviewedCommitSha },
+      {
+        verdict,
+        round,
+        candidateCount: findings.length,
+        mergedCount: merged.length,
+        exitCode,
+        lastReviewedCommitSha,
+      },
       'Review phase complete — verdict computed by engine',
     );
 
@@ -324,4 +402,50 @@ export class ReviewExecutor implements ReviewExecutorLike {
       return false;
     }
   }
+
+  /**
+   * Resolve the `origin/<ref>` base for `computeReviewDelta`'s full-diff fallback
+   * (#1161). The executor — unlike the implement-phase guard — has no `PrManager`
+   * (`WorkerContext` carries only `github` + `prUrl`), so this reimplements
+   * `product-diff.ts::resolveBaseRef` github-only: if a PR number is parseable
+   * from `context.prUrl`, diff against that PR's base branch; otherwise fall back
+   * to the repository default branch. The fallback base is only consulted when
+   * neither the pause-context resolution SHAs nor a resolvable
+   * `lastReviewedCommitSha` apply, so a best-effort default-branch answer is safe.
+   */
+  private async resolvePrBaseRef(context: WorkerContext): Promise<string> {
+    const { owner, repo } = context.item;
+    const prNumber = parsePrNumber(context.prUrl);
+    if (prNumber !== undefined) {
+      try {
+        const pr = await context.github.getPullRequest(owner, repo, prNumber);
+        return `origin/${pr.base.ref}`;
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), prNumber, owner, repo },
+          'Could not resolve PR base ref — falling back to default branch',
+        );
+      }
+    }
+    const defaultBranch = await context.github.getDefaultBranch();
+    return `origin/${defaultBranch}`;
+  }
+}
+
+/**
+ * Parse the numeric PR id from a GitHub PR URL
+ * (`https://github.com/<owner>/<repo>/pull/<N>`). Returns `undefined` for a
+ * missing/malformed URL.
+ */
+function parsePrNumber(prUrl: string | undefined): number | undefined {
+  if (!prUrl) {
+    return undefined;
+  }
+  const match = /\/pull\/(\d+)(?:[/?#]|$)/.exec(prUrl);
+  const raw = match?.[1];
+  if (raw === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }

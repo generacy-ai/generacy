@@ -7,12 +7,26 @@ import type { WorkflowPhase } from './types.js';
  * Built-in review-phase baseline used by `resolveWorkflowOverrides` when no
  * workflow-level `review` override supplies a field. Two-tier resolution:
  * workflow-level > this default (no repo-level tier — Q2).
+ *
+ * `blockingSeverity` is NOT a flat member here — it is per-workflow (see
+ * {@link defaultBlockingSeverity}, #1161 D3). Everything else is workflow-agnostic.
  */
 export const DEFAULT_REVIEW = {
   profile: 'standard',
-  blockingSeverity: 'critical',
   failThenPass: false,
 } as const;
+
+/**
+ * Built-in per-workflow default review `blockingSeverity` (#1161 D3, US4/FR-008):
+ * `speckit-feature` → `major`, every other workflow name (incl. `speckit-bugfix`)
+ * → `critical`. Feature work is held to a stricter blocking bar than a targeted
+ * bugfix. Mirrors the `defaultMaxRemediations` per-workflow shape. Consumed by
+ * `resolveWorkflowOverrides` as the fallback when no explicit
+ * `review.blockingSeverity` override is set.
+ */
+function defaultBlockingSeverity(workflowName: string): 'critical' | 'major' | 'minor' {
+  return workflowName === 'speckit-feature' ? 'major' : 'critical';
+}
 
 /**
  * Built-in default validate command (#1134 Decision 2 / Q1=B). The schema
@@ -78,7 +92,7 @@ export function resolveWorkflowOverrides(
     ciWaitTimeoutMs: wf?.ciWaitTimeoutMs ?? config.ciWaitTimeoutMs,
     review: {
       profile: review?.profile ?? DEFAULT_REVIEW.profile,
-      blockingSeverity: review?.blockingSeverity ?? DEFAULT_REVIEW.blockingSeverity,
+      blockingSeverity: review?.blockingSeverity ?? defaultBlockingSeverity(workflowName),
       failThenPass: review?.failThenPass ?? DEFAULT_REVIEW.failThenPass,
     },
   };

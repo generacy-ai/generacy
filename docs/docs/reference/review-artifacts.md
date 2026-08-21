@@ -57,6 +57,13 @@ or unparseable read returns `null` rather than throwing.
 - **Verdict.** `changes-required` iff at least one `status: "open"` finding has a
   severity at or above the workflow's `blockingSeverity` threshold
   (`critical` > `major` > `minor`); otherwise `clean`.
+- **Default `blockingSeverity` (per-workflow, #1161 D3).** When no workflow-level
+  `review.blockingSeverity` override is set, the default is **`major` for
+  `speckit-feature`** and **`critical` for every other workflow** (including
+  `speckit-bugfix`). Feature work is held to a stricter blocking bar — a `major`
+  finding blocks a feature PR but not a targeted bugfix. Resolved by
+  `defaultBlockingSeverity(workflowName)` in
+  [`worker/config.ts`](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/worker/config.ts).
 - **Back-compat.** `remediationCount` defaults to `0`, so artifacts written before
   the remediation cap shipped still parse rather than returning `null`.
 

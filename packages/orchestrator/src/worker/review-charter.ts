@@ -25,6 +25,22 @@ export interface ReviewCharterInput {
    * diff". Absent ⇒ whole-PR review, byte-identical to pre-#1131.
    */
   diffWindow?: ReviewScope;
+  /**
+   * Convergence verification pass (#1126, activated #1161). Set ONLY on round
+   * >= 2, when a prior engine artifact exists. Carries the
+   * `buildVerificationPrompt` output (the still-open findings framing) plus the
+   * delta window the re-review is scoped to. When present, the charter is
+   * delta-scoped and verification-framed: it names ONLY the changed files since
+   * the last reviewed commit, enumerates the still-open findings to confirm, and
+   * restricts NEW findings to `blockingSeverity` or higher. Absent ⇒ round-1
+   * whole-PR review (data-model "Round-1 special case").
+   */
+  verification?: {
+    /** `buildVerificationPrompt` output — the still-open-findings framing. */
+    prompt: string;
+    /** Changed files since `lastReviewedCommitSha` (the delta window). */
+    deltaFiles: string[];
+  };
 }
 
 /**
@@ -33,13 +49,38 @@ export interface ReviewCharterInput {
  * "needs verification" findings for the `validate` phase to confirm.
  */
 export function buildReviewCharter(input: ReviewCharterInput): string {
-  const { profile, sidecarRelPath, blockingSeverity, round, diffWindow } = input;
+  const { profile, sidecarRelPath, blockingSeverity, round, diffWindow, verification } = input;
 
   const lines: string[] = [];
 
   lines.push(`# Code review — round ${round}`);
   lines.push('');
-  if (diffWindow) {
+  if (verification) {
+    // #1126 (activated #1161) — convergence verification pass (round >= 2).
+    // Delta-scoped: name ONLY the files changed since the last reviewed commit,
+    // then embed the still-open-findings framing produced by
+    // `buildVerificationPrompt`. New findings are restricted to blocking
+    // severity below (the verification pass must not raise fresh advisory noise).
+    lines.push(
+      'You are performing a VERIFICATION re-review of changes made since the ' +
+        'previous review round. Inspect ONLY the delta below — the files changed ' +
+        'since the last reviewed commit — for defects: logic errors, regressions, ' +
+        'broken invariants, security issues, and incorrect handling of edge cases. ' +
+        'Ignore files and changes outside this delta.',
+    );
+    lines.push('');
+    if (verification.deltaFiles.length === 0) {
+      lines.push('Delta since last review: no files changed.');
+    } else {
+      lines.push('Files changed since the last reviewed commit:');
+      lines.push('');
+      for (const file of verification.deltaFiles) {
+        lines.push(`- ${file}`);
+      }
+    }
+    lines.push('');
+    lines.push(verification.prompt);
+  } else if (diffWindow) {
     // FR-002 (#1131) — resolution-scoped: name the exact base..head range.
     lines.push(
       'You are performing a correctness and regression review of a merge-conflict ' +
@@ -69,18 +110,50 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
   );
   lines.push('');
 
-  // FR-004 → US3 — flag an implausibly empty/trivial diff.
-  lines.push('## Empty or trivial diff');
-  lines.push('');
-  lines.push(
-    'If the diff is empty, or is implausibly small or trivial relative to what ' +
-      `the issue asks for, record that as a finding at severity \`${blockingSeverity}\` ` +
-      'or higher (an empty diff means the implementation did not happen and the ' +
-      'change must not pass review).',
-  );
-  lines.push('');
+  if (verification) {
+    // #1126 (activated #1161) — resolution is EVIDENCE-BASED, not omission-based.
+    // The engine matches a re-emitted finding to the prior one by a deterministic
+    // id derived from `(file, title)`, and marks it resolved ONLY when the agent
+    // emits it again with `status: "resolved"` AND its file is in the delta. A
+    // finding the agent simply drops is carried forward as still-open
+    // (anti-vanish) — so silence never closes a finding.
+    lines.push('## Confirming an addressed finding');
+    lines.push('');
+    lines.push(
+      'For every still-open finding listed above that the delta fully addresses, ' +
+        're-emit it in your findings file with the EXACT SAME `file` and `title` as ' +
+        'above and `status: "resolved"`. Matching on `file` + `title` is how the ' +
+        'engine ties your confirmation to the original finding, so do not paraphrase ' +
+        'either. A finding you simply omit is treated as STILL OPEN, not resolved — ' +
+        'when in doubt, re-emit it with `status: "open"`.',
+    );
+    lines.push('');
+    // The verification pass must not raise fresh advisory noise; only genuine new
+    // blocking regressions are admissible. The engine drops sub-blocking new
+    // findings anyway (`filterNewFindings`), so tell the agent up front.
+    lines.push('## New findings on a verification pass');
+    lines.push('');
+    lines.push(
+      'Only raise ' +
+        `a NEW finding when it is a genuine regression at severity \`${blockingSeverity}\` ` +
+        'or higher introduced by the delta. Give it `status: "open"`. Do NOT raise ' +
+        'new sub-blocking (advisory) findings on this pass.',
+    );
+    lines.push('');
+  } else {
+    // FR-004 → US3 — flag an implausibly empty/trivial diff (round-1 whole-PR only).
+    lines.push('## Empty or trivial diff');
+    lines.push('');
+    lines.push(
+      'If the diff is empty, or is implausibly small or trivial relative to what ' +
+        `the issue asks for, record that as a finding at severity \`${blockingSeverity}\` ` +
+        'or higher (an empty diff means the implementation did not happen and the ' +
+        'change must not pass review).',
+    );
+    lines.push('');
+  }
 
-  if (profile === 'verification') {
+  if (!verification && profile === 'verification') {
     // #1134 FR-001 — bugfix verification charter. Replace the generic
     // "needs verification" paragraph with four delineated bugfix questions.
     // Each concern the agent cannot confirm by static reading becomes its own
@@ -143,7 +216,11 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
   lines.push('- `title`: a short one-line summary of the problem.');
   lines.push('- `detail`: a full explanation of the problem.');
   lines.push(`- \`round\`: the review round number (${round}).`);
-  lines.push('- `status`: `"open"` for a new/unresolved finding.');
+  lines.push(
+    '- `status`: `"open"` for a new/unresolved finding, or `"resolved"` when ' +
+      'you are confirming (on a verification pass) that a previously-open ' +
+      'finding is now addressed.',
+  );
   lines.push('');
   lines.push(
     'Emit an empty `findings` array if you find no problems. Do NOT include a ' +

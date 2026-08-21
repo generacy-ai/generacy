@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   clearReviewCandidate,
   computeVerdict,
+  deriveFindingId,
   getReviewArtifactPath,
   getReviewArtifactRelPath,
   getReviewCandidatePath,
@@ -21,15 +22,16 @@ import {
 const WORKFLOW_ID = 'acme/widgets#42';
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
-  return {
-    severity: 'critical',
+  const base = {
+    severity: 'critical' as Severity,
     file: 'src/index.ts',
     title: 'Null deref',
     detail: 'Dereferences a possibly-null value',
     round: 1,
-    status: 'open',
+    status: 'open' as const,
     ...overrides,
   };
+  return { id: deriveFindingId(base.file, base.title), ...base };
 }
 
 describe('review-artifact I/O (SC-001)', () => {
@@ -178,7 +180,15 @@ describe('review candidate sidecar (#1155, SC-002)', () => {
     });
     const result = await readCandidateFindings(checkoutPath, WORKFLOW_ID, 3);
     expect(result).toEqual([
-      { severity: 'major', file: 'src/x.ts', title: 'T', detail: 'D', round: 3, status: 'open' },
+      {
+        id: deriveFindingId('src/x.ts', 'T'),
+        severity: 'major',
+        file: 'src/x.ts',
+        title: 'T',
+        detail: 'D',
+        round: 3,
+        status: 'open',
+      },
     ]);
   });
 });

@@ -15,6 +15,7 @@
  * atomic temp+rename, null-on-invalid reads). The sync reader exists because
  * `PhaseLoopDeps.remediateTrigger` is synchronous (`(context) => boolean`).
  */
+import { createHash } from 'node:crypto';
 import { promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -31,18 +32,39 @@ const SeveritySchema = z.enum(['critical', 'major', 'minor']);
 const FindingStatusSchema = z.enum(['open', 'resolved']);
 
 export const ReviewFindingSchema = z.object({
+  // #1161 (INV-4): stable per-finding identity, deterministic from `(file, title)`
+  // via {@link deriveFindingId}. Load-bearing for cross-round match-by-id in the
+  // convergence merge (`advanceArtifact`) and for the poster's inline thread
+  // marker. Non-empty; parse-time default-filled for pre-#1161 sidecars (INV-5).
+  id: z.string().min(1),
   severity: SeveritySchema,
   file: z.string().min(1),
   line: z.number().int().positive().optional(),
   title: z.string().min(1),
   detail: z.string().min(1),
-  round: z.number().int().nonnegative(),
+  round: z.number().int().positive(),
   status: FindingStatusSchema,
 });
 
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 
+/**
+ * #1161 (INV-4): deterministic per-finding identity. `sha256(file + '\0' + title)`
+ * truncated to 24 hex chars (96 bits — matches the gate-id convention). Stable
+ * across `line`/`detail`/`round` drift so a round-1 finding re-emitted in round 2
+ * matches the same delta entry. The `\0` separator prevents `("ab","c")` /
+ * `("a","bc")` collisions.
+ */
+export function deriveFindingId(file: string, title: string): string {
+  return createHash('sha256')
+    .update(`${file}\0${title}`)
+    .digest('hex')
+    .slice(0, 24);
+}
+
 const VerdictSchema = z.enum(['clean', 'changes-required']);
+
+export type Verdict = z.infer<typeof VerdictSchema>;
 
 export const ReviewArtifactSchema = z.object({
   findings: z.array(ReviewFindingSchema),
@@ -250,11 +272,54 @@ function parseArtifact(content: string): ReviewArtifact | null {
     return null;
   }
 
+  // #1161 (INV-5): repair pre-#1161 finding fields BEFORE Zod, so an older
+  // on-disk sidecar never fails the tightened schema (fills a missing `id`;
+  // normalizes `round: 0` → `1`). Idempotent — a re-parse changes nothing.
+  backfillFindingFields(raw);
+
   const parsed = ReviewArtifactSchema.safeParse(raw);
   if (!parsed.success) {
     return null;
   }
   return parsed.data;
+}
+
+/**
+ * #1161 (INV-5): mutate `raw.findings[]` in place, repairing fields a pre-#1161
+ * sidecar may lack or carry in an old shape, BEFORE Zod validation:
+ *  - fill a deterministic `id` on any finding lacking a non-empty one (uses the
+ *    same `(file, title)` derivation, so a re-parse is idempotent);
+ *  - normalize `round: 0` → `1`. The pre-#1161 `SeedAwareReviewExecutor`
+ *    persisted external-feedback findings with `round: 0`; `round` is now
+ *    `z.number().int().positive()`, so an un-normalized 0 would reject the whole
+ *    artifact — silently discarding all prior review state (round reset,
+ *    `lastReviewedCommitSha` and open findings lost, budget reset) on a mid-issue
+ *    upgrade.
+ * Tolerates arbitrary shapes (only acts on recognizable fields); malformed
+ * entries are left for Zod to reject.
+ */
+function backfillFindingFields(raw: unknown): void {
+  if (typeof raw !== 'object' || raw === null) {
+    return;
+  }
+  const findings = (raw as { findings?: unknown }).findings;
+  if (!Array.isArray(findings)) {
+    return;
+  }
+  for (const finding of findings) {
+    if (typeof finding !== 'object' || finding === null) {
+      continue;
+    }
+    const f = finding as { id?: unknown; file?: unknown; title?: unknown; round?: unknown };
+    if (!(typeof f.id === 'string' && f.id.length > 0)) {
+      if (typeof f.file === 'string' && typeof f.title === 'string') {
+        f.id = deriveFindingId(f.file, f.title);
+      }
+    }
+    if (f.round === 0) {
+      f.round = 1;
+    }
+  }
 }
 
 /** Delete the review artifact. Idempotent — swallows ENOENT. */
@@ -348,6 +413,9 @@ export async function readCandidateFindings(
   }
 
   return parsed.data.findings.map((f) => ({
+    // #1161 (INV-4): the candidate never carries an `id`; derive it here so
+    // downstream match-by-id and thread markers are stable from first parse.
+    id: deriveFindingId(f.file, f.title),
     severity: f.severity,
     file: f.file,
     ...(f.line !== undefined ? { line: f.line } : {}),

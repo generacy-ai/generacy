@@ -1,118 +1,76 @@
-import type {
-  FindingsArtifact,
-  ReviewFinding,
-  ReviewVerdict,
-  Severity,
-} from './findings-artifact.js';
-import { sev } from './findings-artifact.js';
+import type { ReviewArtifact, ReviewFinding, Severity } from '../review-artifact.js';
+import { SEVERITY_RANK } from '../review-artifact.js';
 import type { ReviewDelta } from './review-delta.js';
-
-export interface AdvanceInput {
-  artifact: FindingsArtifact;
-  delta: ReviewDelta;
-  /** finding ids the reviewer reports addressed */
-  reviewerAddressed: string[];
-  /** raw new findings the reviewer returned */
-  reviewerNewFindings: ReviewFinding[];
-  blockingSeverity: Severity;
-}
-
-export interface AdvanceResult {
-  /** next artifact (immutable transition) */
-  artifact: FindingsArtifact;
-  verdict: ReviewVerdict;
-  /** filtered-out advisory findings (round ≥ 2) */
-  droppedSubBlocking: ReviewFinding[];
-}
 
 /**
  * FR-005 / Q3: engine-side advisory filter, authoritative over the prompt.
  * - `round === 1` ⇒ keep all (advisory allowed on the first full review).
- * - `round >= 2` ⇒ drop any finding with `sev < sev(blockingSeverity)`.
+ * - `round >= 2` ⇒ drop any finding below `blockingSeverity` (Decision 5).
  */
 export function filterNewFindings(
-  newFindings: ReviewFinding[],
+  candidates: ReviewFinding[],
   round: number,
   blockingSeverity: Severity,
-): { kept: ReviewFinding[]; dropped: ReviewFinding[] } {
+): ReviewFinding[] {
   if (round === 1) {
-    return { kept: [...newFindings], dropped: [] };
+    return [...candidates];
   }
-  const threshold = sev(blockingSeverity);
-  const kept: ReviewFinding[] = [];
-  const dropped: ReviewFinding[] = [];
-  for (const f of newFindings) {
-    if (sev(f.severity) >= threshold) {
-      kept.push(f);
-    } else {
-      dropped.push(f);
-    }
-  }
-  return { kept, dropped };
+  const threshold = SEVERITY_RANK[blockingSeverity];
+  return candidates.filter((f) => SEVERITY_RANK[f.severity] >= threshold);
 }
 
 /**
- * FR-008: `changes-required` iff any finding at/above `blockingSeverity` is
- * still `open`; else `clean`.
- */
-export function computeVerdict(
-  artifact: FindingsArtifact,
-  blockingSeverity: Severity,
-): ReviewVerdict {
-  const threshold = sev(blockingSeverity);
-  const hasBlockingOpen = artifact.findings.some(
-    (f) => f.status === 'open' && sev(f.severity) >= threshold,
-  );
-  return hasBlockingOpen ? 'changes-required' : 'clean';
-}
-
-/**
- * FR-006: monotonic status machine over the findings artifact. Returns a new
- * artifact (immutable transition).
+ * FR-006: monotonic status machine over the findings artifact. Returns the merged
+ * `ReviewFinding[]`; the executor computes the verdict (via the single
+ * `computeVerdict`) and writes the canonical artifact.
  *
- * 1. `open` finding whose file is in `delta.files` and whose id is in
- *    `reviewerAddressed` ⇒ `resolved`.
- * 2. `open` findings not in the delta ⇒ unchanged (Q2 — evidence-based).
+ * 1. `open` finding whose file is in `delta.changedFiles` and whose id matches a
+ *    `reviewerAddressed` finding ⇒ `resolved`.
+ * 2. `open` findings not in the delta ⇒ unchanged (Q2 — evidence-based;
+ *    anti-vanish carry-forward, SC-005).
  * 3. `resolved` findings ⇒ never touched (Q1 — terminal).
- * 4. New findings ⇒ `filterNewFindings` first; survivors appended with
- *    `round = delta.round`.
- * 5. `lastReviewedSha = delta.base.head`; `round = delta.round`.
- * 6. `verdict = computeVerdict(nextArtifact, blockingSeverity)`.
+ * 4. New findings ⇒ `filterNewFindings` first; survivors de-duped by id against
+ *    carried-forward priors (a re-emitted unaddressed finding shares its prior's
+ *    deterministic id) before being appended with `round = delta.round`.
  */
-export function advanceArtifact(input: AdvanceInput): AdvanceResult {
-  const { artifact, delta, reviewerAddressed, reviewerNewFindings, blockingSeverity } =
-    input;
-
+export function advanceArtifact(
+  prior: ReviewArtifact | null,
+  delta: ReviewDelta,
+  reviewerAddressed: ReviewFinding[],
+  reviewerNewFindings: ReviewFinding[],
+  blockingSeverity: Severity,
+): ReviewFinding[] {
   const deltaFiles = new Set(delta.files);
-  const addressed = new Set(reviewerAddressed);
+  const addressed = new Set(reviewerAddressed.map((f) => f.id));
 
-  const transitioned: ReviewFinding[] = artifact.findings.map((f) => {
-    if (
-      f.status === 'open' &&
-      deltaFiles.has(f.file) &&
-      addressed.has(f.id)
-    ) {
+  const priorFindings = prior?.findings ?? [];
+  const transitioned: ReviewFinding[] = priorFindings.map((f) => {
+    if (f.status === 'open' && deltaFiles.has(f.file) && addressed.has(f.id)) {
       return { ...f, status: 'resolved' as const };
     }
     // resolved stays resolved (Q1); open-outside-delta stays open (Q2).
     return f;
   });
 
-  const { kept, dropped } = filterNewFindings(
-    reviewerNewFindings,
-    delta.round,
-    blockingSeverity,
-  );
-  const appended: ReviewFinding[] = kept.map((f) => ({ ...f, round: delta.round }));
+  const kept = filterNewFindings(reviewerNewFindings, delta.round, blockingSeverity);
 
-  const nextArtifact: FindingsArtifact = {
-    round: delta.round,
-    findings: [...transitioned, ...appended],
-    lastReviewedSha: delta.base.head,
-  };
+  // De-dupe re-emitted findings by id against carried-forward priors (and against
+  // each other). The verification charter tells the agent to re-emit an
+  // unaddressed finding as `open` "when in doubt"; that re-emission shares the
+  // deterministic id (`sha256(file, title)`) of the prior copy already carried
+  // forward in `transitioned`. Appending both would put two findings with the
+  // same id in the artifact, breaking the id-uniqueness invariant ReviewPoster's
+  // inline thread marker relies on — it would re-post duplicate comments each
+  // round. Prefer the carried-forward instance; drop the re-emitted duplicate.
+  const seenIds = new Set(transitioned.map((f) => f.id));
+  const appended: ReviewFinding[] = [];
+  for (const f of kept) {
+    if (seenIds.has(f.id)) {
+      continue;
+    }
+    seenIds.add(f.id);
+    appended.push({ ...f, round: delta.round });
+  }
 
-  const verdict = computeVerdict(nextArtifact, blockingSeverity);
-  nextArtifact.verdict = verdict;
-
-  return { artifact: nextArtifact, verdict, droppedSubBlocking: dropped };
+  return [...transitioned, ...appended];
 }
