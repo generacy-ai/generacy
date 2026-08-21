@@ -66,8 +66,14 @@ orchestrator:
 
 ## Precedence
 
-Per-workflow settings resolve **workflow → repo → cluster default**
-(`resolveWorkflowOverrides`). A key omitted here falls through to the repo-level
-`orchestrator.validateCommand` (if set), then the cluster default. The review
-sub-fields (`profile` / `blockingSeverity` / `failThenPass`) each resolve
-independently against the built-in review baseline, so you can override just one.
+Precedence depends on the key (`resolveWorkflowOverrides`):
+
+- `validateCommand` / `preValidateCommand` resolve **workflow → repo → cluster
+  default** — the repo tier (`orchestrator.validateCommand`, etc.) exists only for
+  these two keys.
+- `maxRemediations` and the `review.*` sub-fields resolve **workflow → built-in
+  review baseline**, with no repo tier.
+
+The review sub-fields (`profile` / `blockingSeverity` / `failThenPass`) each
+resolve independently against the built-in review baseline, so you can override
+just one.

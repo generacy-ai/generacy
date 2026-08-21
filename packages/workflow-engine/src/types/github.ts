@@ -262,7 +262,9 @@ export type ReviewGate =
   | 'implementation-review'
   | 'manual-validation'
   | 'address-pr-feedback'
-  | 'children-complete';
+  | 'children-complete'
+  | 'remediation-limit'
+  | 'ci';
 
 /**
  * Core workflow phases
