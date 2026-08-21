@@ -53,7 +53,12 @@ export const WAITING_PIPELINE_ORDER: string[] = [
   'waiting-for:plan-review',
   'waiting-for:tasks-review',
   'waiting-for:implementation-review',
+  // #1167 FR-008: the review/remediate cap pause sorts immediately after the
+  // implementation-review gate it succeeds in the flow.
+  'waiting-for:remediation-limit',
   'waiting-for:manual-validation',
+  // #1167 FR-008: CI-green gate is the final pause in the flow, sorted last.
+  'waiting-for:ci',
 ];
 
 // #943: intra-error tie-break — the two enumerated blocked:* labels outrank
@@ -69,7 +74,13 @@ export const ERROR_PIPELINE_ORDER: string[] = [
 // Reverse of pipeline: labels closer to workflow end come first so lower
 // index wins the sourceLabel slot when multiple demoted completed:* co-occur.
 export const STAGE_COMPLETE_PIPELINE_ORDER: string[] = [
+  // #1167 FR-009: review/remediate completions sort latest-phase-wins —
+  // validate closes the flow (index 0), then the relocated implementation-review
+  // gate, then remediate before review, both ahead of implement.
+  'completed:validate',
   'completed:implementation-review',
+  'completed:remediate',
+  'completed:review',
   'completed:implement',
   'completed:tasks-review',
   'completed:tasks',
