@@ -132,9 +132,10 @@ export interface PhaseLoopDeps {
   /**
    * #1121: Off-sequence `remediate` trigger. When it returns true after a
    * successful `review` phase, the loop runs `remediate` (off-sequence) and
-   * re-enters `review`. Defaults undefined → dead in production; concrete
-   * triggers land in later epic issues. The unit test injects a
-   * fire-once-then-false predicate to exercise the seam.
+   * re-enters `review`. When left at its `undefined` default the seam is inert;
+   * a concrete verdict-driven trigger is wired in production via
+   * `claude-cli-worker.ts`. The unit test injects a fire-once-then-false
+   * predicate to exercise the seam.
    */
   remediateTrigger?: (context: WorkerContext) => boolean;
   /**
@@ -1750,7 +1751,8 @@ export class PhaseLoop {
 
       // #1121: off-sequence `remediate` seam. After `review` completes
       // successfully, an injected trigger may drive a `remediate` pass that then
-      // re-enters `review`. Defaults undefined → dead in production (FR-007/D-5).
+      // re-enters `review`. Inert only when the trigger is left at its
+      // `undefined` default; wired live in production via claude-cli-worker.ts.
       if (phase === 'review' && result.success && deps.remediateTrigger?.(context)) {
         this.logger.info('review complete — remediateTrigger fired; running off-sequence remediate');
         // #1125 FR-006: if the engine previously marked this PR ready, convert
