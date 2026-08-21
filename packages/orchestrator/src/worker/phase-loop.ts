@@ -1748,6 +1748,27 @@ export class PhaseLoop {
             { phase: 'remediate', exitCode: remediateResult.exitCode },
             '#1158: remediate exited non-zero without a timeout — skipping commit/push (branch untouched)',
           );
+          // #1158 FR-007 / SC-005: honoring "branch untouched" requires
+          // reverting the working tree, not just skipping the commit. A
+          // clean-run fixer that exits non-zero may still have left dirty
+          // tracked files and/or new untracked files behind. On the `i--`
+          // re-entry, step 5's `commitPushAndEnsurePr('review')` runs
+          // getStatus → has_changes → stageAll → commit, which would stage
+          // ALL working-tree changes — landing the abandoned partial fix on
+          // the branch under a 'complete review phase' commit. Hard-reset +
+          // clean first, excluding `.generacy` so the review sidecar (round /
+          // markedReadyByEngine carry-forward) survives. If the revert itself
+          // fails we cannot guarantee a clean branch, so abort rather than
+          // risk committing the garbage the guarantee exists to keep off.
+          try {
+            await context.github.discardWorkingTreeChanges(['.generacy']);
+          } catch (error) {
+            this.logger.error(
+              { phase: 'remediate', error: String(error) },
+              '#1158: failed to revert working tree after skipped remediate push — aborting to preserve branch-untouched guarantee',
+            );
+            return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+          }
         }
         // #1158 T014: clear the validate-origin flag AFTER the executor runs so
         // the following review re-entry runs the REAL executor to verify the fix
