@@ -50,6 +50,7 @@ describe('review-artifact I/O (SC-001)', () => {
       round: 2,
       lastReviewedCommitSha: 'abc123def456',
       remediationCount: 0,
+      markedReadyByEngine: false,
     };
 
     await writeReviewArtifact(checkoutPath, WORKFLOW_ID, artifact);

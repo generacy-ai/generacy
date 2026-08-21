@@ -49,7 +49,7 @@ function makePoster(github: GitHubClient) {
     github,
     owner: 'o',
     repo: 'r',
-    prNumber: 7,
+    getPrNumber: () => 7,
     logger: mockLogger,
   });
 }

@@ -137,17 +137,22 @@ function makeScriptedReviewExecutor(checkoutPath: string, verdicts: Verdict[]) {
 
 function makeFindingsReader(
   checkoutPath: string,
-): (context: WorkerContext, round: number) => Promise<FindingsArtifact | null> {
+): (context: WorkerContext) => Promise<{ artifact: FindingsArtifact; round: number } | null> {
   return async () => {
     const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     if (!ra) return null;
+    // #1156 (FR-005): readFindingsArtifact returns { artifact, round } — the
+    // round is read from the sidecar (authoritative, monotonic), not passed in.
     return {
-      verdict: ra.verdict,
-      findings: ra.findings.map((f, idx) => ({
-        marker: `finding-${idx}`,
-        text: f.title,
-        severity: 'blocking' as const,
-      })),
+      artifact: {
+        verdict: ra.verdict,
+        findings: ra.findings.map((f, idx) => ({
+          marker: `finding-${idx}`,
+          text: f.title,
+          severity: 'blocking' as const,
+        })),
+      },
+      round: ra.round,
     };
   };
 }

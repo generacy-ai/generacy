@@ -103,7 +103,7 @@ function createMockDeps(github: GitHubClient): PhaseLoopDeps {
       github,
       owner: 'test',
       repo: 'repo',
-      prNumber: 42,
+      getPrNumber: () => 42,
       logger: mockLogger,
     }),
   };
@@ -176,7 +176,7 @@ describe('US1 (#1127) — clean-review happy path, real posting + lifecycle', ()
     it(`traverses implement → review → validate with review immediately after implement (${workflow}, FR-001/SC-002)`, async () => {
       const github = createGithubSpy();
       const deps = createMockDeps(github);
-      deps.readFindingsArtifact = vi.fn().mockResolvedValue(cleanArtifact());
+      deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
       const context = createMockContext(workflow, 'implement');
       const config = createConfig({ reviewPhaseEnabled: true });
       const sequence = getPhaseSequence(workflow, true) as WorkflowPhase[];
@@ -194,7 +194,7 @@ describe('US1 (#1127) — clean-review happy path, real posting + lifecycle', ()
   it('posts exactly one COMMENT review with zero REQUEST_CHANGES (FR-002 / SC-003)', async () => {
     const github = createGithubSpy();
     const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(cleanArtifact());
+    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
     const context = createMockContext('speckit-feature', 'implement');
     const config = createConfig({ reviewPhaseEnabled: true });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
@@ -213,7 +213,7 @@ describe('US1 (#1127) — clean-review happy path, real posting + lifecycle', ()
   it('stamps the engine-authored marker on the review body (FR-005 helper, T014)', async () => {
     const github = createGithubSpy();
     const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(cleanArtifact());
+    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
     const context = createMockContext('speckit-feature', 'implement');
     const config = createConfig({ reviewPhaseEnabled: true });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
@@ -229,7 +229,7 @@ describe('US1 (#1127) — clean-review happy path, real posting + lifecycle', ()
   it('marks the PR ready on clean verdict and advances into validate (FR-003)', async () => {
     const github = createGithubSpy();
     const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue(cleanArtifact());
+    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
     const context = createMockContext('speckit-feature', 'implement');
     const config = createConfig({ reviewPhaseEnabled: true });
     const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];

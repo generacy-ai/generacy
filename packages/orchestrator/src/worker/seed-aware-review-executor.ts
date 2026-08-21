@@ -94,6 +94,9 @@ export class SeedAwareReviewExecutor implements ReviewExecutorLike {
       // artifact keeps climbing (D-2: thread-resolution / gate-removal alone must
       // NOT reset the budget); a cleared artifact (prior === null) starts fresh at 0.
       remediationCount: prior?.remediationCount ?? 0,
+      // #1156: carry the cross-run ready flag forward, mirroring the real
+      // ReviewExecutor's per-round rewrite (D-7).
+      markedReadyByEngine: prior?.markedReadyByEngine ?? false,
     });
 
     // Consume-once: delete the seed before the loop can re-enter `review`, so
