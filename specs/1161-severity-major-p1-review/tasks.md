@@ -19,17 +19,17 @@ behind `reviewPhaseEnabled` / `WORKER_REVIEW_PHASE_ENABLED` (flag-OFF = byte-ide
 Blocking phase — every later phase imports the canonical types, `SEVERITY_RANK`,
 `computeVerdict`, and the back-compat `id` fill established here.
 
-- [ ] T001 [US2] In `worker/review-artifact.ts`, add `id: z.string().min(1)` as the first
+- [X] T001 [US2] In `worker/review-artifact.ts`, add `id: z.string().min(1)` as the first
       field of `ReviewFindingSchema` (data-model.md `ReviewFinding`). Keep `severity`,
       `file`, `line?`, `title`, `detail`, `round` (1-based positive int), `status`
       (`open|resolved`). Do NOT change `ReviewArtifactSchema`'s existing fields
       (`findings`, `verdict`, `round`, `lastReviewedCommitSha?`, `remediationCount`
       default 0, `markedReadyByEngine` default false).
-- [ ] T002 [US2] In `worker/review-artifact.ts`, add the deterministic id derivation
+- [X] T002 [US2] In `worker/review-artifact.ts`, add the deterministic id derivation
       `deriveFindingId(file, title) = sha256(file + '\0' + title).slice(0, 24)` using
       `node:crypto` (24 hex chars, matches `gate-id` convention). This is the same logic
       as the soon-deleted `review-findings-bridge.ts` `synthesizeMarker` — move it here.
-- [ ] T003 [US2] In `worker/review-artifact.ts`, apply the back-compat `id` fill inside
+- [X] T003 [US2] In `worker/review-artifact.ts`, apply the back-compat `id` fill inside
       `readReviewArtifact`, `readReviewArtifactSync`, and `readCandidateFindings`
       (whichever exist): for any parsed finding lacking `id`, default-fill via
       `deriveFindingId(file, title)` BEFORE Zod validation reaches the consumer. Readers

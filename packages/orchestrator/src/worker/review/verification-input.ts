@@ -1,4 +1,4 @@
-import type { FindingsArtifact, ReviewFinding } from './findings-artifact.js';
+import type { ReviewArtifact, ReviewFinding } from '../review-artifact.js';
 import type { ReviewDelta } from './review-delta.js';
 
 /**
@@ -22,7 +22,7 @@ export interface VerificationInput {
  */
 export function composeVerificationInput(
   delta: ReviewDelta,
-  artifact: FindingsArtifact,
+  artifact: ReviewArtifact,
 ): VerificationInput {
   return {
     round: delta.round,

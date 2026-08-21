@@ -1,4 +1,4 @@
-import type { ReviewFinding } from './findings-artifact.js';
+import type { ReviewFinding } from '../review-artifact.js';
 
 /**
  * Parts consumed by `buildVerificationPrompt` (FR-004).
