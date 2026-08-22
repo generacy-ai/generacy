@@ -25,7 +25,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
@@ -37,6 +37,63 @@ const execFileAsync = promisify(execFile);
  * the timeout only guards against a cold store having to hit the network.
  */
 const BASE_INSTALL_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Wall-clock cap for a single base/branch `pnpm vitest run` (FR-006). Mirrors
+ * BASE_INSTALL_TIMEOUT_MS; applied per-run, independent of the install cap. Sits
+ * under the cli-spawner phase cap so a hung test run aborts inside fail-then-pass
+ * (as a non-blocking skip) rather than stalling the outer phase spawn.
+ */
+const BASE_TEST_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Conservative infra-failure signature (FR-004, FR-005; Q2=A pre-collection only).
+ *
+ * Returns `true` ONLY when the test run failed for an infrastructure reason
+ * *before any test was collected/run* — vitest resolved zero test files, or a
+ * module/dist-resolution error surfaced before a test executed. Such a run is a
+ * broken base/branch env, not evidence about the bug, so the caller maps it to a
+ * non-blocking `skip` rather than a `base-passed`/`branch-failed` finding.
+ *
+ * Returns `false` for any output showing a test was collected and then failed
+ * (`FAIL`, per-test `×`/`✓` lines, `Tests  N failed`/`N passed`) and for anything
+ * ambiguous — bias to a genuine outcome so a real failure is never masked.
+ */
+export function isInfraFailure(output: string): boolean {
+  // A collected-and-run test is a genuine outcome — never infra.
+  const ranTests =
+    /\bFAIL\b/.test(output) ||
+    /\bPASS\b/.test(output) ||
+    /Tests\s+\d+\s+(failed|passed)/.test(output) ||
+    /Test Files\s+\d+\s+(failed|passed)/.test(output) ||
+    /[×✓]\s/.test(output);
+  if (ranTests) {
+    return false;
+  }
+
+  // Pre-collection signatures: vitest found nothing to run, or a module/dist
+  // resolution error surfaced before any test executed.
+  return (
+    /No test files found/.test(output) ||
+    /Cannot find module/.test(output) ||
+    /Failed to resolve import/.test(output) ||
+    /Failed to load url/.test(output) ||
+    /ERR_MODULE_NOT_FOUND/.test(output)
+  );
+}
+
+/**
+ * Short, log-safe discriminator for the matched infra signature. Assumes
+ * `isInfraFailure(output)` already returned `true`; returns `unknown` otherwise.
+ */
+function infraSignature(output: string): string {
+  if (/No test files found/.test(output)) return 'no-test-files';
+  if (/Cannot find module/.test(output)) return 'cannot-find-module';
+  if (/Failed to resolve import/.test(output)) return 'failed-to-resolve-import';
+  if (/Failed to load url/.test(output)) return 'failed-to-load-url';
+  if (/ERR_MODULE_NOT_FOUND/.test(output)) return 'err-module-not-found';
+  return 'unknown';
+}
 
 export interface FailThenPassInput {
   /** The branch checkout root. */
@@ -60,11 +117,16 @@ interface TestRunOutcome {
   passed: boolean;
   /** Combined stdout+stderr tail for evidence. */
   output: string;
+  /** FR-006: true iff the run was killed by BASE_TEST_TIMEOUT_MS (not an abort). */
+  timedOut: boolean;
 }
 
 /**
  * Run the given test files with vitest in `cwd`. Never throws — a non-zero exit
- * (test failure) is captured as `{ passed: false }`.
+ * (test failure) is captured as `{ passed: false }`. A run that overruns
+ * BASE_TEST_TIMEOUT_MS is killed and reported as `{ timedOut: true }` (FR-006);
+ * an `AbortError` from the caller's phase `signal` propagates (must not be
+ * converted into a spurious finding).
  */
 async function runTests(
   cwd: string,
@@ -75,12 +137,26 @@ async function runTests(
     const { stdout, stderr } = await execFileAsync('pnpm', ['vitest', 'run', ...files], {
       cwd,
       signal,
+      timeout: BASE_TEST_TIMEOUT_MS,
     });
-    return { passed: true, output: `${stdout}\n${stderr}`.trim() };
+    return { passed: true, output: `${stdout}\n${stderr}`.trim(), timedOut: false };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
+    const e = err as {
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+      killed?: boolean;
+      code?: string;
+      name?: string;
+    };
+    // An AbortError from the phase signal must propagate — it means the whole
+    // phase was cancelled, not that the tests produced a verdict.
+    if (e.name === 'AbortError' || signal.aborted) {
+      throw err;
+    }
     const output = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim() || (e.message ?? String(err));
-    return { passed: false, output };
+    const timedOut = e.killed === true || e.code === 'ETIMEDOUT';
+    return { passed: false, output, timedOut };
   }
 }
 
@@ -159,15 +235,26 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
     return { kind: 'noop' };
   }
 
-  const worktreePath = join(await mkdtemp(join(tmpdir(), 'gen-ftp-')), 'wt');
+  // Capture the mkdtemp parent so it (not just the inner `wt` worktree) is
+  // removed on every exit path (FR-007).
+  const tmpParent = await mkdtemp(join(tmpdir(), 'gen-ftp-'));
+  const worktreePath = join(tmpParent, 'wt');
 
   let baseOutcome: TestRunOutcome;
   let effectiveTestFiles: string[];
   try {
-    await execFileAsync('git', ['worktree', 'add', '--detach', worktreePath, baseRef], {
-      cwd: checkoutPath,
-      signal,
-    });
+    try {
+      await execFileAsync('git', ['worktree', 'add', '--detach', worktreePath, baseRef], {
+        cwd: checkoutPath,
+        signal,
+      });
+    } catch (err) {
+      // A worktree-add failure is an infrastructure condition, not a proof
+      // failure — skip rather than hard-fail validate (FR-009). The `finally`
+      // still runs (prune + parent cleanup handle a partially-created worktree).
+      const e = err as { message?: string };
+      return { kind: 'skip', reason: `worktree-add-failed: ${e.message ?? String(err)}` };
+    }
 
     const install = await installDeps(worktreePath, signal);
     if (!install.ok) {
@@ -189,13 +276,31 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
     }
     baseOutcome = await runTests(worktreePath, effectiveTestFiles, signal);
   } finally {
-    // Always remove the worktree, even if the base setup/run threw.
+    // Always clean up, even if the base setup/run threw. Each step is
+    // best-effort and runs WITHOUT the abort signal (FR-008): if the phase was
+    // aborted the signal is already aborted, and passing it would reject the
+    // cleanup exec immediately and orphan the worktree registration. Guarded so
+    // one failure does not skip the next.
     await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
       cwd: checkoutPath,
-      signal,
     }).catch(() => {
       /* best-effort cleanup */
     });
+    await execFileAsync('git', ['worktree', 'prune'], { cwd: checkoutPath }).catch(() => {
+      /* reconcile an orphaned registration (FR-008) */
+    });
+    await rm(tmpParent, { recursive: true, force: true }).catch(() => {
+      /* remove the mkdtemp parent (FR-007) */
+    });
+  }
+
+  // A base run that timed out or infra-failed is a broken base env, never a
+  // verdict about the bug — skip rather than report `base-passed` (FR-004/006).
+  if (!baseOutcome.passed && baseOutcome.timedOut) {
+    return { kind: 'skip', reason: 'timeout' };
+  }
+  if (!baseOutcome.passed && isInfraFailure(baseOutcome.output)) {
+    return { kind: 'skip', reason: `infra:${infraSignature(baseOutcome.output)} at base ref` };
   }
 
   if (baseOutcome.passed) {
@@ -209,6 +314,15 @@ export async function runFailThenPass(input: FailThenPassInput): Promise<FailThe
   }
 
   const branchOutcome = await runTests(checkoutPath, effectiveTestFiles, signal);
+  // A branch run that timed out or infra-failed (e.g. no root vitest → zero
+  // tests collected, FR-005) is a broken branch env, never a `branch-failed`
+  // verdict — skip.
+  if (!branchOutcome.passed && branchOutcome.timedOut) {
+    return { kind: 'skip', reason: 'timeout' };
+  }
+  if (!branchOutcome.passed && isInfraFailure(branchOutcome.output)) {
+    return { kind: 'skip', reason: `infra:${infraSignature(branchOutcome.output)} on branch` };
+  }
   if (!branchOutcome.passed) {
     return {
       kind: 'fail',
