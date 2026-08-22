@@ -37,11 +37,15 @@ describe('getPhaseSequence', () => {
     expect(getPhaseSequence('speckit-epic', true)).toEqual(epic);
   });
 
-  it('falls back to the flag-gated PHASE_SEQUENCE for unknown workflow names', () => {
+  it('always excludes review for unknown workflow names, regardless of flag (#1165 Corner 4)', () => {
+    // Unknown workflows have no gate map, so an on-remediation-limit gate can
+    // never cap a review→remediate loop. review must never enter the fallback
+    // sequence — for either flag value (FR-007).
     expect(getPhaseSequence('unknown-workflow')).toEqual(FLAG_OFF_SEQUENCE);
     expect(getPhaseSequence('')).toEqual(FLAG_OFF_SEQUENCE);
     expect(getPhaseSequence('custom-workflow')).toEqual(FLAG_OFF_SEQUENCE);
-    expect(getPhaseSequence('unknown-workflow', true)).toEqual(PHASE_SEQUENCE);
+    expect(getPhaseSequence('unknown-workflow', true)).toEqual(FLAG_OFF_SEQUENCE);
+    expect(getPhaseSequence('unknown-workflow', true)).not.toContain('review');
   });
 
   it('returns the registered sequence by reference when the flag keeps review', () => {

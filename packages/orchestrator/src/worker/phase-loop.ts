@@ -327,6 +327,14 @@ export class PhaseLoop {
     // re-entry runs the real executor to verify the fix. Not persisted.
     let pendingValidateRemediation = false;
 
+    // #1165 Corner 1 (T004): block-local one-shot guard for the flag-OFF
+    // validate-fix fallback. When `reviewPhaseEnabled` is off (the default), a
+    // failing `validate` gets exactly one bounded remediate attempt before
+    // escalating (D1=A / FR-001). Set true when the fallback fires; on the
+    // re-run `validate` a second failure sees this true and falls through to
+    // the pre-existing escalation. Not persisted (INV-1).
+    let flagOffValidateFixAttempted = false;
+
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
     let lastTasksRemaining: number | undefined;
@@ -1036,44 +1044,12 @@ export class PhaseLoop {
             // the review phase (contracts Step 2, data-model Entity 1). The
             // real review executor re-scopes on re-entry; the remediate seam
             // consumes `pendingValidateRemediation` and dispatches the adapter.
-            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
-            const prior = await readReviewArtifact(context.checkoutPath, workflowId);
-            const round = (prior?.round ?? 0) + 1;
-            const head = await context.github.getCurrentCommitSha();
-            const finding: ReviewFinding = {
-              id: deriveFindingId(config.validateCommand, 'validate phase failed'),
-              severity: 'critical',
-              // #1158 T013 (FR-008): cite the effective (possibly targeted)
-              // command, not the flat `config.validateCommand`.
-              file: effectiveValidateCommand,
-              title: 'validate phase failed',
-              // #1159 FR-005: raw validate stdout/stderr can contain
-              // attacker-influenced content (e.g. a test name or assertion
-              // message echoing a PR-controlled string) that lands verbatim in
-              // the remediate charter. Fence it at ingestion so it renders as
-              // data, mirroring validate-fix-handler.ts:235.
-              detail: wrapUntrustedData(
-                boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
-                'validate-output',
-              ),
-              round,
-              status: 'open',
-            };
-            await writeReviewArtifact(context.checkoutPath, workflowId, {
-              findings: [...(prior?.findings ?? []), finding],
-              verdict: 'changes-required',
-              round,
-              lastReviewedCommitSha: head,
-              // #1128 compose: carry the accumulated remediation budget forward
-              // across the #1129 validate-routing re-synthesis so the
-              // `on-remediation-limit` cap still bounds the loop (a validate
-              // failure must not silently reset the budget).
-              remediationCount: prior?.remediationCount ?? 0,
-              // #1156: carry the cross-run ready flag forward across the
-              // validate-routing re-synthesis (D-7 — same reasoning as the
-              // review executor's per-round rewrite).
-              markedReadyByEngine: prior?.markedReadyByEngine ?? false,
-            });
+            const { round } = await this.synthesizeValidateChangesRequiredArtifact(
+              context,
+              config.validateCommand,
+              effectiveValidateCommand,
+              validateEvidence,
+            );
 
             // #1158 T014: mark the validate-origin backtrack. The synthesized
             // `changes-required` finding above feeds `RemediateExecutor`'s
@@ -1088,6 +1064,98 @@ export class PhaseLoop {
             i = sequence.indexOf('review') - 1;
             continue;
           }
+        }
+
+        // #1165 Corner 1 (T004): flag-OFF validate-fix fallback. On the default
+        // (reviewPhaseEnabled OFF) path, give a failing `validate` exactly one
+        // bounded remediate attempt before escalating (D1=A / FR-001). Mutually
+        // exclusive with the flag-ON routing block above by flag value (INV-3):
+        // dead when reviewPhaseEnabled === true. See
+        // contracts/flag-off-validate-fix.md.
+        if (
+          phase === 'validate'
+          && config.reviewPhaseEnabled !== true
+          && flagOffValidateFixAttempted === false
+          && deps.remediateExecutor
+        ) {
+          // INV-1: bind to exactly one attempt. A second validate failure sees
+          // this true, skips the fallback, and falls through to escalation.
+          flagOffValidateFixAttempted = true;
+
+          const validateEvidence = {
+            stdout: result.capturedStdout ?? '',
+            // #890 renamed `error.stderr` → `error.output` (merged tail).
+            stderr: result.capturedStderr ?? result.error?.output ?? '',
+          };
+          await this.synthesizeValidateChangesRequiredArtifact(
+            context,
+            config.validateCommand,
+            effectiveValidateCommand,
+            validateEvidence,
+          );
+          this.logger.info(
+            { phase, issue: context.item.issueNumber },
+            '#1165: flag-OFF validate failure — running one bounded remediate attempt',
+          );
+
+          const remediateResult = await deps.remediateExecutor.execute(context);
+          // Push-gate identical to the review→remediate seam: push a clean-run
+          // zero exit OR a timeout-kill (partial work is worth keeping); a
+          // clean-run non-zero exit means the fixer produced no usable changes.
+          const shouldPush =
+            remediateResult.exitCode === 0 || remediateResult.timedOut === true;
+          if (shouldPush) {
+            const remediateCommitOutcome = await prManager.commitPushAndEnsurePr('remediate');
+            // #1051: a refused push MUST abort the loop.
+            if (remediateCommitOutcome.pushRefused) {
+              this.logger.warn(
+                { phase: 'remediate', refusal: remediateCommitOutcome.pushRefused },
+                'Phase loop aborted: pre-push guard refused flag-OFF validate-fix remediate cycle',
+              );
+              return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+            }
+            if (remediateCommitOutcome.prUrl) {
+              context.prUrl = remediateCommitOutcome.prUrl;
+            }
+            // #1162 FR-003 mirror: persist the post-bump remediationCount to the
+            // durable Redis mirror (best-effort; no-op when Redis is down).
+            const { owner, repo, issueNumber } = context.item;
+            const workflowId = `${owner}/${repo}#${issueNumber}`;
+            const remediationCount = readReviewArtifactSync(
+              context.checkoutPath,
+              workflowId,
+            )?.remediationCount;
+            if (remediationCount !== undefined) {
+              const branch = context.branch ?? 'no-branch';
+              await deps.phaseTracker?.setValueRaw(
+                `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`,
+                String(remediationCount),
+                PHASE_START_REF_TTL_SECONDS,
+              );
+            }
+          } else {
+            // INV-2: a non-successful, non-timeout remediate must not land
+            // partial work. Revert the working tree (excluding `.generacy` so
+            // the review sidecar survives); if the revert throws we cannot
+            // guarantee a clean branch, so abort.
+            this.logger.warn(
+              { phase: 'remediate', exitCode: remediateResult.exitCode },
+              '#1165: flag-OFF remediate exited non-zero without a timeout — skipping commit/push (branch untouched)',
+            );
+            try {
+              await context.github.discardWorkingTreeChanges(['.generacy']);
+            } catch (error) {
+              this.logger.error(
+                { phase: 'remediate', error: String(error) },
+                '#1165: failed to revert working tree after skipped flag-OFF remediate push — aborting',
+              );
+              return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+            }
+          }
+          results.push(remediateResult);
+          outputCapture.clear();
+          i--; // Re-run the validate phase.
+          continue;
         }
 
         const evidence = this.buildErrorEvidence(
@@ -1867,6 +1935,60 @@ export class PhaseLoop {
    */
   private runStubPhase(phase: 'review' | 'remediate'): PhaseResult {
     return { phase, success: true, exitCode: 0, durationMs: 0, output: [] };
+  }
+
+  /**
+   * #1165 Corner 1 (T003): synthesize a `changes-required` review artifact for a
+   * failing `validate` phase and persist it. One `critical` open `ReviewFinding`
+   * cites the effective (possibly targeted) validate command with fenced/bounded
+   * stdout+stderr, carrying the accumulated `remediationCount` and cross-run
+   * `markedReadyByEngine` forward from any prior artifact. Shared by the flag-ON
+   * validate-routing block and the flag-OFF validate-fix fallback so the two
+   * paths cannot diverge. Returns the new `round` for the caller's log line.
+   */
+  private async synthesizeValidateChangesRequiredArtifact(
+    context: WorkerContext,
+    validateCommand: string,
+    effectiveValidateCommand: string,
+    validateEvidence: { stdout: string; stderr: string },
+  ): Promise<{ round: number }> {
+    const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    const prior = await readReviewArtifact(context.checkoutPath, workflowId);
+    const round = (prior?.round ?? 0) + 1;
+    const head = await context.github.getCurrentCommitSha();
+    const finding: ReviewFinding = {
+      id: deriveFindingId(validateCommand, 'validate phase failed'),
+      severity: 'critical',
+      // #1158 T013 (FR-008): cite the effective (possibly targeted) command,
+      // not the flat `config.validateCommand`.
+      file: effectiveValidateCommand,
+      title: 'validate phase failed',
+      // #1159 FR-005: raw validate stdout/stderr can contain
+      // attacker-influenced content (e.g. a test name or assertion message
+      // echoing a PR-controlled string) that lands verbatim in the remediate
+      // charter. Fence it at ingestion so it renders as data, mirroring
+      // validate-fix-handler.ts:235.
+      detail: wrapUntrustedData(
+        boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+        'validate-output',
+      ),
+      round,
+      status: 'open',
+    };
+    await writeReviewArtifact(context.checkoutPath, workflowId, {
+      findings: [...(prior?.findings ?? []), finding],
+      verdict: 'changes-required',
+      round,
+      lastReviewedCommitSha: head,
+      // #1128 compose: carry the accumulated remediation budget forward across
+      // the re-synthesis so the `on-remediation-limit` cap still bounds the
+      // loop (a validate failure must not silently reset the budget).
+      remediationCount: prior?.remediationCount ?? 0,
+      // #1156: carry the cross-run ready flag forward (D-7 — same reasoning as
+      // the review executor's per-round rewrite).
+      markedReadyByEngine: prior?.markedReadyByEngine ?? false,
+    });
+    return { round };
   }
 
   /**
