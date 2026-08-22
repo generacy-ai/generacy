@@ -64,26 +64,26 @@ All tasks in this phase land in the new file
 `packages/orchestrator/src/worker/__tests__/phase-loop.review-composed.integration.test.ts`
 and share the T003 harness, so they are sequential within the file (no `[P]`).
 
-- [ ] T010 [US1] Add the verdict-recomputation regression test (FR-002 / SC-001, #1155):
+- [X] T010 [US1] Add the verdict-recomputation regression test (FR-002 / SC-001, #1155):
   the fixture (`FIXTURE_MODE=write`) emits a candidate claiming top-level `verdict: clean` while
   carrying one `open` `critical` finding; assert the engine recomputes `changes-required` and the
   loop acts on the recomputed verdict (drives the remediate/off-sequence path, not the ready
   path). Assert against the engine-authoritative artifact
   (`review-findings-<sanitized>.json`), never the candidate's claim.
 
-- [ ] T011 [US1] Add the severity-gating boundary tests (FR-003) exercising the composed loop at
+- [X] T011 [US1] Add the severity-gating boundary tests (FR-003) exercising the composed loop at
   `blockingSeverity` edges per the `data-model.md` truth table: all `open:minor` + `major` →
   `clean`; one `open:critical` + `major` → `changes-required`; one `open:major` + `critical` →
   `clean`; one `open:critical` + `critical` → `changes-required`; one `resolved:critical` +
   `critical` → `clean`. Verdict must flow through the executor + `computeVerdict`, not by calling
   `computeVerdict` directly.
 
-- [ ] T012 [US1] Add the finding-status lifecycle tests across rounds (FR-004, #1161): an `open`
+- [X] T012 [US1] Add the finding-status lifecycle tests across rounds (FR-004, #1161): an `open`
   finding at round 1 the agent marks `resolved` is carried over as `resolved` at round 2 (engine
   merge); a sub-blocking finding is dropped at round ≥ 2 (finding-id match). Drive round 2 by a
   second fixture-written candidate through the composed loop.
 
-- [ ] T013 [US1] Add the three executor failure-path tests, each with a distinct asserted loop
+- [X] T013 [US1] Add the three executor failure-path tests, each with a distinct asserted loop
   outcome (FR-005 / SC-004): (a) **missing sidecar** — `FIXTURE_MODE=withhold`, real spawn exits
   0, `readCandidateFindings` returns `null`, no-verdict round (never `clean`), executor persists
   nothing; (b) **timeout** — NOT the fixture: inject a mocked/hanging `ChildProcessHandle`
@@ -98,13 +98,13 @@ and share the T003 harness, so they are sequential within the file (no `[P]`).
 
 <!-- Phase boundary: Phase 2 must complete before starting Phase 3 (reuses the T001/T002/T003 substrate). -->
 
-- [ ] T020 [US3] Re-point `packages/orchestrator/src/worker/__tests__/phase-loop.review-clean.integration.test.ts`
+- [X] T020 [US3] Re-point `packages/orchestrator/src/worker/__tests__/phase-loop.review-clean.integration.test.ts`
   (FR-008): remove the findings-steering lever (injected `readFindingsArtifact` / verdict stub);
   wire the real `ReviewExecutor` (spawned via the T002 double + T001 fixture) and the real
   `ReviewPoster` (`new ReviewPoster({ github: <recording fake>, owner, repo, getPrNumber, logger })`)
   into `PhaseLoopDeps`. Keep the recording-fake `GitHubClient` assertions.
 
-- [ ] T021 [US3] Under the real composition, assert a clean review cycle posts **exactly one**
+- [X] T021 [US3] Under the real composition, assert a clean review cycle posts **exactly one**
   COMMENT-event review via the real poster and flips the PR ready-for-review, driven by a real
   `ReviewExecutor` verdict; and a `changes-required` cycle converts the PR to draft when the
   engine previously marked it ready. Inspect the recorded `createReview` / ready / draft calls on

@@ -73,6 +73,13 @@ export function createRecordingGithub(): GitHubClient {
       submittedAt: new Date().toISOString(),
     }),
   );
+  // Distinct HEAD per call: round 1 stamps `lastReviewedCommitSha = <call N>`,
+  // and round 2's delta base is that stamp while its head is a LATER call — so
+  // base !== head and `computeReviewDelta` runs a non-empty window through
+  // `getFilesChangedBetween` (INV-C2). A constant SHA would collapse the round-2
+  // window to `[]`, and `advanceArtifact` could never transition a prior open
+  // finding to resolved (its file would never appear in the delta).
+  let shaCounter = 0;
   return {
     // Poster surface.
     listReviews: vi.fn(async () => [] as Review[]),
@@ -82,11 +89,15 @@ export function createRecordingGithub(): GitHubClient {
     createReview,
     // Executor + delta surface.
     getDefaultBranch: vi.fn(async () => 'develop'),
-    getCurrentCommitSha: vi.fn(async () => 'a1b2c3d4'),
+    getCurrentCommitSha: vi.fn(async () => {
+      shaCounter += 1;
+      return shaCounter.toString(16).padStart(8, '0');
+    }),
     commitExistsInCheckout: vi.fn(async () => true),
     getFilesChangedByOwnCommits: vi.fn(async () => ['packages/orchestrator/src/foo.ts']),
     getFilesChangedBetween: vi.fn(async () => ['packages/orchestrator/src/foo.ts']),
     getIssue: vi.fn(async () => ({ labels: [] })),
+    getIssueLabels: vi.fn(async () => [] as string[]),
     addIssueComment: vi.fn(async () => undefined),
     removeLabels: vi.fn(async () => undefined),
   } as unknown as GitHubClient;
@@ -133,7 +144,12 @@ export interface ReviewCompositionHarness {
    * and `workflowId` are filled from the harness so the fixture derives the same
    * candidate path the engine reads.
    */
-  makeSpawningLauncher(env: { mode: 'write' | 'withhold'; candidateJson?: string }): AgentLauncher;
+  makeSpawningLauncher(env: {
+    mode: 'write' | 'withhold';
+    candidateJson?: string;
+    /** Round-varying candidates: `{ 1: <round-1 json>, 2: <round-2 json> }`. */
+    candidateJsonByRound?: Record<number, string>;
+  }): AgentLauncher;
   /** Compose a `{ context, config, deps, settings, sequence }` bundle to hand to `executeLoop`. */
   build(opts: BuildScenarioOptions): BuiltScenario;
   cleanup(): Promise<void>;
@@ -258,12 +274,15 @@ export async function createReviewCompositionHarness(
     logger: mockLogger,
     phaseLoop,
 
-    makeSpawningLauncher({ mode, candidateJson }) {
+    makeSpawningLauncher({ mode, candidateJson, candidateJsonByRound }) {
       const env: SpawningLauncherEnv = {
         FIXTURE_CHECKOUT_PATH: checkoutPath,
         FIXTURE_WORKFLOW_ID: workflowId,
         FIXTURE_MODE: mode,
         ...(candidateJson !== undefined ? { FIXTURE_CANDIDATE_JSON: candidateJson } : {}),
+        ...(candidateJsonByRound !== undefined
+          ? { FIXTURE_CANDIDATE_JSON_BY_ROUND: JSON.stringify(candidateJsonByRound) }
+          : {}),
       };
       return createSpawningAgentLauncherAsLauncher(env);
     },

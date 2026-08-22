@@ -35,6 +35,8 @@ export interface SpawningLauncherEnv {
   FIXTURE_WORKFLOW_ID: string;
   FIXTURE_MODE: 'write' | 'withhold';
   FIXTURE_CANDIDATE_JSON?: string;
+  /** JSON object mapping `"<round>" → candidateJsonString` (round-varying candidates). */
+  FIXTURE_CANDIDATE_JSON_BY_ROUND?: string;
 }
 
 const noopParser: OutputParser = {
@@ -60,6 +62,9 @@ export function createSpawningAgentLauncher(env: SpawningLauncherEnv): {
           FIXTURE_MODE: env.FIXTURE_MODE,
           ...(env.FIXTURE_CANDIDATE_JSON !== undefined
             ? { FIXTURE_CANDIDATE_JSON: env.FIXTURE_CANDIDATE_JSON }
+            : {}),
+          ...(env.FIXTURE_CANDIDATE_JSON_BY_ROUND !== undefined
+            ? { FIXTURE_CANDIDATE_JSON_BY_ROUND: env.FIXTURE_CANDIDATE_JSON_BY_ROUND }
             : {}),
         },
       });

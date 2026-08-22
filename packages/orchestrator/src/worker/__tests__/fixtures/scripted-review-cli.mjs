@@ -19,14 +19,24 @@
  *                          way the engine derives the candidate path.
  *   FIXTURE_MODE           `write` | `withhold`.
  *   FIXTURE_CANDIDATE_JSON (mode `write`) exact candidate JSON body to write verbatim.
+ *   FIXTURE_CANDIDATE_JSON_BY_ROUND (mode `write`, optional) a JSON object mapping
+ *                          `"<round>" → candidateJsonString`. When present, the
+ *                          fixture selects the candidate for the round it is about
+ *                          to drive: it reads the engine's authoritative artifact
+ *                          (`review-findings-<sanitized>.json`), takes its `round`
+ *                          (0 when absent), and writes the candidate keyed at
+ *                          `round + 1`. This lets one launcher/fixture drive
+ *                          distinct round-1 vs round-2 candidates across the
+ *                          off-sequence remediate → re-review loop (FR-004).
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const checkoutPath = process.env.FIXTURE_CHECKOUT_PATH;
 const workflowId = process.env.FIXTURE_WORKFLOW_ID;
 const mode = process.env.FIXTURE_MODE;
 const candidateJson = process.env.FIXTURE_CANDIDATE_JSON;
+const candidateJsonByRound = process.env.FIXTURE_CANDIDATE_JSON_BY_ROUND;
 
 if (!checkoutPath || !workflowId) {
   // Missing wiring is a harness bug, not a scenario — fail loudly.
@@ -45,8 +55,26 @@ if (mode === 'write') {
   const dir = path.join(checkoutPath, '.generacy');
   const candidatePath = path.join(dir, `review-candidate-${safeId}.json`);
 
+  let body = candidateJson ?? '';
+
+  if (candidateJsonByRound) {
+    // Determine the round this spawn is driving from the engine's authoritative
+    // artifact: `round + 1` (0 when the file is absent → round 1).
+    const artifactPath = path.join(dir, `review-findings-${safeId}.json`);
+    let priorRound = 0;
+    try {
+      const parsed = JSON.parse(readFileSync(artifactPath, 'utf-8'));
+      if (typeof parsed.round === 'number') priorRound = parsed.round;
+    } catch {
+      // No prior artifact (or unreadable) → this is round 1.
+    }
+    const nextRound = priorRound + 1;
+    const byRound = JSON.parse(candidateJsonByRound);
+    body = byRound[String(nextRound)] ?? '';
+  }
+
   mkdirSync(dir, { recursive: true });
-  writeFileSync(candidatePath, candidateJson ?? '', 'utf-8');
+  writeFileSync(candidatePath, body, 'utf-8');
   process.exit(0);
 }
 
