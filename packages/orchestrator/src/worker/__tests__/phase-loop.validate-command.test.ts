@@ -2,6 +2,22 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+
+// #1166: the bugfix targeted-validate path now probes `pnpm ls` for a non-empty
+// project selection before narrowing. Mock it to a non-empty result so FR-002's
+// targeted narrowing is reachable (a real bugfix run has a git checkout the probe
+// can resolve; a temp dir does not).
+const probeStdout = '[{"name":"pkg-a","path":"/tmp/packages/a"}]';
+const execFileSpy = vi.fn(
+  (_cmd: string, _args: string[], _opts: unknown, cb: unknown) => {
+    const callback = cb as (err: unknown, res?: { stdout: string; stderr: string }) => void;
+    callback(null, { stdout: probeStdout, stderr: '' });
+  },
+);
+vi.mock('node:child_process', () => ({
+  execFile: (...args: unknown[]) => (execFileSpy as unknown as (...a: unknown[]) => void)(...args),
+}));
+
 import { PhaseLoop } from '../phase-loop.js';
 import type { PhaseLoopDeps } from '../phase-loop.js';
 import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../types.js';
@@ -205,6 +221,9 @@ describe('PhaseLoop validate-command resolution (#1160 T012)', () => {
       ['packages/a/src/x.ts'],
       logger,
     );
+    // #1166: the changed file must exist on disk to survive the existence filter.
+    await fs.mkdir(path.join(workspaceDir, 'packages/a/src'), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, 'packages/a/src/x.ts'), '// present\n');
 
     await phaseLoop.executeLoop(context, createConfig(), deps, ['validate']);
 
