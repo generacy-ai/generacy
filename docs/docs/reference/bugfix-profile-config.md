@@ -24,9 +24,11 @@ orchestrator:
   workflows:
     speckit-bugfix:
       # Targeted validate: build + test only the packages affected by the diff
-      # (and their dependents), resolved against origin/develop. Strictly fewer
-      # suites run than a full-workspace `pnpm build && pnpm test`.
-      validateCommand: 'pnpm --filter "...[origin/develop]" build && pnpm --filter "...[origin/develop]" test'
+      # (and their dependents). `<base>` is substituted with the resolved base
+      # branch at validate time, so this same command works on both develop- and
+      # main-based repos. Strictly fewer suites run than a full-workspace
+      # `pnpm build && pnpm test`.
+      validateCommand: 'pnpm --filter "...[origin/<base>]" build && pnpm --filter "...[origin/<base>]" test'
       # Cap remediation cycles. On the bugfix profile the built-in default is
       # already 2; pin it explicitly so the example is self-documenting.
       maxRemediations: 2
@@ -57,7 +59,7 @@ orchestrator:
 
 | Key | Effect |
 | --- | --- |
-| `workflows.speckit-bugfix.validateCommand` | Targeted `--filter "...[origin/develop]"` build+test. Narrowed automatically only when it is the built-in default; setting it explicitly here pins the targeted command for this repo. |
+| `workflows.speckit-bugfix.validateCommand` | Targeted `--filter "...[origin/<base>]"` build+test. `<base>` is substituted with the resolved base branch at validate time (works on both `develop`- and `main`-based repos). Narrowed automatically only when it is the built-in default; setting it explicitly here pins the targeted command for this repo. |
 | `workflows.speckit-bugfix.maxRemediations` | Remediation cycle cap. The gate pauses with `waiting-for:remediation-limit` if the count is reached. |
 | `workflows.speckit-bugfix.review.profile` | `verification` selects the fix-proving charter instead of the `standard` open-ended review. |
 | `workflows.speckit-bugfix.review.blockingSeverity` | Lowest severity that blocks the review gate. `critical` lets major/minor findings through as advisory. |

@@ -15,6 +15,11 @@ interface ExecOutcome {
   ok: boolean;
   stdout?: string;
   stderr?: string;
+  /** Simulate a timeout kill (execFile sets `killed`/`code: 'ETIMEDOUT'`). */
+  killed?: boolean;
+  code?: string;
+  /** Simulate an AbortError (execFile rejection when the signal aborts). */
+  errName?: string;
 }
 
 // Routed synchronously by the mock; each test installs its own implementation.
@@ -25,9 +30,17 @@ const execFileSpy = vi.fn((cmd: string, args: string[], _opts: unknown, cb: unkn
   if (r.ok) {
     callback(null, { stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
   } else {
-    const err = new Error('command failed') as Error & { stdout?: string; stderr?: string };
+    const err = new Error('command failed') as Error & {
+      stdout?: string;
+      stderr?: string;
+      killed?: boolean;
+      code?: string;
+    };
     err.stdout = r.stdout ?? '';
     err.stderr = r.stderr ?? '';
+    if (r.killed !== undefined) err.killed = r.killed;
+    if (r.code !== undefined) err.code = r.code;
+    if (r.errName !== undefined) err.name = r.errName;
     callback(err);
   }
 });
@@ -39,11 +52,13 @@ vi.mock('node:child_process', () => ({
 // Stub the fs helpers so the overlay + temp-dir setup never touch the disk.
 const mkdirSpy = vi.fn(async () => undefined);
 const copyFileSpy = vi.fn(async () => undefined);
+const rmSpy = vi.fn(async () => undefined);
 vi.mock('node:fs/promises', () => ({
   mkdtemp: vi.fn(async (prefix: string) => `${prefix}XXXX`),
   mkdir: (...args: unknown[]) => (mkdirSpy as unknown as (...a: unknown[]) => Promise<void>)(...args),
   copyFile: (...args: unknown[]) =>
     (copyFileSpy as unknown as (...a: unknown[]) => Promise<void>)(...args),
+  rm: (...args: unknown[]) => (rmSpy as unknown as (...a: unknown[]) => Promise<void>)(...args),
 }));
 
 const { runFailThenPass } = await import('../fail-then-pass.js');
@@ -57,6 +72,9 @@ function isWorktreeAdd(cmd: string, args: string[]): boolean {
 function isWorktreeRemove(cmd: string, args: string[]): boolean {
   return cmd === 'git' && args[0] === 'worktree' && args[1] === 'remove';
 }
+function isWorktreePrune(cmd: string, args: string[]): boolean {
+  return cmd === 'git' && args[0] === 'worktree' && args[1] === 'prune';
+}
 function isPnpmInstall(cmd: string, args: string[]): boolean {
   return cmd === 'pnpm' && args[0] === 'install';
 }
@@ -69,6 +87,7 @@ describe('runFailThenPass (#1134 T009 / #1150)', () => {
     execFileSpy.mockClear();
     mkdirSpy.mockClear();
     copyFileSpy.mockClear();
+    rmSpy.mockClear();
     // Restore the default no-op copy; tests that simulate a missing source
     // override this and must not leak the override into later tests.
     copyFileSpy.mockImplementation(async () => undefined);
@@ -329,13 +348,163 @@ describe('runFailThenPass (#1134 T009 / #1150)', () => {
     );
   });
 
-  it('worktree removed even when the base run path throws (cleanup in finally)', async () => {
+  it('worktree-add failure → skip (not a hard failure), cleanup still runs (#1166 T006/FR-009)', async () => {
     handler = (cmd, args) => {
       if (isWorktreeAdd(cmd, args)) {
-        // Simulate `git worktree add` failing → error propagates, finally still runs.
+        // `git worktree add` fails → non-blocking skip, never a thrown/hard failure.
         return { ok: false, stderr: 'fatal: could not add worktree' };
       }
       if (isWorktreeRemove(cmd, args)) return { ok: true };
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    expect(result.kind).toBe('skip');
+    if (result.kind === 'skip') {
+      expect(result.reason).toContain('worktree-add-failed');
+    }
+    // No vitest run happened; the finally still pruned + removed the mkdtemp parent.
+    expect(execFileSpy.mock.calls.some(([c, a]) => isVitest(c as string, a as string[]))).toBe(false);
+    expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreePrune(c as string, a as string[]))).toBe(
+      true,
+    );
+    expect(rmSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // #1166 T013 (US3/US4) — infra-signature skips, timeout skips, AbortError
+  // propagation, and mkdtemp-parent cleanup on every path.
+  // -------------------------------------------------------------------------
+
+  it('base run infra-fails (dist-resolution error, zero tests) → skip, never base-passed (SC-003)', async () => {
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        // Module resolution error before any test collected — an infra failure.
+        return { ok: false, stderr: 'Error: Cannot find module @generacy-ai/foo/dist/index.js' };
+      }
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    expect(result.kind).toBe('skip');
+    if (result.kind === 'skip') {
+      expect(result.reason).toBe('infra:cannot-find-module at base ref');
+    }
+    // Only the base run happened — no branch run, and never a base-passed finding.
+    expect(
+      execFileSpy.mock.calls.filter(([c, a]) => isVitest(c as string, a as string[])),
+    ).toHaveLength(1);
+    // mkdtemp parent removed even on the infra-skip path.
+    expect(rmSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('no-root-vitest branch run collects zero tests → skip, not a false branch-failed (FR-005/SC-003)', async () => {
+    let vitestCalls = 0;
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        vitestCalls += 1;
+        // base genuinely fails; branch collects zero tests (no root vitest).
+        return vitestCalls === 1
+          ? { ok: false, stdout: 'FAIL x.test.ts', stderr: '' }
+          : { ok: false, stderr: 'No test files found, exiting with code 1' };
+      }
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    expect(result.kind).toBe('skip');
+    if (result.kind === 'skip') {
+      expect(result.reason).toBe('infra:no-test-files on branch');
+    }
+    expect(vitestCalls).toBe(2);
+  });
+
+  it('a collected-and-failed base test is NOT masked as infra → genuine base-passed/branch-failed path', async () => {
+    let vitestCalls = 0;
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        vitestCalls += 1;
+        // base FAILs a collected test (genuine), branch passes → overall pass.
+        return vitestCalls === 1
+          ? { ok: false, stdout: 'FAIL  x.test.ts > reproduces bug\n Tests  1 failed' }
+          : { ok: true, stdout: 'PASS  x.test.ts\n Tests  1 passed' };
+      }
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    // The collected FAIL is a genuine base failure, not infra — proof proceeds and passes.
+    expect(result).toEqual({ kind: 'pass' });
+  });
+
+  it('base run hits BASE_TEST_TIMEOUT_MS → skip: timeout (SC-004)', async () => {
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        // execFile timeout kill: killed=true, code=ETIMEDOUT.
+        return { ok: false, killed: true, code: 'ETIMEDOUT', stderr: 'killed' };
+      }
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ kind: 'skip', reason: 'timeout' });
+    // mkdtemp parent still removed on the timeout path.
+    expect(rmSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('AbortError from the phase signal propagates — NOT converted to a spurious finding (SC-004)', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        // Rejection that coincides with an aborted signal → must rethrow.
+        return { ok: false, errName: 'AbortError', stderr: 'aborted' };
+      }
       return { ok: true };
     };
 
@@ -344,13 +513,44 @@ describe('runFailThenPass (#1134 T009 / #1150)', () => {
         checkoutPath: CHECKOUT,
         baseRef: BASE_REF,
         changedTestFiles: ['packages/a/src/x.test.ts'],
-        signal: new AbortController().signal,
+        signal: ac.signal,
       }),
     ).rejects.toThrow();
 
-    // finally block issued the removal despite the add failing.
+    // Cleanup still ran despite the propagated abort (signal-free prune + parent rm).
+    expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreePrune(c as string, a as string[]))).toBe(
+      true,
+    );
+    expect(rmSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('mkdtemp parent + prune cleanup run on the happy (pass) path too (SC-005)', async () => {
+    let vitestCalls = 0;
+    handler = (cmd, args) => {
+      if (isWorktreeAdd(cmd, args)) return { ok: true };
+      if (isWorktreeRemove(cmd, args)) return { ok: true };
+      if (isPnpmInstall(cmd, args)) return { ok: true };
+      if (isVitest(cmd, args)) {
+        vitestCalls += 1;
+        return vitestCalls === 1 ? { ok: false, stdout: 'base red' } : { ok: true, stdout: 'green' };
+      }
+      return { ok: true };
+    };
+
+    const result = await runFailThenPass({
+      checkoutPath: CHECKOUT,
+      baseRef: BASE_REF,
+      changedTestFiles: ['packages/a/src/x.test.ts'],
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ kind: 'pass' });
     expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreeRemove(c as string, a as string[]))).toBe(
       true,
     );
+    expect(execFileSpy.mock.calls.some(([c, a]) => isWorktreePrune(c as string, a as string[]))).toBe(
+      true,
+    );
+    expect(rmSpy).toHaveBeenCalledTimes(1);
   });
 });

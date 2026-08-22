@@ -80,14 +80,23 @@ export const WORKFLOW_PHASE_SEQUENCES: Record<string, WorkflowPhase[]> = {
  * This preserves the byte-identical guarantee for a flag-OFF run
  * (#1121 / Q1=A / SC-004 / FR-009).
  *
- * Falls back to PHASE_SEQUENCE for unknown workflows.
+ * Unknown workflows fall back to PHASE_SEQUENCE but **always** drop `review`,
+ * regardless of `reviewPhaseEnabled`: an unknown workflow has no gate map
+ * (`gate-checker` returns `[]`), so an `on-remediation-limit` gate can never be
+ * applied and a review→remediate loop would be uncapped. Excluding `review`
+ * from the fallback removes that precondition entirely (#1165 / Corner 4 /
+ * FR-007). `remediate` is off-sequence in `PHASE_SEQUENCE`, so no extra filter
+ * is needed to exclude it.
  */
 export function getPhaseSequence(
   workflowName: string,
   reviewPhaseEnabled = false,
 ): WorkflowPhase[] {
-  const base = WORKFLOW_PHASE_SEQUENCES[workflowName] ?? PHASE_SEQUENCE;
-  return reviewPhaseEnabled ? base : base.filter((phase) => phase !== 'review');
+  const known = WORKFLOW_PHASE_SEQUENCES[workflowName];
+  if (known === undefined) {
+    return PHASE_SEQUENCE.filter((phase) => phase !== 'review');
+  }
+  return reviewPhaseEnabled ? known : known.filter((phase) => phase !== 'review');
 }
 
 /**

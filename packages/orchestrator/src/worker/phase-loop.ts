@@ -35,9 +35,13 @@ import { hashValidationEvidence } from './evidence-hash.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { classifyDiff, isTestFile, type Classification } from './diff-classifier.js';
 import { runFailThenPass } from './fail-then-pass.js';
+
+const execFileAsync = promisify(execFile);
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -326,6 +330,14 @@ export class PhaseLoop {
     // remediate seam clears it after the executor runs so the following review
     // re-entry runs the real executor to verify the fix. Not persisted.
     let pendingValidateRemediation = false;
+
+    // #1165 Corner 1 (T004): block-local one-shot guard for the flag-OFF
+    // validate-fix fallback. When `reviewPhaseEnabled` is off (the default), a
+    // failing `validate` gets exactly one bounded remediate attempt before
+    // escalating (D1=A / FR-001). Set true when the fallback fires; on the
+    // re-run `validate` a second failure sees this true and falls through to
+    // the pre-existing escalation. Not persisted (INV-1).
+    let flagOffValidateFixAttempted = false;
 
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
@@ -1036,44 +1048,12 @@ export class PhaseLoop {
             // the review phase (contracts Step 2, data-model Entity 1). The
             // real review executor re-scopes on re-entry; the remediate seam
             // consumes `pendingValidateRemediation` and dispatches the adapter.
-            const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
-            const prior = await readReviewArtifact(context.checkoutPath, workflowId);
-            const round = (prior?.round ?? 0) + 1;
-            const head = await context.github.getCurrentCommitSha();
-            const finding: ReviewFinding = {
-              id: deriveFindingId(config.validateCommand, 'validate phase failed'),
-              severity: 'critical',
-              // #1158 T013 (FR-008): cite the effective (possibly targeted)
-              // command, not the flat `config.validateCommand`.
-              file: effectiveValidateCommand,
-              title: 'validate phase failed',
-              // #1159 FR-005: raw validate stdout/stderr can contain
-              // attacker-influenced content (e.g. a test name or assertion
-              // message echoing a PR-controlled string) that lands verbatim in
-              // the remediate charter. Fence it at ingestion so it renders as
-              // data, mirroring validate-fix-handler.ts:235.
-              detail: wrapUntrustedData(
-                boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
-                'validate-output',
-              ),
-              round,
-              status: 'open',
-            };
-            await writeReviewArtifact(context.checkoutPath, workflowId, {
-              findings: [...(prior?.findings ?? []), finding],
-              verdict: 'changes-required',
-              round,
-              lastReviewedCommitSha: head,
-              // #1128 compose: carry the accumulated remediation budget forward
-              // across the #1129 validate-routing re-synthesis so the
-              // `on-remediation-limit` cap still bounds the loop (a validate
-              // failure must not silently reset the budget).
-              remediationCount: prior?.remediationCount ?? 0,
-              // #1156: carry the cross-run ready flag forward across the
-              // validate-routing re-synthesis (D-7 — same reasoning as the
-              // review executor's per-round rewrite).
-              markedReadyByEngine: prior?.markedReadyByEngine ?? false,
-            });
+            const { round } = await this.synthesizeValidateChangesRequiredArtifact(
+              context,
+              config.validateCommand,
+              effectiveValidateCommand,
+              validateEvidence,
+            );
 
             // #1158 T014: mark the validate-origin backtrack. The synthesized
             // `changes-required` finding above feeds `RemediateExecutor`'s
@@ -1088,6 +1068,98 @@ export class PhaseLoop {
             i = sequence.indexOf('review') - 1;
             continue;
           }
+        }
+
+        // #1165 Corner 1 (T004): flag-OFF validate-fix fallback. On the default
+        // (reviewPhaseEnabled OFF) path, give a failing `validate` exactly one
+        // bounded remediate attempt before escalating (D1=A / FR-001). Mutually
+        // exclusive with the flag-ON routing block above by flag value (INV-3):
+        // dead when reviewPhaseEnabled === true. See
+        // contracts/flag-off-validate-fix.md.
+        if (
+          phase === 'validate'
+          && config.reviewPhaseEnabled !== true
+          && flagOffValidateFixAttempted === false
+          && deps.remediateExecutor
+        ) {
+          // INV-1: bind to exactly one attempt. A second validate failure sees
+          // this true, skips the fallback, and falls through to escalation.
+          flagOffValidateFixAttempted = true;
+
+          const validateEvidence = {
+            stdout: result.capturedStdout ?? '',
+            // #890 renamed `error.stderr` → `error.output` (merged tail).
+            stderr: result.capturedStderr ?? result.error?.output ?? '',
+          };
+          await this.synthesizeValidateChangesRequiredArtifact(
+            context,
+            config.validateCommand,
+            effectiveValidateCommand,
+            validateEvidence,
+          );
+          this.logger.info(
+            { phase, issue: context.item.issueNumber },
+            '#1165: flag-OFF validate failure — running one bounded remediate attempt',
+          );
+
+          const remediateResult = await deps.remediateExecutor.execute(context);
+          // Push-gate identical to the review→remediate seam: push a clean-run
+          // zero exit OR a timeout-kill (partial work is worth keeping); a
+          // clean-run non-zero exit means the fixer produced no usable changes.
+          const shouldPush =
+            remediateResult.exitCode === 0 || remediateResult.timedOut === true;
+          if (shouldPush) {
+            const remediateCommitOutcome = await prManager.commitPushAndEnsurePr('remediate');
+            // #1051: a refused push MUST abort the loop.
+            if (remediateCommitOutcome.pushRefused) {
+              this.logger.warn(
+                { phase: 'remediate', refusal: remediateCommitOutcome.pushRefused },
+                'Phase loop aborted: pre-push guard refused flag-OFF validate-fix remediate cycle',
+              );
+              return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+            }
+            if (remediateCommitOutcome.prUrl) {
+              context.prUrl = remediateCommitOutcome.prUrl;
+            }
+            // #1162 FR-003 mirror: persist the post-bump remediationCount to the
+            // durable Redis mirror (best-effort; no-op when Redis is down).
+            const { owner, repo, issueNumber } = context.item;
+            const workflowId = `${owner}/${repo}#${issueNumber}`;
+            const remediationCount = readReviewArtifactSync(
+              context.checkoutPath,
+              workflowId,
+            )?.remediationCount;
+            if (remediationCount !== undefined) {
+              const branch = context.branch ?? 'no-branch';
+              await deps.phaseTracker?.setValueRaw(
+                `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`,
+                String(remediationCount),
+                PHASE_START_REF_TTL_SECONDS,
+              );
+            }
+          } else {
+            // INV-2: a non-successful, non-timeout remediate must not land
+            // partial work. Revert the working tree (excluding `.generacy` so
+            // the review sidecar survives); if the revert throws we cannot
+            // guarantee a clean branch, so abort.
+            this.logger.warn(
+              { phase: 'remediate', exitCode: remediateResult.exitCode },
+              '#1165: flag-OFF remediate exited non-zero without a timeout — skipping commit/push (branch untouched)',
+            );
+            try {
+              await context.github.discardWorkingTreeChanges(['.generacy']);
+            } catch (error) {
+              this.logger.error(
+                { phase: 'remediate', error: String(error) },
+                '#1165: failed to revert working tree after skipped flag-OFF remediate push — aborting',
+              );
+              return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+            }
+          }
+          results.push(remediateResult);
+          outputCapture.clear();
+          i--; // Re-run the validate phase.
+          continue;
         }
 
         const evidence = this.buildErrorEvidence(
@@ -1870,6 +1942,60 @@ export class PhaseLoop {
   }
 
   /**
+   * #1165 Corner 1 (T003): synthesize a `changes-required` review artifact for a
+   * failing `validate` phase and persist it. One `critical` open `ReviewFinding`
+   * cites the effective (possibly targeted) validate command with fenced/bounded
+   * stdout+stderr, carrying the accumulated `remediationCount` and cross-run
+   * `markedReadyByEngine` forward from any prior artifact. Shared by the flag-ON
+   * validate-routing block and the flag-OFF validate-fix fallback so the two
+   * paths cannot diverge. Returns the new `round` for the caller's log line.
+   */
+  private async synthesizeValidateChangesRequiredArtifact(
+    context: WorkerContext,
+    validateCommand: string,
+    effectiveValidateCommand: string,
+    validateEvidence: { stdout: string; stderr: string },
+  ): Promise<{ round: number }> {
+    const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    const prior = await readReviewArtifact(context.checkoutPath, workflowId);
+    const round = (prior?.round ?? 0) + 1;
+    const head = await context.github.getCurrentCommitSha();
+    const finding: ReviewFinding = {
+      id: deriveFindingId(validateCommand, 'validate phase failed'),
+      severity: 'critical',
+      // #1158 T013 (FR-008): cite the effective (possibly targeted) command,
+      // not the flat `config.validateCommand`.
+      file: effectiveValidateCommand,
+      title: 'validate phase failed',
+      // #1159 FR-005: raw validate stdout/stderr can contain
+      // attacker-influenced content (e.g. a test name or assertion message
+      // echoing a PR-controlled string) that lands verbatim in the remediate
+      // charter. Fence it at ingestion so it renders as data, mirroring
+      // validate-fix-handler.ts:235.
+      detail: wrapUntrustedData(
+        boundOutputTail(`${validateEvidence.stdout}\n${validateEvidence.stderr}`),
+        'validate-output',
+      ),
+      round,
+      status: 'open',
+    };
+    await writeReviewArtifact(context.checkoutPath, workflowId, {
+      findings: [...(prior?.findings ?? []), finding],
+      verdict: 'changes-required',
+      round,
+      lastReviewedCommitSha: head,
+      // #1128 compose: carry the accumulated remediation budget forward across
+      // the re-synthesis so the `on-remediation-limit` cap still bounds the
+      // loop (a validate failure must not silently reset the budget).
+      remediationCount: prior?.remediationCount ?? 0,
+      // #1156: carry the cross-run ready flag forward (D-7 — same reasoning as
+      // the review executor's per-round rewrite).
+      markedReadyByEngine: prior?.markedReadyByEngine ?? false,
+    });
+    return { round };
+  }
+
+  /**
    * #1134 (US2 / FR-009): classify the branch diff and compute the effective
    * validate command for a speckit-bugfix run. Only the built-in default command
    * is rewritten (Q1=B) — a custom `validateCommand` runs verbatim, but the
@@ -1901,10 +2027,14 @@ export class PhaseLoop {
     ).validateCommand;
     const isBuiltInDefault = resolvedValidateCommand === DEFAULT_VALIDATE_COMMAND;
 
+    // #1166 (FR-010): resolve the base ref up front, in its own try, so a custom
+    // command's `<base>` placeholder is substituted even when the diff
+    // computation below fails — a `<base>` command must never reach the shell
+    // with the literal placeholder. `resolveBaseRef` (base selection from PR
+    // metadata/config) succeeds even when `origin/<base>` isn't fetched locally;
+    // the git diff is the part that throws in that case.
     let baseRef: string;
     let base: string;
-    let changedFiles: string[];
-    let classification: Classification;
     try {
       baseRef = await resolveBaseRef(
         context.github,
@@ -1913,7 +2043,36 @@ export class PhaseLoop {
         context.item.repo,
       );
       base = baseRef.startsWith('origin/') ? baseRef.slice('origin/'.length) : baseRef;
+    } catch (error) {
+      this.logger.warn(
+        { event: 'targeted-validate', error: String(error) },
+        '#1134: targeted-validate base ref resolution failed — falling back to plain validate command',
+      );
+      return {
+        effectiveCommand: this.computeEffectiveValidateCommand(
+          { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+          resolvedValidateCommand,
+          '',
+          isBuiltInDefault,
+        ),
+        baseRef: '',
+        base: '',
+        changedFiles: [],
+        classification: { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+      };
+    }
+
+    let changedFiles: string[];
+    let classification: Classification;
+    try {
       changedFiles = await context.github.getFilesChangedBetween(baseRef, 'HEAD');
+      // #1166 (FR-001/FR-002): keep only paths that still exist in the branch
+      // checkout. A deletion-only or rename diff otherwise reaches the classifier
+      // (and the fail-then-pass `changedFiles.filter(isTestFile)` caller) with
+      // phantom paths, yielding a `pnpm vitest run <nonexistent-file>`. An
+      // all-filtered diff → empty set → `classifyDiff` returns
+      // `full-fallback('empty-diff')` → the full built-in default runs.
+      changedFiles = changedFiles.filter((f) => existsSync(join(context.checkoutPath, f)));
       const isWorkspace = existsSync(join(context.checkoutPath, 'pnpm-workspace.yaml'));
       classification = classifyDiff({ changedFiles, isWorkspace });
     } catch (error) {
@@ -1922,20 +2081,62 @@ export class PhaseLoop {
         '#1134: targeted-validate diff resolution failed — falling back to plain validate command',
       );
       return {
-        effectiveCommand: resolvedValidateCommand,
-        baseRef: '',
-        base: '',
+        effectiveCommand: this.computeEffectiveValidateCommand(
+          { kind: 'full-fallback', reason: 'diff-resolution-failed' },
+          resolvedValidateCommand,
+          base,
+          isBuiltInDefault,
+        ),
+        baseRef,
+        base,
         changedFiles: [],
         classification: { kind: 'full-fallback', reason: 'diff-resolution-failed' },
       };
     }
 
-    const effectiveCommand = this.computeEffectiveValidateCommand(
+    let effectiveCommand = this.computeEffectiveValidateCommand(
       classification,
       resolvedValidateCommand,
       base,
       isBuiltInDefault,
     );
+
+    // #1166 (FR-003): zero-project fallback. A root-only non-package change (root
+    // `package.json`, `scripts/**`, root `vitest.config.ts`) can classify
+    // `targeted`/`docs-only-skip-tests` yet select zero pnpm projects, producing
+    // a vacuous `pnpm --filter … build/test`. Probe the selection; an empty
+    // selection — or a probe error (fail-safe) — overrides to the full default.
+    //
+    // The probe only ever fires when the diff touches a root-level path that
+    // belongs to NO workspace package (the exact FR-003 trigger set: root
+    // `package.json`, `scripts/**`, root `vitest.config.ts`). A change that lives
+    // under a package directory (has a `package.json` ancestor in the checkout)
+    // is guaranteed to be in the `...[origin/<base>]` selection — it is itself a
+    // change to that package vs the base ref — so probing is provably redundant
+    // and is skipped (avoids a spawn on the common package-scoped path).
+    const hasRootLevelChange = changedFiles.some(
+      (f) => !this.pathBelongsToPackage(context.checkoutPath, f),
+    );
+    if (
+      isBuiltInDefault &&
+      hasRootLevelChange &&
+      (classification.kind === 'targeted' || classification.kind === 'docs-only-skip-tests')
+    ) {
+      const selectsZero = await this.probeSelectsZeroProjects(context.checkoutPath, base);
+      if (selectsZero) {
+        effectiveCommand = resolvedValidateCommand;
+        this.logger.info(
+          {
+            event: 'targeted-validate',
+            reason: 'zero-project-fallback',
+            base,
+            effectiveCommand,
+          },
+          '#1166: targeted-validate selected zero projects — falling back to full validate command',
+        );
+        return { effectiveCommand, baseRef, base, changedFiles, classification };
+      }
+    }
 
     this.logger.info(
       {
@@ -1952,6 +2153,49 @@ export class PhaseLoop {
   }
 
   /**
+   * #1166 (FR-003): does a changed path live inside a workspace package — i.e.
+   * does any ancestor directory (up to, but excluding, the checkout root) hold a
+   * `package.json`? A path that does is guaranteed to be in the targeted
+   * `...[origin/<base>]` selection (it is a change to that package vs the base),
+   * so the zero-project probe can be skipped for it. Root-level paths (root
+   * `package.json`, `scripts/**`, root `vitest.config.ts`) return `false` — they
+   * are the only paths that can produce a vacuous zero-project targeted command.
+   * Pure fs probing in the wiring layer (Q3=A keeps `classifyDiff` no-I/O).
+   */
+  private pathBelongsToPackage(checkoutPath: string, file: string): boolean {
+    let dir = dirname(file);
+    while (dir && dir !== '.' && dir !== '/') {
+      if (existsSync(join(checkoutPath, dir, 'package.json'))) {
+        return true;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return false;
+  }
+
+  /**
+   * #1166 (FR-003): probe whether the targeted pnpm filter selects any project.
+   * Routes through the same `execFile` path the tests mock — no new production
+   * DI surface. Returns `true` when the selection is empty OR the probe errors
+   * (fail-safe — never emit an unverified targeted command).
+   */
+  private async probeSelectsZeroProjects(checkoutPath: string, base: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'pnpm',
+        ['ls', '--filter', `...[origin/${base}]`, '--depth', '-1', '--json'],
+        { cwd: checkoutPath },
+      );
+      const parsed: unknown = JSON.parse(stdout);
+      return !Array.isArray(parsed) || parsed.length === 0;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * #1134 (US2): pure resolution of the effective validate command from the
    * classification (see `data-model.md` resolution table). Custom commands run
    * verbatim; only the built-in default is narrowed.
@@ -1963,7 +2207,11 @@ export class PhaseLoop {
     isBuiltInDefault: boolean,
   ): string {
     if (!isBuiltInDefault) {
-      return validateCommand;
+      // #1166 (FR-010): custom commands run verbatim except for the `<base>`
+      // placeholder, substituted with the resolved base branch (mirrors the
+      // merge-conflict `<base>`/`<branch>` substitution). Works on both
+      // `develop`- and `main`-based repos without hardcoding the base.
+      return validateCommand.replace(/<base>/g, base);
     }
     const filter = `"...[origin/${base}]"`;
     switch (classification.kind) {

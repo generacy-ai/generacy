@@ -25,8 +25,12 @@ const DOC_PATH = resolve(
   '../../../../../docs/docs/reference/bugfix-profile-config.md',
 );
 
+// #1166 (Q4=A): the shipped doc advertises the `<base>` placeholder, which is
+// substituted with the resolved base branch at validate time
+// (`computeEffectiveValidateCommand`), NOT by `resolveWorkflowOverrides`. So the
+// resolver returns the workflow-tier command verbatim, placeholder intact.
 const TARGETED_COMMAND =
-  'pnpm --filter "...[origin/develop]" build && pnpm --filter "...[origin/develop]" test';
+  'pnpm --filter "...[origin/<base>]" build && pnpm --filter "...[origin/<base>]" test';
 
 /**
  * Pull the single ```yaml fenced block whose info string names

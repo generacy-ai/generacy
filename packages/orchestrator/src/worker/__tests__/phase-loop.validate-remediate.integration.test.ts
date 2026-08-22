@@ -18,9 +18,12 @@ import { readReviewArtifactSync, writeReviewArtifact } from '../review-artifact.
 //    subsequence (SC-001);
 //  - the #914 per-iteration base-merge guard holds at most one merge per
 //    validate cycle across the fail→remediate→re-run backtrack (SC-004);
-//  - with `reviewPhaseEnabled = false` the routing branch is inert and the
-//    legacy escalation (`labelManager.onError('validate')`) fires unchanged,
-//    byte-identical to pre-change (SC-005).
+//  - with `reviewPhaseEnabled = false` the #1129 review→remediate routing is
+//    inert (the review executor never runs), while #1165's distinct flag-OFF
+//    fallback (D1=A / FR-001) gives the failure exactly one bounded remediate
+//    attempt through the shared executor seam before the legacy escalation
+//    (`labelManager.onError('validate')`) fires (SC-005). FR-009 carves this
+//    Corner-1 change out of the flag-OFF byte-identical guarantee.
 // ---------------------------------------------------------------------------
 
 const mockLogger = {
@@ -291,10 +294,12 @@ describe('PhaseLoop validate-failure remediate routing (#1129 T009)', () => {
     expect(fenced!.startsWith('src/foo.ts')).toBe(false);
   });
 
-  it('reviewPhaseEnabled = false keeps legacy escalation — routing is inert (SC-005)', async () => {
+  it('reviewPhaseEnabled = false — #1129 routing inert; #1165 flag-OFF fallback runs one bounded remediate before escalation (SC-005 / FR-001 / D1=A)', async () => {
     const { deps, remediateExecute, onError, onRepeatedError, baseMergeRunner } = createDeps(
       checkoutPath,
       workflowId,
+      // validate fails on every run → the single fallback attempt cannot make it
+      // pass, so the loop escalates after exactly one bounded remediate.
       { reviewPhaseEnabled: false, validateFailsThenPasses: false },
     );
 
@@ -307,17 +312,25 @@ describe('PhaseLoop validate-failure remediate routing (#1129 T009)', () => {
       ['review', 'validate'],
     );
 
-    // Terminal escalation via the pre-change legacy path.
+    // Terminal escalation to `failed:validate` still occurs after the one attempt.
     expect(result.completed).toBe(false);
     expect(result.lastPhase).toBe('validate');
-
-    // Legacy escalation applies `failed:validate` (onError), and the routing
-    // branch never fires: no remediate dispatch, no -repeated backstop.
     expect(onError).toHaveBeenCalledWith('validate');
-    expect(remediateExecute).not.toHaveBeenCalled();
+
+    // The #1129 flag-ON review→remediate ROUTING stays inert under flag-OFF: the
+    // review executor never runs, and the `-repeated` backstop (owned by the
+    // routed path) never fires (phase-loop.ts:980 guard; INV-3).
+    expect(deps.reviewExecutor!.execute).not.toHaveBeenCalled();
     expect(onRepeatedError).not.toHaveBeenCalledWith('validate');
 
-    // Exactly one validate cycle → at most one base-merge.
-    expect(baseMergeRunner).toHaveBeenCalledTimes(1);
+    // #1165 Corner 1 (D1=A / FR-001): the flag-OFF fallback gives the failure
+    // EXACTLY ONE bounded remediate attempt through the shared RemediateExecutor
+    // seam before escalating — not zero (pre-#1165 regression) and not looping.
+    // INV-1: block-local guard binds it to a single attempt.
+    expect(remediateExecute).toHaveBeenCalledTimes(1);
+
+    // Two validate cycles run (initial + post-remediate re-run), each gated by
+    // the #914 at-most-once per-cycle base-merge → two base-merges total.
+    expect(baseMergeRunner).toHaveBeenCalledTimes(2);
   });
 });
