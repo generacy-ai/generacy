@@ -17,7 +17,10 @@
  * the #1127 integration suite — so no real review logic runs here. The
  * scoped-executor window logic itself is unit-tested in review-executor.test.ts.
  */
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PhaseLoop } from '../phase-loop.js';
 import type { PhaseLoopDeps } from '../phase-loop.js';
 import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../types.js';
@@ -25,6 +28,12 @@ import { getPhaseSequence } from '../types.js';
 import type { WorkerConfig } from '../config.js';
 import { ReviewPoster } from '../review-poster.js';
 import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../review-artifact.js';
+import {
+  bumpRemediationCount,
+  readReviewArtifactSync,
+  writeReviewArtifact,
+} from '../review-artifact.js';
 import type { GitHubClient, Review } from '@generacy-ai/workflow-engine';
 
 const mockLogger = {
@@ -198,5 +207,347 @@ describe('#1131 T015 — merge-conflict re-arm → scoped review → validate (S
     // Clean verdict marks the PR ready, but validation still runs afterward.
     expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
     expect(phaseStartOrder(deps)).toContain('validate');
+  });
+});
+
+/**
+ * #1164 T009 (SC-001 / FR-002) — scoped-review remediation converges.
+ *
+ * Defect 1: a merge-conflict re-arm pins `context.reviewScope`, and the
+ * review executor used to honour that scope on EVERY round. A scoped round-1
+ * `changes-required` → remediation commit that fixes the defect → round-2
+ * review still pinned to the pre-remediation window → the fix is invisible →
+ * the same finding re-reports until the remediation cap fires, with the defect
+ * actually fixed. The FR-001 fix (`review-executor.ts`) reads `priorRound`
+ * before the scope branch and only honours `reviewScope` on round 1; round 2+
+ * falls back to the standard #1126 `lastReviewedCommitSha`..HEAD delta that
+ * spans the remediation commits.
+ *
+ * The real-git round-2 window/SHA logic is unit-tested in
+ * `review-executor.test.ts` (`#1131 resolution-scoped diff window`). This test
+ * proves the LOOP-level consequence of the fix: from a scoped re-arm, a
+ * `changes-required` → `clean` verdict sequence advances THROUGH `review` into
+ * `validate` and never trips the `on-remediation-limit` cap gate. The verdict
+ * is scripted via a stand-in review executor that writes the sidecar per round
+ * (same lever as the #1132 convergence suite) so no real review logic runs.
+ */
+describe('#1164 T009 — scoped-review remediation converges (SC-001/FR-002)', () => {
+  let checkoutPath: string;
+  let phaseLoop: PhaseLoop;
+
+  const WORKFLOW_ID = 'test/repo#1164';
+  type Verdict = 'clean' | 'changes-required';
+
+  /** A review executor that writes the sidecar per round from a verdict script. */
+  function makeScriptedReviewExecutor(dir: string, verdicts: Verdict[]) {
+    let call = 0;
+    const execute = vi.fn(async (): Promise<PhaseResult> => {
+      const prior = readReviewArtifactSync(dir, WORKFLOW_ID);
+      const round = (prior?.round ?? 0) + 1;
+      const verdict = verdicts[Math.min(call, verdicts.length - 1)]!;
+      call++;
+      const findings =
+        verdict === 'changes-required'
+          ? [
+              {
+                severity: 'critical' as const,
+                file: 'src/a.ts',
+                title: 'blocking finding',
+                detail: 'must fix',
+                round,
+                status: 'open' as const,
+              },
+            ]
+          : [];
+      await writeReviewArtifact(dir, WORKFLOW_ID, {
+        findings,
+        verdict,
+        round,
+        lastReviewedCommitSha: `sha${round}`,
+        remediationCount: prior?.remediationCount ?? 0,
+      } as ReviewArtifact);
+      return makeSuccessResult('review');
+    });
+    return { execute };
+  }
+
+  /** Reader seam mirroring the #1132 convergence suite shape. */
+  function makeFindingsReader(dir: string) {
+    return vi.fn(
+      async (): Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> => {
+        const ra = readReviewArtifactSync(dir, WORKFLOW_ID);
+        if (!ra) return null;
+        return { artifact: ra, blockingSeverity: 'critical' };
+      },
+    );
+  }
+
+  /** Convergence-style deps: `checkGates` honours `config.gates`; cap gate armed. */
+  function makeDeps(github: GitHubClient): PhaseLoopDeps {
+    return {
+      labelManager: {
+        onPhaseStart: vi.fn().mockResolvedValue(undefined),
+        onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+        onError: vi.fn().mockResolvedValue(undefined),
+        onGateHit: vi.fn().mockResolvedValue(undefined),
+        onRepeatedError: vi.fn().mockResolvedValue(undefined),
+      } as any,
+      stageCommentManager: {
+        updateStageComment: vi.fn().mockResolvedValue(undefined),
+        postFailureAlert: vi.fn().mockResolvedValue(undefined),
+      } as any,
+      gateChecker: {
+        checkGates: vi.fn(
+          (phase: WorkflowPhase, workflowName: string, cfg: WorkerConfig) =>
+            (cfg.gates?.[workflowName] ?? []).filter((g: any) => g.phase === phase),
+        ),
+      } as any,
+      cliSpawner: {
+        spawnPhase: vi
+          .fn()
+          .mockImplementation(async (phase: WorkflowPhase) => makeSuccessResult(phase)),
+        runValidatePhase: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
+        runPreValidateInstall: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
+      } as any,
+      outputCapture: {
+        processChunk: vi.fn(),
+        flush: vi.fn(),
+        getOutput: vi.fn().mockReturnValue([]),
+        clear: vi.fn(),
+      } as any,
+      prManager: {
+        commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
+        getPrNumber: vi.fn().mockReturnValue(undefined),
+        convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
+        markReadyForReview: vi.fn().mockResolvedValue(undefined),
+      } as any,
+      reviewPoster: {
+        postRound: vi.fn().mockResolvedValue(undefined),
+        resolveResolvedThreads: vi.fn().mockResolvedValue(undefined),
+      } as any,
+    };
+  }
+
+  /** A resumed context shaped by the merge-conflict re-arm — carries `reviewScope`. */
+  function makeScopedContext(workflowName: string, dir: string): WorkerContext {
+    return {
+      workerId: 'test-worker',
+      item: {
+        owner: 'test',
+        repo: 'repo',
+        issueNumber: 1164,
+        workflowName,
+      } as any,
+      startPhase: 'review',
+      resumeReason: 'merge-conflict-resolved',
+      reviewScope: { baseSha: 'base123', headSha: 'head456', conflictedPaths: ['src/a.ts'] },
+      github: {
+        getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+        getPullRequest: vi.fn().mockResolvedValue({ base: { ref: 'develop' } }),
+        getCurrentCommitSha: vi.fn().mockResolvedValue('deadbeef'),
+        getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['src/a.ts']),
+        getFilesChangedBetween: vi.fn().mockResolvedValue(['src/a.ts']),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getIssue: vi.fn().mockResolvedValue({ labels: [], state: 'open' }),
+      } as any,
+      logger: mockLogger,
+      signal: new AbortController().signal,
+      checkoutPath: dir,
+      issueUrl: 'https://github.com/test/repo/issues/1164',
+      description: 'test',
+    } as WorkerContext;
+  }
+
+  /** Config with the remediation-limit cap gate armed for both workflows. */
+  function makeConfig(): WorkerConfig {
+    const capGate = {
+      phase: 'review',
+      gateLabel: 'waiting-for:remediation-limit',
+      condition: 'on-remediation-limit',
+    };
+    return {
+      phaseTimeoutMs: 600_000,
+      workspaceDir: '/tmp',
+      shutdownGracePeriodMs: 5000,
+      validateCommand: 'pnpm test && pnpm build',
+      preValidateCommand: '',
+      gates: { 'speckit-feature': [capGate], 'speckit-bugfix': [capGate] },
+      maxImplementRetries: 0,
+      reviewPhaseEnabled: true,
+    } as unknown as WorkerConfig;
+  }
+
+  beforeEach(async () => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    checkoutPath = await fs.mkdtemp(path.join(os.tmpdir(), 'phaseloop-1164-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(checkoutPath, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  for (const workflow of ['speckit-feature', 'speckit-bugfix'] as const) {
+    it(`converges review→remediate→review→validate without tripping the cap (${workflow})`, async () => {
+      const github = createGithubSpy();
+      const deps = makeDeps(github);
+      deps.reviewExecutor = makeScriptedReviewExecutor(checkoutPath, [
+        'changes-required',
+        'clean',
+      ]) as any;
+      const remediateExecute = vi.fn(async (): Promise<PhaseResult> => {
+        await bumpRemediationCount(checkoutPath, WORKFLOW_ID);
+        return makeSuccessResult('remediate');
+      });
+      deps.remediateExecutor = { execute: remediateExecute } as any;
+      deps.remediateTrigger = (ctx) =>
+        readReviewArtifactSync(ctx.checkoutPath, WORKFLOW_ID)?.verdict === 'changes-required';
+      deps.readFindingsArtifact = makeFindingsReader(checkoutPath);
+
+      const context = makeScopedContext(workflow, checkoutPath);
+      const config = makeConfig();
+      const sequence = getPhaseSequence(workflow, true) as WorkflowPhase[];
+
+      const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+      expect(result.completed).toBe(true);
+      expect(result.gateHit).toBe(false);
+
+      // SC-001/FR-002: one remediation cycle, then a clean re-review advances
+      // into validate — the loop is NOT starved into the remediation cap.
+      expect(phaseStartOrder(deps)).toEqual(['review', 'remediate', 'review', 'validate']);
+      expect(remediateExecute).toHaveBeenCalledTimes(1);
+
+      const finalArtifact = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
+      expect(finalArtifact?.remediationCount).toBe(1);
+      expect(finalArtifact?.round).toBe(2);
+      expect(finalArtifact?.verdict).toBe('clean');
+
+      // The remediation-cap gate must never fire on a converging loop.
+      expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
+    });
+  }
+});
+
+/**
+ * #1164 T014 (SC-004 / FR-007) — post-resolution re-arm runs validate on the
+ * merged tree.
+ *
+ * Defect 4: with `ciMergeGateEnabled=true` and `reviewPhaseEnabled=false`, a
+ * post-approval conflict resolution re-arms `continue` at `validate`. The #1133
+ * terminal short-circuit (`phase-loop.ts:366-387`) reads `completed:validate` +
+ * `completed:implementation-review` fresh from the issue; if BOTH are present it
+ * declares the run complete and marks the PR ready WITHOUT running `validate` on
+ * the post-merge tree. The FR-007 fix removes those two labels in
+ * `applySuccessDisposition` when it re-arms, so on the resumed `continue` the
+ * issue no longer carries both markers → the short-circuit does not fire →
+ * `validate` runs on the merged tree before mark-ready.
+ *
+ * This test drives `PhaseLoop.executeLoop` from the post-FR-007 world (labels
+ * absent) and asserts `validate` actually runs; the contrast case (labels
+ * present, the pre-fix state) proves the short-circuit is exactly what the
+ * label removal disarms. The `applySuccessDisposition` label removal itself is
+ * unit-tested in `merge-conflict-handler.success-disposition.test.ts`.
+ */
+describe('#1164 T014 — post-resolution re-arm runs validate on merged tree (SC-004/FR-007)', () => {
+  let phaseLoop: PhaseLoop;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    vi.clearAllMocks();
+  });
+
+  /** Deps whose validate path completes cleanly under the CI merge gate. */
+  function makeCiGateDeps(): PhaseLoopDeps {
+    const github = createGithubSpy();
+    const deps = createMockDeps(github);
+    // `prManager.getPrNumber` already returns 42; markReadyForReview resolves.
+    return deps;
+  }
+
+  /**
+   * Resumed `continue` context at `validate`, shaped by the merge-conflict
+   * re-arm under the flag-OFF review / flag-ON CI gate world.
+   */
+  function makeCiGateContext(resumeLabels: string[]): WorkerContext {
+    return {
+      workerId: 'test-worker',
+      item: {
+        owner: 'test',
+        repo: 'repo',
+        issueNumber: 1164,
+        workflowName: 'speckit-feature',
+        command: 'continue',
+      } as any,
+      startPhase: 'validate',
+      resumeReason: 'merge-conflict-resolved',
+      github: {
+        getIssue: vi.fn().mockResolvedValue({
+          labels: resumeLabels.map((name) => ({ name })),
+          state: 'open',
+        }),
+        getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
+        getCiRunsForSha: vi.fn().mockResolvedValue({
+          runs: [{ status: 'completed', conclusion: 'success' }],
+          source: 'check-runs',
+        }),
+        getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      } as any,
+      logger: mockLogger,
+      signal: new AbortController().signal,
+      // branch intentionally unset so the #1051 phase-start push guard is skipped.
+      checkoutPath: '/tmp/repo',
+      issueUrl: 'https://github.com/test/repo/issues/1164',
+      description: 'test',
+    } as WorkerContext;
+  }
+
+  function ciGateConfig(): WorkerConfig {
+    return {
+      phaseTimeoutMs: 600_000,
+      workspaceDir: '/tmp',
+      shutdownGracePeriodMs: 5000,
+      validateCommand: 'pnpm test && pnpm build',
+      preValidateCommand: '',
+      gates: {},
+      maxImplementRetries: 2,
+      reviewPhaseEnabled: false,
+      ciMergeGateEnabled: true,
+    } as unknown as WorkerConfig;
+  }
+
+  it('runs validate on the merged tree when the completion labels are absent (post-FR-007)', async () => {
+    const deps = makeCiGateDeps();
+    // FR-007: applySuccessDisposition stripped both completion markers on re-arm.
+    const context = makeCiGateContext(['agent:in-progress']);
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, ciGateConfig(), deps, sequence);
+
+    expect(result.completed).toBe(true);
+    // The terminal short-circuit did NOT fire — validate ran on the merged tree.
+    expect(phaseStartOrder(deps)).toContain('validate');
+    expect(deps.cliSpawner.runValidatePhase).toHaveBeenCalledTimes(1);
+    // CI merge gate marked the PR ready only after validate ran.
+    expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('short-circuits (skips validate) when both completion labels are present (pre-FR-007 contrast)', async () => {
+    const deps = makeCiGateDeps();
+    // Pre-fix state: disposition left both markers on the issue.
+    const context = makeCiGateContext([
+      'completed:validate',
+      'completed:implementation-review',
+    ]);
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, ciGateConfig(), deps, sequence);
+
+    expect(result.completed).toBe(true);
+    // The short-circuit fired: validate never ran, proving FR-007's label
+    // removal is exactly what re-enables validation on the merged tree.
+    expect(phaseStartOrder(deps)).not.toContain('validate');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+    expect(deps.prManager.markReadyForReview).not.toHaveBeenCalled();
   });
 });

@@ -88,18 +88,29 @@ export class ReviewExecutor implements ReviewExecutorLike {
     const { review } = resolveWorkflowOverrides(this.config, this.settings, workflowName);
     const { profile, blockingSeverity } = review;
 
-    // #1131: resolution-scoped review. When a merge-conflict re-arm supplied a
-    // `reviewScope`, the review is scoped to just the resolution diff
-    // (`baseSha..headSha`). An empty window means the resolution introduced no
-    // changes over the pre-merge tip — nothing to review, so short-circuit to a
-    // synthetic success (FR-011, SC-004) and let the loop advance to `validate`.
-    // Absent scope ⇒ whole-PR review, byte-identical to pre-#1131 (FR-010).
+    // 2. Determine the review round from any prior engine-written artifact.
+    //    Read BEFORE the reviewScope branch (#1164 FR-001) so scope usage can be
+    //    gated on round 1 only.
+    const priorRound = await readReviewArtifact(checkoutPath, workflowId);
+    const round = (priorRound?.round ?? 0) + 1;
+
+    // #1131/#1164: resolution-scoped review, honored on round 1 only. A
+    // merge-conflict re-arm supplies a fixed `reviewScope`; nothing clears it,
+    // so applying it on round 2+ would pin every re-review to the original
+    // pre-remediation window (making the remediation commits invisible) and the
+    // same findings would re-report every round until the remediation cap. Gate
+    // scope usage on `!priorRound` — round 2+ falls back to the standard #1126
+    // delta (`lastReviewedCommitSha`..HEAD), which spans the remediation commits.
+    // An empty scoped window short-circuits to a synthetic success (FR-011,
+    // SC-004) and lets the loop advance to `validate`. Absent scope ⇒ whole-PR
+    // review, byte-identical to pre-#1131 (FR-010).
     const { reviewScope } = context;
-    if (reviewScope) {
-      const isEmpty = await this.isEmptyWindow(checkoutPath, reviewScope);
+    const scopedReview = priorRound ? undefined : reviewScope;
+    if (scopedReview) {
+      const isEmpty = await this.isEmptyWindow(checkoutPath, scopedReview);
       if (isEmpty) {
         this.logger.info(
-          { baseSha: reviewScope.baseSha, headSha: reviewScope.headSha, workflowId },
+          { baseSha: scopedReview.baseSha, headSha: scopedReview.headSha, workflowId },
           'Resolution-scoped review window is empty — skipping review, advancing to validate',
         );
         return {
@@ -111,10 +122,6 @@ export class ReviewExecutor implements ReviewExecutorLike {
         };
       }
     }
-
-    // 2. Determine the review round from any prior engine-written artifact.
-    const priorRound = await readReviewArtifact(checkoutPath, workflowId);
-    const round = (priorRound?.round ?? 0) + 1;
 
     // 2b. Compute the delta window this re-review is scoped to (#1126/#1161,
     //     FR-007). Round 1 (no prior) uses a round-0 stand-in so the delta falls
@@ -134,11 +141,11 @@ export class ReviewExecutor implements ReviewExecutorLike {
       github: context.github,
       artifact: priorForDelta,
       prBaseRef,
-      ...(reviewScope
+      ...(scopedReview
         ? {
             pauseContext: {
-              resolutionBaseSha: reviewScope.baseSha,
-              resolutionHeadSha: reviewScope.headSha,
+              resolutionBaseSha: scopedReview.baseSha,
+              resolutionHeadSha: scopedReview.headSha,
             },
           }
         : {}),
@@ -167,7 +174,7 @@ export class ReviewExecutor implements ReviewExecutorLike {
       sidecarRelPath,
       blockingSeverity,
       round,
-      ...(reviewScope ? { diffWindow: reviewScope } : {}),
+      ...(scopedReview ? { diffWindow: scopedReview } : {}),
       ...(verification ? { verification } : {}),
     });
 

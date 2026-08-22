@@ -494,6 +494,27 @@ export class WorkerDispatcher {
               'Rearm item enqueued after queue.complete',
             );
           }
+
+          // #1164 FR-008: clear ownership (`agent:*`) labels only AFTER the
+          // enqueue has resolved — on BOTH the enqueued and the dropped
+          // (already-in-flight) outcome. Its own try/catch so a label-op failure
+          // is best-effort and cannot fail the dispatch. Deliberately NOT run if
+          // `enqueueIfAbsent` threw (control jumps to the catch below), so the
+          // ownership labels survive for the next poll.
+          try {
+            await result.postComplete.afterEnqueue?.();
+          } catch (afterErr) {
+            this.logger.warn(
+              {
+                err: afterErr,
+                workerId,
+                owner: item.owner,
+                repo: item.repo,
+                issue: item.issueNumber,
+              },
+              'Rearm afterEnqueue failed — ownership labels not cleared (best-effort)',
+            );
+          }
         } catch (err) {
           this.logger.error(
             { err, workerId, owner: item.owner, repo: item.repo, issue: item.issueNumber },

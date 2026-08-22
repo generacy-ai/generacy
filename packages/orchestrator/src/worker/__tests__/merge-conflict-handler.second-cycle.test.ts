@@ -149,7 +149,7 @@ describe('#902 T015 second-cycle regression (SC-003, FR-001 load-bearing)', () =
     const cycle1Removes = (mockGitHub.removeLabels as ReturnType<typeof vi.fn>).mock.calls;
     expect(cycle1Removes).toHaveLength(1);
     expect(cycle1Removes[0][3]).toContain('completed:merge-conflicts');
-    expect(cycle1Removes[0][3]).toContain('agent:in-progress');
+    expect(cycle1Removes[0][3]).toContain('completed:validate');
 
     // ---- Cycle 2: fresh conflict pause on the same issue ----
     // If the fix weren't in place, cycle 1's stale marker would have combined
@@ -168,8 +168,8 @@ describe('#902 T015 second-cycle regression (SC-003, FR-001 load-bearing)', () =
     expect(cycle2Removes[1][3]).toEqual([
       'completed:merge-conflicts',
       'waiting-for:merge-conflicts',
-      'agent:in-progress',
-      'agent:paused',
+      'completed:validate',
+      'completed:implementation-review',
     ]);
     // No adds on either cycle — no resume-pair labels.
     expect(mockGitHub.addLabels).not.toHaveBeenCalled();

@@ -193,8 +193,8 @@ describe('#902 T013 end-to-end re-arm', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     ]);
     expect(mockGitHub.addLabels).not.toHaveBeenCalled();
@@ -342,16 +342,19 @@ describe('#1131 scoped-review re-arm', () => {
     return { launcher };
   }
 
-  it('flag ON, resolved merge: re-arms `review` with reviewScope {HEAD^1..HEAD}', async () => {
+  it('flag ON, resolved merge: re-arms `review` with reviewScope {HEAD^1..HEAD} + conflicted-path allowlist', async () => {
     const { launcher } = wireResolvedConflict((ref) => (ref === 'HEAD^1' ? 'base123' : 'head456'));
     const handler = new MergeConflictHandler(configReviewOn, mockLogger, launcher);
 
     const outcome = await handler.handle(createItem('validate'), '/tmp/checkout');
 
+    // FR-003 (#1164): the resolution scope carries the conflicted-path allowlist
+    // enumerated from `git diff --name-only --diff-filter=U` on the post-resolution
+    // success path, not just the raw base..head range.
     expect(outcome).toEqual({
       outcome: 're-armed',
       startPhase: 'review',
-      reviewScope: { baseSha: 'base123', headSha: 'head456' },
+      reviewScope: { baseSha: 'base123', headSha: 'head456', conflictedPaths: ['CLAUDE.md'] },
     });
   });
 

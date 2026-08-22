@@ -35,6 +35,14 @@ import type { BlockedStuckMergeConflictsEvidence } from './merge-conflict-handle
 export interface ReviewScope {
   readonly baseSha: string;
   readonly headSha: string;
+  /**
+   * FR-003 (#1164) — conflicted file paths captured at resolution time
+   * (`git diff --name-only --diff-filter=U`). When present, the scoped review is
+   * restricted to this allowlist instead of the raw `baseSha..headSha` parent-1
+   * diff, excluding changes that came only from the merged-in base branch. Absent
+   * on non-merge-conflict scopes and on no-op / clean-merge success paths.
+   */
+  readonly conflictedPaths?: readonly string[];
 }
 
 export interface ReArmedOutcome {
