@@ -283,13 +283,20 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
         remediationCount: MAX,
       });
 
-      // Operator answered the gate: completed:remediation-limit is present
-      // alongside the pause labels the resume strip is meant to clear.
+      // The issue starts with only the pause labels the resume strip is meant to
+      // clear. The operator's gate answer (`completed:remediation-limit`) arrives
+      // via the SAME `GitHubClient.addLabels` mutation the real label path uses —
+      // T031: exercise the exact mutation shape, not a bare `Set` seed, so the
+      // survival guarantee holds regardless of how the answer was applied.
       const github = makeLabelBackedGithub([
-        'completed:remediation-limit',
         'waiting-for:remediation-limit',
         'agent:paused',
       ]);
+      await github.addLabels(OWNER, REPO, ISSUE, ['completed:remediation-limit']);
+      expect(github.addLabels).toHaveBeenCalledWith(OWNER, REPO, ISSUE, [
+        'completed:remediation-limit',
+      ]);
+
       const labelManager = new LabelManager(github as any, OWNER, REPO, ISSUE, mockLogger);
       const onPhaseStartSpy = vi.spyOn(labelManager, 'onPhaseStart');
 
@@ -339,14 +346,22 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
     });
 
     it('SC-002: completed:implementation-review survives onResumeStart, terminal no-op short-circuit skips validate', async () => {
-      // Post-validate CI-merge gate satisfied: both terminal labels present,
-      // plus the pause labels the resume strip clears.
+      // Post-validate CI-merge gate satisfied. `completed:validate` is a phase
+      // completion the engine already stamped; the operator's gate answer
+      // (`completed:implementation-review`) arrives via the SAME
+      // `GitHubClient.addLabels` mutation the real label path uses (T031: exact
+      // mutation shape, not a bare `Set` seed), alongside the pause labels the
+      // resume strip clears.
       const github = makeLabelBackedGithub([
         'completed:validate',
-        'completed:implementation-review',
         'waiting-for:implementation-review',
         'agent:paused',
       ]);
+      await github.addLabels(OWNER, REPO, ISSUE, ['completed:implementation-review']);
+      expect(github.addLabels).toHaveBeenCalledWith(OWNER, REPO, ISSUE, [
+        'completed:implementation-review',
+      ]);
+
       const labelManager = new LabelManager(github as any, OWNER, REPO, ISSUE, mockLogger);
 
       await labelManager.onResumeStart();

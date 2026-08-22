@@ -117,14 +117,14 @@ and share the T003 harness, so they are sequential within the file (no `[P]`).
 
 <!-- Phase boundary: independent of Phase 2/3 substrate, but grouped after per plan ordering. May proceed in parallel with Phases 2–3 if desired (different file, no shared deps). -->
 
-- [ ] T030 [P] [US2] Verify `packages/orchestrator/src/worker/__tests__/phase-loop.resume-gates.integration.test.ts`
+- [X] T030 [P] [US2] Verify `packages/orchestrator/src/worker/__tests__/phase-loop.resume-gates.integration.test.ts`
   already drives the **real** `LabelManager.onResumeStart` over a label-backed fake
   `GitHubClient` for the `remediation-limit` reset/re-arm and the terminal-no-op resume
   (FR-006/FR-007, clarification Q3→A). Confirm it does NOT pre-inject surviving labels into the
   mocked issue response and that deleting the #1154 `isHumanGateCompletion` guard makes it fail
   (SC-003).
 
-- [ ] T031 [P] [US2] Extend that suite so the `completed:remediation-limit` label is applied via
+- [X] T031 [P] [US2] Extend that suite so the `completed:remediation-limit` label is applied via
   the label monitor's **exact mutation shape** (not a bare `Set.add`), and assert: the human-gate
   `completed:*` label survives the `onResumeStart` strip, the remediation counter resets, the loop
   re-arms (FR-006, #1154 regression); and the post-validate `implementation-review` /
@@ -137,13 +137,13 @@ and share the T003 harness, so they are sequential within the file (no `[P]`).
 
 <!-- Phase boundary: independent; may run in parallel with Phases 2–4 (different files). -->
 
-- [ ] T040 [P] [US1] Reframe
+- [X] T040 [P] [US1] Reframe
   `packages/orchestrator/src/worker/__tests__/phase-loop.review-remediate-convergence.integration.test.ts`
   as a **charter-contract** test (FR-009): assert the prompt/charter shape and the merge contract
   (`advanceArtifact` finding carry-over / sub-blocking drop), NOT loop composition (US1 now owns
   real composed-loop coverage). Keep the coverage; do not delete or rewrite beyond this reframing.
 
-- [ ] T041 [P] [US1] Reframe
+- [X] T041 [P] [US1] Reframe
   `packages/orchestrator/src/worker/__tests__/phase-loop.remediation-cap.integration.test.ts`
   as a **charter-contract** test (FR-009) using the same approach as T040. Keep the coverage; do
   not delete or rewrite beyond the reframing.
@@ -154,12 +154,12 @@ and share the T003 harness, so they are sequential within the file (no `[P]`).
 
 <!-- Phase boundary: all prior phases complete. -->
 
-- [ ] T050 [US1] Confirm the SC-002 verification: grep
+- [X] T050 [US1] Confirm the SC-002 verification: grep
   `phase-loop.review-composed.integration.test.ts` for direct `new ReviewExecutor(` wired into
   `PhaseLoopDeps.reviewExecutor` with the real-spawn double, and confirm **no** `readFindingsArtifact`
   verdict-steering seam is present (`rg "readFindingsArtifact"` → no match in the composed suite).
 
-- [ ] T051 [US1] Run `pnpm --filter @generacy-ai/orchestrator test` and confirm all suites are
+- [X] T051 [US1] Run `pnpm --filter @generacy-ai/orchestrator test` and confirm all suites are
   green (SC-005), including the retained "keep" coverage (`review-executor.test.ts`,
   `remediate-executor.test.ts`, cap-gate label-pair tests, repurposed convergence suites), and
   that the new suites introduce no CI wall-clock regression (SC-006). Confirm no changeset was
