@@ -92,18 +92,18 @@
 - [X] T013 [P] [US4] Add `packages/orchestrator/src/services/__tests__/worker-dispatcher.rearm-afterenqueue.test.ts`:
   assert `afterEnqueue` is invoked strictly after `enqueueIfAbsent`, on both enqueued and dropped outcomes,
   and NOT at all when `enqueueIfAbsent` throws. (SC-005, FR-008 ordering)
-- [ ] T014 [US4] Add an integration assertion (in the T009 suite or a sibling phase-loop test) that with
+- [X] T014 [US4] Add an integration assertion (in the T009 suite or a sibling phase-loop test) that with
   `ciMergeGateEnabled=true` and `reviewPhaseEnabled=false`, a post-resolution re-arm runs `validate` on the
   merged tree before mark-ready (short-circuit suppressed by FR-007). (SC-004)
 
 ## Phase 4: Verification & Polish
 <!-- Phase boundary: Complete Phase 3 before starting Phase 4 -->
 
-- [ ] T015 [P] Add changeset `.changeset/1164-merge-conflict-scoped-review-lifecycle.md` —
+- [X] T015 [P] Add changeset `.changeset/1164-merge-conflict-scoped-review-lifecycle.md` —
   `@generacy-ai/orchestrator` **patch** (`workflow:speckit-bugfix`). Internal-only fixes: `ReviewScope` /
   `PostCompleteAction` gain optional fields but are not re-exported at the package public boundary; no new
   label vocabulary; no new public exports. Verify with `pnpm changeset status`.
-- [ ] T016 Run the full check gate for the package: `pnpm --filter @generacy-ai/orchestrator test`,
+- [X] T016 Run the full check gate for the package: `pnpm --filter @generacy-ai/orchestrator test`,
   typecheck, and lint. Confirm SC-006 — existing whole-PR / flag-ON review tests pass unchanged (no
   regression). Reconcile any failures before shipping.
 

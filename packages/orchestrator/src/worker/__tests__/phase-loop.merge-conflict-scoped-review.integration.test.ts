@@ -428,3 +428,126 @@ describe('#1164 T009 — scoped-review remediation converges (SC-001/FR-002)', (
     });
   }
 });
+
+/**
+ * #1164 T014 (SC-004 / FR-007) — post-resolution re-arm runs validate on the
+ * merged tree.
+ *
+ * Defect 4: with `ciMergeGateEnabled=true` and `reviewPhaseEnabled=false`, a
+ * post-approval conflict resolution re-arms `continue` at `validate`. The #1133
+ * terminal short-circuit (`phase-loop.ts:366-387`) reads `completed:validate` +
+ * `completed:implementation-review` fresh from the issue; if BOTH are present it
+ * declares the run complete and marks the PR ready WITHOUT running `validate` on
+ * the post-merge tree. The FR-007 fix removes those two labels in
+ * `applySuccessDisposition` when it re-arms, so on the resumed `continue` the
+ * issue no longer carries both markers → the short-circuit does not fire →
+ * `validate` runs on the merged tree before mark-ready.
+ *
+ * This test drives `PhaseLoop.executeLoop` from the post-FR-007 world (labels
+ * absent) and asserts `validate` actually runs; the contrast case (labels
+ * present, the pre-fix state) proves the short-circuit is exactly what the
+ * label removal disarms. The `applySuccessDisposition` label removal itself is
+ * unit-tested in `merge-conflict-handler.success-disposition.test.ts`.
+ */
+describe('#1164 T014 — post-resolution re-arm runs validate on merged tree (SC-004/FR-007)', () => {
+  let phaseLoop: PhaseLoop;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    vi.clearAllMocks();
+  });
+
+  /** Deps whose validate path completes cleanly under the CI merge gate. */
+  function makeCiGateDeps(): PhaseLoopDeps {
+    const github = createGithubSpy();
+    const deps = createMockDeps(github);
+    // `prManager.getPrNumber` already returns 42; markReadyForReview resolves.
+    return deps;
+  }
+
+  /**
+   * Resumed `continue` context at `validate`, shaped by the merge-conflict
+   * re-arm under the flag-OFF review / flag-ON CI gate world.
+   */
+  function makeCiGateContext(resumeLabels: string[]): WorkerContext {
+    return {
+      workerId: 'test-worker',
+      item: {
+        owner: 'test',
+        repo: 'repo',
+        issueNumber: 1164,
+        workflowName: 'speckit-feature',
+        command: 'continue',
+      } as any,
+      startPhase: 'validate',
+      resumeReason: 'merge-conflict-resolved',
+      github: {
+        getIssue: vi.fn().mockResolvedValue({
+          labels: resumeLabels.map((name) => ({ name })),
+          state: 'open',
+        }),
+        getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
+        getCiRunsForSha: vi.fn().mockResolvedValue({
+          runs: [{ status: 'completed', conclusion: 'success' }],
+          source: 'check-runs',
+        }),
+        getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      } as any,
+      logger: mockLogger,
+      signal: new AbortController().signal,
+      // branch intentionally unset so the #1051 phase-start push guard is skipped.
+      checkoutPath: '/tmp/repo',
+      issueUrl: 'https://github.com/test/repo/issues/1164',
+      description: 'test',
+    } as WorkerContext;
+  }
+
+  function ciGateConfig(): WorkerConfig {
+    return {
+      phaseTimeoutMs: 600_000,
+      workspaceDir: '/tmp',
+      shutdownGracePeriodMs: 5000,
+      validateCommand: 'pnpm test && pnpm build',
+      preValidateCommand: '',
+      gates: {},
+      maxImplementRetries: 2,
+      reviewPhaseEnabled: false,
+      ciMergeGateEnabled: true,
+    } as unknown as WorkerConfig;
+  }
+
+  it('runs validate on the merged tree when the completion labels are absent (post-FR-007)', async () => {
+    const deps = makeCiGateDeps();
+    // FR-007: applySuccessDisposition stripped both completion markers on re-arm.
+    const context = makeCiGateContext(['agent:in-progress']);
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, ciGateConfig(), deps, sequence);
+
+    expect(result.completed).toBe(true);
+    // The terminal short-circuit did NOT fire — validate ran on the merged tree.
+    expect(phaseStartOrder(deps)).toContain('validate');
+    expect(deps.cliSpawner.runValidatePhase).toHaveBeenCalledTimes(1);
+    // CI merge gate marked the PR ready only after validate ran.
+    expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('short-circuits (skips validate) when both completion labels are present (pre-FR-007 contrast)', async () => {
+    const deps = makeCiGateDeps();
+    // Pre-fix state: disposition left both markers on the issue.
+    const context = makeCiGateContext([
+      'completed:validate',
+      'completed:implementation-review',
+    ]);
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, ciGateConfig(), deps, sequence);
+
+    expect(result.completed).toBe(true);
+    // The short-circuit fired: validate never ran, proving FR-007's label
+    // removal is exactly what re-enables validation on the merged tree.
+    expect(phaseStartOrder(deps)).not.toContain('validate');
+    expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
+    expect(deps.prManager.markReadyForReview).not.toHaveBeenCalled();
+  });
+});
