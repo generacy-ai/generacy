@@ -1,410 +1,283 @@
-// #1132 US1 (T010–T018) — full review⇄remediate convergence, end-to-end.
+// #1168 (T040) — charter-contract test, reframed from the #1132 loop-composition
+// suite (FR-009).
 //
-// Drives PhaseLoop.executeLoop through the REAL review + remediate executor
-// seams (via the injectable deps the P3 executors #1124/#1125/#1128/#1129 wired)
-// and asserts the whole multi-round loop composes:
+// US1's composed suite (`phase-loop.review-composed.integration.test.ts`) now
+// owns the real composed-loop coverage: it drives the REAL ReviewExecutor under
+// PhaseLoop via a spawning agent-CLI double and asserts verdict recomputation,
+// severity gating, and the multi-round backtrack end-to-end. This file no longer
+// re-drives the loop. It pins the two contracts the convergence path is built on
+// — the ones a loop test cannot see because they are string/data shapes, not
+// observable side-effects:
 //
-//   AC1 (T011): a round-1 blocking review routes off-sequence into `remediate`,
-//     converts the engine-ready PR back to draft, and backtracks to re-`review`.
-//   AC2 (T012): a still-blocking round-2 re-review re-enters `remediate` and the
-//     remediation counter increments.
-//   AC3 (T013): a clean re-review marks the PR ready and the loop advances into
-//     `validate`.
-//   AC4 (T014): the SECOND remediate entry point (#1129) — a failing `validate`
-//     routes back into `remediate`, re-reviews, and re-validates green.
-//   AC5 (T015): a green `validate` after the final remediation terminates the
-//     loop forward with no further backtrack.
-//   AC6 / FR-006 (T016): the findings artifact + remediation counter stay
-//     consistent at every transition (counter increments per remediation round).
-//   FR-005 / SC-005 (T017): at most one validate/suite execution per clean-review
-//     cycle — the suite never re-runs while findings remain open.
-//   FR-004 / SC-006 (T018): every clean review → ready; every remediate entry →
-//     back to draft.
+//   1. The review CHARTER shape the executor hands the agent each round:
+//      - round 1 → whole-PR framing (no verification block), and
+//      - round >= 2 → delta-scoped VERIFICATION framing (names only the changed
+//        files, restricts new findings to blockingSeverity).
+//   2. The `advanceArtifact` MERGE contract the engine applies when it folds a
+//      re-review round into the artifact:
+//      - an open finding whose file is in the delta and that the reviewer
+//        re-emits as resolved transitions to resolved (convergence),
+//      - an open finding NOT in the delta is carried forward untouched
+//        (anti-vanish), and
+//      - a sub-blocking NEW finding raised on a round >= 2 pass is DROPPED
+//        (`filterNewFindings`).
 //
-// Parameterized over both workflows (`speckit-feature`, `speckit-bugfix`). Per
-// research.md Decision 2 (Q2=A): each round's verdict is steered by pre-writing
-// the review sidecar via a call-scripted stand-in executor that mirrors the real
-// ReviewExecutor's write contract (read prior → advance round → preserve the
-// remediation budget). No CLI-output shim.
-import { promises as fs } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { PhaseLoop } from '../phase-loop.js';
-import type { PhaseLoopDeps } from '../phase-loop.js';
-import type { WorkerContext, Logger, WorkflowPhase, PhaseResult } from '../types.js';
-import { getPhaseSequence } from '../types.js';
-import type { WorkerConfig } from '../config.js';
-import type { BaseMergeResult } from '../base-merge.js';
-import type { ReviewArtifact, Severity } from '../review-artifact.js';
-import {
-  bumpRemediationCount,
-  readReviewArtifactSync,
-  writeReviewArtifact,
-} from '../review-artifact.js';
-
-const mockLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-  child: () => mockLogger,
-} as unknown as Logger;
+// Parameterized over both workflows (`speckit-feature`, `speckit-bugfix`) with
+// the per-workflow default blockingSeverity (feature → `major`, bugfix →
+// `critical`) so the drop threshold is asserted at each workflow's real bar.
+import { describe, it, expect } from 'vitest';
+import { buildReviewCharter } from '../review-charter.js';
+import { advanceArtifact, filterNewFindings } from '../review/findings-advance.js';
+import { getReviewArtifactRelPath } from '../review-artifact.js';
+import type { ReviewArtifact, ReviewFinding, Severity } from '../review-artifact.js';
+import { deriveFindingId } from '../review-artifact.js';
+import type { ReviewDelta } from '../review/review-delta.js';
 
 const OWNER = 'christrudelpw';
 const REPO = 'snappoll';
 const ISSUE = 1132;
 const WORKFLOW_ID = `${OWNER}/${REPO}#${ISSUE}`;
 
-type Verdict = 'clean' | 'changes-required';
+// feature holds to a stricter blocking bar than a targeted bugfix (#1161 D3).
+const BLOCKING_SEVERITY: Record<string, Severity> = {
+  'speckit-feature': 'major',
+  'speckit-bugfix': 'critical',
+};
 
-function makeSuccessResult(phase: WorkflowPhase): PhaseResult {
-  return { phase, success: true, exitCode: 0, durationMs: 1, output: [] };
-}
+// A sub-blocking severity for each workflow — one rank below its blocking bar —
+// so the round >= 2 advisory-drop assertion exercises the real threshold.
+const SUB_BLOCKING_SEVERITY: Record<string, Severity> = {
+  'speckit-feature': 'minor', // below `major`
+  'speckit-bugfix': 'major', // below `critical`
+};
 
-function makeValidateFailure(): PhaseResult {
+function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
+  const file = overrides.file ?? 'src/a.ts';
+  const title = overrides.title ?? 'blocking finding';
   return {
-    phase: 'validate',
-    success: false,
-    exitCode: 1,
-    durationMs: 100,
-    output: [],
-    capturedStdout: "src/foo.ts:10:5 - error TS2304: Cannot find name 'bar'.",
-    capturedStderr: '',
-    error: { message: 'validate failed', output: 'exit 1', phase: 'validate' },
-  } as PhaseResult;
-}
-
-/**
- * Call-scripted review executor stand-in. Mirrors the real ReviewExecutor's
- * persistence contract: read the prior artifact, advance `round`, preserve
- * `remediationCount` (a review write never resets the budget — #1128), and write
- * the steered verdict. The engine recomputes nothing here because the stand-in
- * writes the final verdict directly (Q2=A sidecar-seeding, no CLI shim).
- */
-function makeScriptedReviewExecutor(checkoutPath: string, verdicts: Verdict[]) {
-  let call = 0;
-  const execute = vi.fn(async (): Promise<PhaseResult> => {
-    const prior = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
-    const round = (prior?.round ?? 0) + 1;
-    const verdict = verdicts[Math.min(call, verdicts.length - 1)]!;
-    call++;
-    const findings =
-      verdict === 'changes-required'
-        ? [
-            {
-              severity: 'critical' as const,
-              file: 'src/a.ts',
-              title: 'blocking finding',
-              detail: 'must fix',
-              round,
-              status: 'open' as const,
-            },
-          ]
-        : [];
-    await writeReviewArtifact(checkoutPath, WORKFLOW_ID, {
-      findings,
-      verdict,
-      round,
-      lastReviewedCommitSha: `sha${round}`,
-      remediationCount: prior?.remediationCount ?? 0,
-    });
-    return makeSuccessResult('review');
-  });
-  return { execute };
-}
-
-/**
- * Feed the review side-effect block the canonical `ReviewArtifact` straight off
- * the sidecar (#1161 collapsed the poster/convergence schemas onto the single
- * `ReviewArtifact`). The phase loop reads `artifact.round` for the re-review
- * dedupe + `round >= 2` thread-resolution gate and `blockingSeverity` for the
- * poster's render projection.
- */
-function makeFindingsReader(
-  checkoutPath: string,
-): (context: WorkerContext) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> {
-  return async () => {
-    const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
-    if (!ra) return null;
-    return { artifact: ra, blockingSeverity: 'critical' };
+    id: deriveFindingId(file, title),
+    severity: 'critical',
+    file,
+    title,
+    detail: 'detail',
+    round: 1,
+    status: 'open',
+    ...overrides,
+    // keep id derived from the effective file/title even when those are overridden
+    ...(overrides.id ? { id: overrides.id } : { id: deriveFindingId(file, title) }),
   };
 }
 
-function phaseStartOrder(deps: PhaseLoopDeps): WorkflowPhase[] {
-  return (deps.labelManager.onPhaseStart as any).mock.calls.map(
-    (c: unknown[]) => c[0] as WorkflowPhase,
-  );
-}
-
-function baseDeps(): PhaseLoopDeps {
+function artifact(overrides: Partial<ReviewArtifact> = {}): ReviewArtifact {
   return {
-    labelManager: {
-      onPhaseStart: vi.fn().mockResolvedValue(undefined),
-      onPhaseComplete: vi.fn().mockResolvedValue(undefined),
-      onError: vi.fn().mockResolvedValue(undefined),
-      onRepeatedError: vi.fn().mockResolvedValue(undefined),
-      onGateHit: vi.fn().mockResolvedValue(undefined),
-    } as any,
-    stageCommentManager: {
-      updateStageComment: vi.fn().mockResolvedValue(undefined),
-      postFailureAlert: vi.fn().mockResolvedValue(undefined),
-    } as any,
-    gateChecker: {
-      checkGates: vi.fn((phase: WorkflowPhase, workflowName: string, config: WorkerConfig) =>
-        (config.gates[workflowName] ?? []).filter((g) => g.phase === phase),
-      ),
-    } as any,
-    cliSpawner: {
-      spawnPhase: vi.fn().mockImplementation(async (phase: WorkflowPhase) => makeSuccessResult(phase)),
-      runValidatePhase: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
-      runPreValidateInstall: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
-    } as any,
-    outputCapture: {
-      processChunk: vi.fn(),
-      flush: vi.fn(),
-      getOutput: vi.fn().mockReturnValue([]),
-      clear: vi.fn(),
-    } as any,
-    prManager: {
-      commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
-      getPrNumber: vi.fn().mockReturnValue(undefined),
-      convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
-      markReadyForReview: vi.fn().mockResolvedValue(undefined),
-    } as any,
+    findings: [],
+    verdict: 'changes-required',
+    round: 1,
+    lastReviewedCommitSha: 'LAST',
+    remediationCount: 0,
+    markedReadyByEngine: false,
+    ...overrides,
   };
 }
 
-function convergenceContext(checkoutPath: string, workflowName: string): WorkerContext {
+function delta(overrides: Partial<ReviewDelta> = {}): ReviewDelta {
   return {
-    workerId: 'test-worker',
-    jobId: 'test-job',
-    item: {
-      owner: OWNER,
-      repo: REPO,
-      issueNumber: ISSUE,
-      workflowName,
-    } as any,
-    startPhase: 'review',
-    github: {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getPullRequest: vi.fn().mockResolvedValue({ base: { ref: 'develop' } }),
-      getCurrentCommitSha: vi.fn().mockResolvedValue('deadbeef'),
-      getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
-      getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
-      commitExistsInCheckout: vi.fn().mockResolvedValue(true),
-      getIssue: vi.fn().mockResolvedValue({ labels: [], state: 'open' }),
-    } as any,
-    logger: mockLogger,
-    signal: new AbortController().signal,
-    checkoutPath,
-    issueUrl: `https://github.com/${OWNER}/${REPO}/issues/${ISSUE}`,
-    description: 'test',
+    base: { source: 'last-reviewed', base: 'LAST', head: 'HEAD' },
+    files: ['src/a.ts'],
+    round: 2,
+    ...overrides,
   };
-}
-
-function convergenceConfig(): WorkerConfig {
-  return {
-    phaseTimeoutMs: 600_000,
-    workspaceDir: '/tmp',
-    shutdownGracePeriodMs: 5000,
-    validateCommand: 'pnpm test && pnpm build',
-    preValidateCommand: '',
-    // Configure the cap gate so the test proves convergence does NOT trip it.
-    gates: {
-      'speckit-feature': [
-        { phase: 'review', gateLabel: 'waiting-for:remediation-limit', condition: 'on-remediation-limit' },
-      ],
-      'speckit-bugfix': [
-        { phase: 'review', gateLabel: 'waiting-for:remediation-limit', condition: 'on-remediation-limit' },
-      ],
-    },
-    maxImplementRetries: 0,
-    reviewPhaseEnabled: true,
-  } as WorkerConfig;
 }
 
 describe.each([['speckit-feature'], ['speckit-bugfix']])(
-  'PhaseLoop full review⇄remediate convergence (#1132 US1) [%s]',
+  'review⇄remediate convergence — charter + merge contract (#1168 T040) [%s]',
   (workflowName) => {
-    let phaseLoop: PhaseLoop;
-    let checkoutPath: string;
+    const blockingSeverity = BLOCKING_SEVERITY[workflowName]!;
+    const subBlocking = SUB_BLOCKING_SEVERITY[workflowName]!;
+    const sidecarRelPath = getReviewArtifactRelPath(WORKFLOW_ID);
 
-    beforeEach(async () => {
-      phaseLoop = new PhaseLoop(mockLogger);
-      checkoutPath = await fs.mkdtemp(path.join(os.tmpdir(), 'phaseloop-conv-'));
-    });
+    describe('review charter shape', () => {
+      it('round 1 is whole-PR framed (no verification block)', () => {
+        const charter = buildReviewCharter({
+          profile: 'standard',
+          sidecarRelPath,
+          blockingSeverity,
+          round: 1,
+        });
 
-    afterEach(async () => {
-      await fs.rm(checkoutPath, { recursive: true, force: true });
-      vi.clearAllMocks();
-    });
-
-    it('converges over two blocking rounds → clean → validate green (AC1/AC2/AC3/AC5/AC6, T011–T017)', async () => {
-      const deps = baseDeps();
-      const reviewExecutor = makeScriptedReviewExecutor(checkoutPath, [
-        'changes-required', // round 1 — AC1: blocking entry
-        'changes-required', // round 2 — AC2: still blocking, re-remediate
-        'clean', // round 3 — AC3: clean → ready → validate
-      ]);
-      const remediateExecute = vi.fn(async (): Promise<PhaseResult> => {
-        await bumpRemediationCount(checkoutPath, WORKFLOW_ID);
-        return makeSuccessResult('remediate');
+        expect(charter).toContain('# Code review — round 1');
+        // whole-PR framing, not delta/verification framing.
+        expect(charter).toContain(
+          'correctness and regression review of the changes on this pull request branch',
+        );
+        expect(charter).not.toContain('VERIFICATION re-review');
+        expect(charter).not.toContain('Files changed since the last reviewed commit');
+        // round-1 whole-PR pass flags an implausibly empty diff.
+        expect(charter).toContain('## Empty or trivial diff');
+        // FR-003: static review, never runs tests/builds.
+        expect(charter).toContain('## Do NOT run tests or builds');
+        // FR-005: names the exact sidecar write target + no-verdict instruction.
+        expect(charter).toContain(sidecarRelPath);
+        expect(charter).toContain('Do NOT include a verdict field');
       });
-      deps.reviewExecutor = reviewExecutor as any;
-      deps.remediateExecutor = { execute: remediateExecute } as any;
-      deps.remediateTrigger = (ctx) =>
-        readReviewArtifactSync(ctx.checkoutPath, WORKFLOW_ID)?.verdict === 'changes-required';
-      deps.readFindingsArtifact = makeFindingsReader(checkoutPath);
-      deps.reviewPoster = {
-        postRound: vi.fn().mockResolvedValue(undefined),
-        resolveResolvedThreads: vi.fn().mockResolvedValue(undefined),
-      } as any;
 
-      const sequence = getPhaseSequence(workflowName, true) as WorkflowPhase[];
-      const result = await phaseLoop.executeLoop(
-        convergenceContext(checkoutPath, workflowName),
-        convergenceConfig(),
-        deps,
-        sequence,
-      );
+      it('round >= 2 is delta-scoped verification framed (names changed files, restricts new findings)', () => {
+        const deltaFiles = ['src/a.ts', 'src/b.ts'];
+        const charter = buildReviewCharter({
+          profile: 'standard',
+          sidecarRelPath,
+          blockingSeverity,
+          round: 2,
+          verification: {
+            prompt: 'Still-open findings to confirm:\n- src/a.ts — blocking finding',
+            deltaFiles,
+          },
+        });
 
-      // AC5: forward termination after a green validate — no further backtrack.
-      expect(result.completed).toBe(true);
-      expect(result.gateHit).toBe(false);
-      expect(result.lastPhase).toBe('validate');
+        expect(charter).toContain('# Code review — round 2');
+        // verification framing — inspect ONLY the delta.
+        expect(charter).toContain('VERIFICATION re-review');
+        expect(charter).toContain('Files changed since the last reviewed commit:');
+        for (const file of deltaFiles) {
+          expect(charter).toContain(`- ${file}`);
+        }
+        // embeds the still-open-findings framing.
+        expect(charter).toContain('Still-open findings to confirm:');
+        // evidence-based resolution (re-emit with same file+title + resolved).
+        expect(charter).toContain('## Confirming an addressed finding');
+        // new findings restricted to blockingSeverity or higher on a re-review.
+        expect(charter).toContain('## New findings on a verification pass');
+        expect(charter).toContain(`severity \`${blockingSeverity}\``);
+        // the round-1-only empty-diff block is absent on a verification pass.
+        expect(charter).not.toContain('## Empty or trivial diff');
+      });
 
-      // AC1/AC2/AC3: two blocking rounds each backtrack through `remediate`, the
-      // clean round-3 advances into `validate`.
-      expect(phaseStartOrder(deps)).toEqual([
-        'review',
-        'remediate',
-        'review',
-        'remediate',
-        'review',
-        'validate',
-      ]);
+      it('verification pass with an empty delta says "no files changed"', () => {
+        const charter = buildReviewCharter({
+          profile: 'standard',
+          sidecarRelPath,
+          blockingSeverity,
+          round: 3,
+          verification: { prompt: 'Confirm the fix.', deltaFiles: [] },
+        });
 
-      // AC2/AC6 (T012/T016): the remediation counter increments once per
-      // remediation round and the findings artifact is consistent at the end.
-      expect(remediateExecute).toHaveBeenCalledTimes(2);
-      const finalArtifact = readReviewArtifactSync(checkoutPath, WORKFLOW_ID)!;
-      expect(finalArtifact.remediationCount).toBe(2);
-      expect(finalArtifact.round).toBe(3);
-      expect(finalArtifact.verdict).toBe('clean');
-
-      // FR-004 / SC-006 (T018): every remediate entry converts the PR back to
-      // draft (2 entries), and the single clean review marks it ready.
-      expect(deps.prManager.convertToDraftIfEngineMarkedReady).toHaveBeenCalledTimes(2);
-      expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
-
-      // FR-004 (T018): a review is posted every round; re-review rounds (≥2)
-      // resolve prior threads.
-      expect((deps.reviewPoster as any).postRound).toHaveBeenCalledTimes(3);
-      expect((deps.reviewPoster as any).resolveResolvedThreads).toHaveBeenCalledTimes(2);
-
-      // FR-005 / SC-005 (T017): at most one validate/suite execution per
-      // clean-review cycle — the suite never re-runs while findings are open.
-      expect(deps.cliSpawner.runValidatePhase).toHaveBeenCalledTimes(1);
-
-      // The cap gate is configured but convergence never trips it.
-      expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
+        expect(charter).toContain('Delta since last review: no files changed.');
+      });
     });
 
-    it('validate-failure re-enters remediate → review → validate-green (AC4, T014)', async () => {
-      const checkoutPath2 = checkoutPath;
-      // #1158: both origins converge on the single RemediateExecutor. The
-      // validate-origin backtrack synthesizes a changes-required finding, then
-      // dispatches through `remediateExecutor.execute` at the seam — the retired
-      // ValidateFixHandler adapter is gone.
-      const remediateExecute = vi.fn(async (): Promise<PhaseResult> => {
-        await bumpRemediationCount(checkoutPath2, WORKFLOW_ID);
-        return makeSuccessResult('remediate');
+    describe('advanceArtifact merge contract', () => {
+      it('resolves an open finding that is in the delta and re-emitted as resolved (convergence)', () => {
+        const open = finding({ round: 1, status: 'open' });
+        const prior = artifact({ findings: [open], round: 1 });
+        const reviewerAddressed = [finding({ status: 'resolved', round: 2 })];
+
+        const merged = advanceArtifact(
+          prior,
+          delta({ files: [open.file], round: 2 }),
+          reviewerAddressed,
+          [],
+          blockingSeverity,
+        );
+
+        expect(merged).toHaveLength(1);
+        expect(merged[0]!.id).toBe(open.id);
+        expect(merged[0]!.status).toBe('resolved');
       });
-      const onError = vi.fn().mockResolvedValue(undefined);
 
-      // No-op base-merge runner — its call count is the #914 per-cycle guard
-      // assertion (one merge per validate cycle).
-      const baseMergeRunner = vi
-        .fn<[], Promise<BaseMergeResult>>()
-        .mockResolvedValue({ ok: true, baseRef: 'origin/develop' } as BaseMergeResult);
+      it('carries an open finding forward untouched when its file is NOT in the delta (anti-vanish)', () => {
+        const open = finding({ file: 'src/untouched.ts', title: 'stale blocker', round: 1 });
+        const prior = artifact({ findings: [open], round: 1 });
 
-      const runValidatePhase = vi
-        .fn()
-        .mockResolvedValueOnce(makeValidateFailure())
-        .mockResolvedValue(makeSuccessResult('validate'));
+        // reviewer addressed nothing and re-emitted nothing; the delta touches an
+        // unrelated file. Silence must NOT close the finding.
+        const merged = advanceArtifact(
+          prior,
+          delta({ files: ['src/other.ts'], round: 2 }),
+          [],
+          [],
+          blockingSeverity,
+        );
 
-      // Review executor always writes CLEAN: the changes-required artifact that
-      // drives the remediate seam here is the SYNTHESIZED one from the validate
-      // routing branch (#1129), not a reviewer verdict.
-      const reviewExecutor = makeScriptedReviewExecutor(checkoutPath2, ['clean']);
+        expect(merged).toHaveLength(1);
+        expect(merged[0]!.id).toBe(open.id);
+        expect(merged[0]!.status).toBe('open');
+      });
 
-      const deps = baseDeps();
-      deps.labelManager = {
-        onPhaseStart: vi.fn().mockResolvedValue(undefined),
-        onPhaseComplete: vi.fn().mockResolvedValue(undefined),
-        onError,
-        onRepeatedError: vi.fn().mockResolvedValue(undefined),
-        onGateHit: vi.fn().mockResolvedValue(undefined),
-      } as any;
-      deps.cliSpawner = {
-        spawnPhase: vi.fn().mockResolvedValue(makeSuccessResult('implement')),
-        runValidatePhase,
-        runPreValidateInstall: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
-      } as any;
-      deps.prManager = {
-        commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
-        getPrNumber: vi.fn().mockReturnValue(42),
-        convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
-        markReadyForReview: vi.fn().mockResolvedValue(undefined),
-      } as any;
-      deps.reviewExecutor = reviewExecutor as any;
-      deps.remediateExecutor = { execute: remediateExecute } as any;
-      deps.baseMergeRunner = baseMergeRunner as any;
-      deps.failureFingerprintTracker = {
-        countPriorOccurrences: vi.fn(async () => 0),
-      } as any;
-      deps.remediateTrigger = (ctx) =>
-        readReviewArtifactSync(ctx.checkoutPath, WORKFLOW_ID)?.verdict === 'changes-required';
+      it('drops a sub-blocking NEW finding raised on a round >= 2 verification pass', () => {
+        const prior = artifact({ findings: [], round: 1 });
+        const advisory = finding({
+          file: 'src/new.ts',
+          title: 'nit: naming',
+          severity: subBlocking,
+          round: 2,
+          status: 'open',
+        });
+        const blocker = finding({
+          file: 'src/regression.ts',
+          title: 'introduced regression',
+          severity: blockingSeverity,
+          round: 2,
+          status: 'open',
+        });
 
-      const ctx = convergenceContext(checkoutPath2, workflowName);
-      // #864/#914: branch is required for the pre-phase base-merge to run.
-      ctx.branch = `${ISSUE}-validate-remediate`;
-      (ctx.github as any).findPRForBranchAnyState = vi
-        .fn()
-        .mockResolvedValue({ number: 42, state: 'open' });
+        const merged = advanceArtifact(
+          prior,
+          delta({ files: ['src/new.ts', 'src/regression.ts'], round: 2 }),
+          [],
+          [advisory, blocker],
+          blockingSeverity,
+        );
 
-      const config = convergenceConfig();
-      // AC4 exercises the validate-origin entry, not the cap gate.
-      config.gates = {};
+        // the sub-blocking advisory is filtered out; only the blocker survives.
+        const ids = merged.map((f) => f.id);
+        expect(ids).toContain(blocker.id);
+        expect(ids).not.toContain(advisory.id);
+      });
 
-      const result = await phaseLoop.executeLoop(ctx, config, deps, ['review', 'validate']);
+      it('filterNewFindings keeps all findings on round 1 but drops sub-blocking on round >= 2', () => {
+        const advisory = finding({ severity: subBlocking, round: 1 });
+        const blocker = finding({
+          file: 'src/b.ts',
+          title: 'blocker',
+          severity: blockingSeverity,
+          round: 1,
+        });
 
-      expect(result.completed).toBe(true);
+        expect(filterNewFindings([advisory, blocker], 1, blockingSeverity)).toHaveLength(2);
 
-      // review, validate(fail→route), review(stub→remediate seam via #1129),
-      // review(clean), validate(green).
-      expect(phaseStartOrder(deps)).toEqual([
-        'review',
-        'validate',
-        'review',
-        'remediate',
-        'review',
-        'validate',
-      ]);
+        const round2 = filterNewFindings(
+          [
+            { ...advisory, round: 2 },
+            { ...blocker, round: 2 },
+          ],
+          2,
+          blockingSeverity,
+        );
+        expect(round2).toHaveLength(1);
+        expect(round2[0]!.severity).toBe(blockingSeverity);
+      });
 
-      // #1158: the validate-origin backtrack dispatches through the single
-      // RemediateExecutor exactly once, at the seam.
-      expect(remediateExecute).toHaveBeenCalledTimes(1);
+      it('de-dupes a re-emitted open finding against the carried-forward prior (id uniqueness)', () => {
+        const open = finding({ round: 1, status: 'open' });
+        const prior = artifact({ findings: [open], round: 1 });
 
-      // validate ran twice: the initial red, then the post-remediation green.
-      expect(runValidatePhase).toHaveBeenCalledTimes(2);
+        // the agent re-emits the same finding as still-open on the verification
+        // pass ("when in doubt"). It shares the prior's deterministic id, so the
+        // merge must not append a duplicate.
+        const reEmitted = finding({ round: 2, status: 'open' });
 
-      // One base-merge per validate cycle (two validate entries → two merges).
-      expect(baseMergeRunner).toHaveBeenCalledTimes(2);
+        const merged = advanceArtifact(
+          prior,
+          delta({ files: [open.file], round: 2 }),
+          [],
+          [reEmitted],
+          blockingSeverity,
+        );
 
-      // FR-009: `failed:validate` never applied on the routed path.
-      expect(onError).not.toHaveBeenCalledWith('validate');
+        expect(merged).toHaveLength(1);
+        expect(merged[0]!.id).toBe(open.id);
+        expect(merged[0]!.status).toBe('open');
+      });
     });
   },
 );

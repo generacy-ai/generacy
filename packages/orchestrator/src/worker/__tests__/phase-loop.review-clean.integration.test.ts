@@ -1,187 +1,166 @@
 /**
- * US1 (#1127, FR-001 / FR-002 / FR-003) — the clean-review happy path,
- * end-to-end through the REAL posting + lifecycle production code.
+ * US3 (#1168, T020 / T021, FR-008) — the clean-review happy path and the
+ * changes-required → draft-conversion path, end-to-end through the REAL
+ * production code, with NO verdict-steering stub.
  *
- * Drives `PhaseLoop.executeLoop` with `reviewPhaseEnabled: true` so `review`
- * is in the effective sequence. The verdict is steered — not re-implemented
- * (FR-008 / research.md Decision 2) — by injecting `readFindingsArtifact` to
- * return a CLEAN `FindingsArtifact`. Posting runs through the real
- * `ReviewPoster` (#1125) against a mocked `GitHubClient` capturing spy, so the
- * suite asserts the actual wire behavior:
- *   - exactly one COMMENT review, zero REQUEST_CHANGES (SC-003);
- *   - the posted body carries the engine-authored marker (via the FR-005
- *     match helper, never a raw literal — the suite cannot drift);
- *   - `markReadyForReview` on clean → the loop advances into `validate`.
+ * Re-pointed off the old `readFindingsArtifact`-steered double (which returned a
+ * hand-built CLEAN `FindingsArtifact` and left the review executor as the #1121
+ * stub). That masked the exact "seam passes, production fails" class #1168
+ * exists to close (#1155 phantom-clean, #1156 unwired poster). Now:
+ *   - the verdict is RECOMPUTED by the real `ReviewExecutor` + `computeVerdict`
+ *     from a candidate the scripted-CLI fixture writes (real `child_process`
+ *     spawn via the `createReviewCompositionHarness` double);
+ *   - posting runs through the real `ReviewPoster` (#1125) against the harness's
+ *     recording-fake `GitHubClient`, so the assertions target the actual wire
+ *     behavior — exactly one COMMENT review, zero REQUEST_CHANGES, the
+ *     engine-authored marker on the body, and the ready/draft lifecycle calls;
+ *   - the `readFindingsArtifact` reader is REAL: it reads the engine-written
+ *     authoritative artifact and returns `{ artifact, blockingSeverity }`
+ *     exactly as `claude-cli-worker.ts` wires it in production.
  *
- * The review executor is left as the #1121 stub (no CLI spawn): the findings
- * artifact is the steering lever, so no real review logic runs (FR-008).
+ * This preserves every assertion the prior double-based suite made (COMMENT-only
+ * review, marker present, ready on clean, no draft-convert on clean) and adds
+ * the positive draft-conversion case a clean-only steer could never reach.
  */
-import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { PhaseLoop } from '../phase-loop.js';
-import type { PhaseLoopDeps } from '../phase-loop.js';
-import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../types.js';
-import { getPhaseSequence } from '../types.js';
-import type { WorkerConfig } from '../config.js';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   ReviewPoster,
   matchEngineAuthoredReviewMarker,
 } from '../review-poster.js';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
-import type {
-  GitHubClient,
-  CreateReviewInput,
-  Review,
-} from '@generacy-ai/workflow-engine';
+import { readReviewArtifact } from '../review-artifact.js';
+import type { Severity } from '../review-artifact.js';
+import type { PhaseLoopDeps } from '../phase-loop.js';
+import type { WorkflowPhase } from '../types.js';
+import type { CreateReviewInput } from '@generacy-ai/workflow-engine';
+import {
+  createReviewCompositionHarness,
+  type ReviewCompositionHarness,
+} from './helpers/review-composition-harness.js';
 
-const mockLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-  child: () => mockLogger,
-} as unknown as Logger;
+const harnesses: ReviewCompositionHarness[] = [];
 
-function makeSuccessResult(phase: WorkflowPhase): PhaseResult {
-  return { phase, success: true, exitCode: 0, durationMs: 100, output: [] };
+async function newHarness(
+  opts: { workflowName?: string } = {},
+): Promise<ReviewCompositionHarness> {
+  const h = await createReviewCompositionHarness(opts);
+  harnesses.push(h);
+  return h;
 }
+
+afterEach(async () => {
+  while (harnesses.length > 0) {
+    await harnesses.pop()!.cleanup();
+  }
+});
 
 /**
- * Capturing GitHubClient spy for the real ReviewPoster. `listReviews` /
- * `listPullRequestFiles` / `getPRReviewThreads` return empty so posting takes
- * the simple body-only path; `createReview` captures the submitted input.
+ * The real posting deps: a real `ReviewPoster` bound to the harness's recording
+ * github, and a REAL `readFindingsArtifact` reading the engine-written artifact
+ * and returning `{ artifact, blockingSeverity }` — the exact shape
+ * `claude-cli-worker.ts` wires in production (NOT the deleted `{ artifact, round }`).
  */
-function createGithubSpy() {
-  const createReview = vi.fn(async (): Promise<Review> => ({
-    id: 1,
-    user: { login: 'generacy[bot]' },
-    body: '',
-    state: 'COMMENTED',
-    submittedAt: new Date().toISOString(),
-  }));
+function realPostingDeps(
+  harness: ReviewCompositionHarness,
+  blockingSeverity: Severity,
+): Partial<PhaseLoopDeps> {
   return {
-    listReviews: vi.fn(async () => [] as Review[]),
-    listPullRequestFiles: vi.fn(async () => []),
-    getPRReviewThreads: vi.fn(async () => []),
-    resolveReviewThread: vi.fn(async () => undefined),
-    createReview,
-  } as unknown as GitHubClient;
-}
-
-function createMockDeps(github: GitHubClient): PhaseLoopDeps {
-  return {
-    labelManager: {
-      onPhaseStart: vi.fn().mockResolvedValue(undefined),
-      onPhaseComplete: vi.fn().mockResolvedValue(undefined),
-      onError: vi.fn().mockResolvedValue(undefined),
-      onGateHit: vi.fn().mockResolvedValue(undefined),
-    } as any,
-    stageCommentManager: {
-      updateStageComment: vi.fn().mockResolvedValue(undefined),
-      postFailureAlert: vi.fn().mockResolvedValue(undefined),
-    } as any,
-    gateChecker: {
-      checkGates: vi.fn().mockReturnValue([]),
-    } as any,
-    cliSpawner: {
-      spawnPhase: vi.fn().mockImplementation(async (phase: WorkflowPhase) => makeSuccessResult(phase)),
-      runValidatePhase: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
-      runPreValidateInstall: vi.fn().mockResolvedValue(makeSuccessResult('validate')),
-    } as any,
-    outputCapture: {
-      processChunk: vi.fn(),
-      flush: vi.fn(),
-      getOutput: vi.fn().mockReturnValue([]),
-      clear: vi.fn(),
-    } as any,
-    prManager: {
-      commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
-      getPrNumber: vi.fn().mockReturnValue(42),
-      convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
-      markReadyForReview: vi.fn().mockResolvedValue(undefined),
-    } as any,
     reviewPoster: new ReviewPoster({
-      github,
-      owner: 'test',
-      repo: 'repo',
+      github: harness.github,
+      owner: harness.owner,
+      repo: harness.repo,
       getPrNumber: () => 42,
-      logger: mockLogger,
+      logger: harness.logger,
     }),
+    readFindingsArtifact: async () => {
+      const artifact = await readReviewArtifact(harness.checkoutPath, harness.workflowId);
+      return artifact ? { artifact, blockingSeverity } : null;
+    },
   };
-}
-
-function createMockContext(
-  workflowName: string,
-  startPhase: WorkflowPhase = 'implement',
-): WorkerContext {
-  return {
-    workerId: 'test-worker',
-    item: {
-      owner: 'test',
-      repo: 'repo',
-      issueNumber: 1127,
-      workflowName,
-    } as any,
-    startPhase,
-    github: {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentCommitSha: vi.fn().mockResolvedValue('a1b2c3d4'),
-      getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
-      getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
-    } as any,
-    logger: mockLogger,
-    signal: new AbortController().signal,
-    checkoutPath: '/tmp/repo',
-    issueUrl: 'https://github.com/test/repo/issues/1127',
-    description: 'test',
-  };
-}
-
-function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
-  return {
-    phaseTimeoutMs: 600_000,
-    workspaceDir: '/tmp',
-    shutdownGracePeriodMs: 5000,
-    validateCommand: 'pnpm test && pnpm build',
-    preValidateCommand: '',
-    gates: {},
-    maxImplementRetries: 2,
-    ...overrides,
-  } as WorkerConfig;
 }
 
 /** Phases in the order the loop marked them active (via labelManager.onPhaseStart). */
 function phaseStartOrder(deps: PhaseLoopDeps): WorkflowPhase[] {
-  return (deps.labelManager.onPhaseStart as any).mock.calls.map(
-    (c: unknown[]) => c[0] as WorkflowPhase,
+  return (deps.labelManager.onPhaseStart as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+    (c) => c[0] as WorkflowPhase,
   );
 }
 
-/** A clean verdict with one advisory (at/below blockingSeverity) finding. */
-function cleanArtifact(): FindingsArtifact {
-  return {
-    verdict: 'clean',
-    findings: [{ marker: 'f-adv-1', text: 'consider renaming', severity: 'advisory' }],
-  };
+/** A clean candidate: one open `minor` finding, gated at `critical` → verdict clean. */
+function cleanCandidateJson(): string {
+  return JSON.stringify({
+    findings: [
+      {
+        severity: 'minor',
+        file: 'packages/orchestrator/src/foo.ts',
+        line: 1,
+        title: 'advisory nit',
+        detail: 'below the blocking threshold — non-blocking',
+        status: 'open',
+      },
+    ],
+  });
 }
 
-describe('US1 (#1127) — clean-review happy path, real posting + lifecycle', () => {
-  let phaseLoop: PhaseLoop;
+/** The stable file+title identifying the single blocking finding across rounds. */
+const BLOCKING_FILE = 'packages/orchestrator/src/foo.ts';
+const BLOCKING_TITLE = 'blocking defect';
 
-  beforeEach(() => {
-    phaseLoop = new PhaseLoop(mockLogger);
+/** A blocking candidate: one open `critical` finding → verdict changes-required. */
+function changesRequiredCandidateJson(): string {
+  return JSON.stringify({
+    findings: [
+      {
+        severity: 'critical',
+        file: BLOCKING_FILE,
+        line: 1,
+        title: BLOCKING_TITLE,
+        detail: 'an open blocking finding',
+        status: 'open',
+      },
+    ],
   });
+}
 
-  // T012 — parameterized across both speckit workflows (SC-002).
+/**
+ * The round-2 candidate that RESOLVES the round-1 blocking finding: same
+ * file+title (⇒ same deterministic id) marked `resolved`, so the engine merge
+ * transitions the prior `open` copy to `resolved` and recomputes `clean`. An
+ * empty-findings round 2 would NOT resolve the carried-over open finding, so the
+ * verdict would stay `changes-required` and never reach the ready path.
+ */
+function resolvedCandidateJson(): string {
+  return JSON.stringify({
+    findings: [
+      {
+        severity: 'critical',
+        file: BLOCKING_FILE,
+        line: 1,
+        title: BLOCKING_TITLE,
+        detail: 'the blocking finding, now resolved',
+        status: 'resolved',
+      },
+    ],
+  });
+}
+
+describe('US3 (#1168) — clean-review happy path, real ReviewExecutor + real ReviewPoster', () => {
+  // T021 — parameterized across both speckit workflows (SC-002). The verdict is
+  // recomputed by the real executor from a clean candidate; the loop advances
+  // implement → review → validate with review immediately after implement.
   for (const workflow of ['speckit-feature', 'speckit-bugfix'] as const) {
     it(`traverses implement → review → validate with review immediately after implement (${workflow}, FR-001/SC-002)`, async () => {
-      const github = createGithubSpy();
-      const deps = createMockDeps(github);
-      deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
-      const context = createMockContext(workflow, 'implement');
-      const config = createConfig({ reviewPhaseEnabled: true });
-      const sequence = getPhaseSequence(workflow, true) as WorkflowPhase[];
+      const harness = await newHarness({ workflowName: workflow });
+      const agentLauncher = harness.makeSpawningLauncher({
+        mode: 'write',
+        candidateJson: cleanCandidateJson(),
+      });
+      const { context, config, deps, sequence } = harness.build({
+        agentLauncher,
+        blockingSeverity: 'critical',
+        extraDeps: realPostingDeps(harness, 'critical'),
+      });
 
-      const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+      const result = await harness.phaseLoop.executeLoop(context, config, deps, sequence);
 
       expect(result.completed).toBe(true);
       const order = phaseStartOrder(deps);
@@ -190,55 +169,111 @@ describe('US1 (#1127) — clean-review happy path, real posting + lifecycle', ()
     });
   }
 
-  // T013 — exactly one COMMENT review, zero REQUEST_CHANGES on the own PR (FR-002 / SC-003).
+  // T021 — exactly one COMMENT review, zero REQUEST_CHANGES on the own PR
+  // (FR-002 / SC-003), driven by a real executor verdict through the real poster.
   it('posts exactly one COMMENT review with zero REQUEST_CHANGES (FR-002 / SC-003)', async () => {
-    const github = createGithubSpy();
-    const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
-    const context = createMockContext('speckit-feature', 'implement');
-    const config = createConfig({ reviewPhaseEnabled: true });
-    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+    const harness = await newHarness();
+    const agentLauncher = harness.makeSpawningLauncher({
+      mode: 'write',
+      candidateJson: cleanCandidateJson(),
+    });
+    const { context, config, deps, sequence } = harness.build({
+      agentLauncher,
+      blockingSeverity: 'critical',
+      extraDeps: realPostingDeps(harness, 'critical'),
+    });
 
-    await phaseLoop.executeLoop(context, config, deps, sequence);
+    await harness.phaseLoop.executeLoop(context, config, deps, sequence);
 
-    const createReview = github.createReview as unknown as ReturnType<typeof vi.fn>;
+    const createReview = harness.github.createReview as unknown as ReturnType<typeof vi.fn>;
     expect(createReview).toHaveBeenCalledTimes(1);
     const inputs = createReview.mock.calls.map((c) => c[3] as CreateReviewInput);
     expect(inputs.map((i) => i.event)).toEqual(['COMMENT']);
     expect(inputs.some((i) => i.event === 'REQUEST_CHANGES')).toBe(false);
   });
 
-  // T014 — the posted body carries the engine-authored marker (via the FR-005
+  // T021 — the posted body carries the engine-authored marker (via the FR-005
   // match helper, not a raw string literal, so the suite cannot drift).
-  it('stamps the engine-authored marker on the review body (FR-005 helper, T014)', async () => {
-    const github = createGithubSpy();
-    const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
-    const context = createMockContext('speckit-feature', 'implement');
-    const config = createConfig({ reviewPhaseEnabled: true });
-    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+  it('stamps the engine-authored marker on the review body (FR-005 helper)', async () => {
+    const harness = await newHarness();
+    const agentLauncher = harness.makeSpawningLauncher({
+      mode: 'write',
+      candidateJson: cleanCandidateJson(),
+    });
+    const { context, config, deps, sequence } = harness.build({
+      agentLauncher,
+      blockingSeverity: 'critical',
+      extraDeps: realPostingDeps(harness, 'critical'),
+    });
 
-    await phaseLoop.executeLoop(context, config, deps, sequence);
+    await harness.phaseLoop.executeLoop(context, config, deps, sequence);
 
-    const createReview = github.createReview as unknown as ReturnType<typeof vi.fn>;
+    const createReview = harness.github.createReview as unknown as ReturnType<typeof vi.fn>;
     const input = createReview.mock.calls[0]![3] as CreateReviewInput;
     expect(matchEngineAuthoredReviewMarker(input.body)).toBeDefined();
   });
 
-  // T015 — markReadyForReview on clean verdict; the loop advances into validate.
+  // T021 — markReadyForReview on clean verdict; the loop advances into validate,
+  // and convert-to-draft never fires on a clean pass.
   it('marks the PR ready on clean verdict and advances into validate (FR-003)', async () => {
-    const github = createGithubSpy();
-    const deps = createMockDeps(github);
-    deps.readFindingsArtifact = vi.fn().mockResolvedValue({ artifact: cleanArtifact(), round: 1 });
-    const context = createMockContext('speckit-feature', 'implement');
-    const config = createConfig({ reviewPhaseEnabled: true });
-    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+    const harness = await newHarness();
+    const agentLauncher = harness.makeSpawningLauncher({
+      mode: 'write',
+      candidateJson: cleanCandidateJson(),
+    });
+    const { context, config, deps, sequence } = harness.build({
+      agentLauncher,
+      blockingSeverity: 'critical',
+      extraDeps: realPostingDeps(harness, 'critical'),
+    });
 
-    await phaseLoop.executeLoop(context, config, deps, sequence);
+    await harness.phaseLoop.executeLoop(context, config, deps, sequence);
 
     expect(deps.prManager.markReadyForReview).toHaveBeenCalledTimes(1);
     // convert-to-draft is a remediate-entry side effect — never on a clean pass.
     expect(deps.prManager.convertToDraftIfEngineMarkedReady).not.toHaveBeenCalled();
     expect(phaseStartOrder(deps)).toContain('validate');
+  });
+});
+
+describe('US3 (#1168) — changes-required cycle converts the PR to draft (T021)', () => {
+  it('converts the PR to draft when the engine drives a changes-required review, then re-reviews clean', async () => {
+    const harness = await newHarness();
+    // Round 1 recomputes changes-required (open critical); round 2 resolves that
+    // same finding (same id) → recomputed clean. The fire-once trigger drives the
+    // off-sequence remediate pass, whose entry converts the PR back to draft
+    // (#1125 FR-006).
+    const agentLauncher = harness.makeSpawningLauncher({
+      mode: 'write',
+      candidateJsonByRound: {
+        1: changesRequiredCandidateJson(),
+        2: resolvedCandidateJson(),
+      },
+    });
+
+    const counter = { fired: 0 };
+    const remediateTrigger = (): boolean => {
+      if (counter.fired >= 1) return false;
+      counter.fired += 1;
+      return true;
+    };
+
+    const { context, config, deps, sequence } = harness.build({
+      agentLauncher,
+      blockingSeverity: 'critical',
+      extraDeps: {
+        ...realPostingDeps(harness, 'critical'),
+        remediateTrigger,
+      },
+    });
+
+    await harness.phaseLoop.executeLoop(context, config, deps, sequence);
+
+    // The changes-required round drove the remediate seam, which converts the PR
+    // to draft before remediating (inspect the recorded draft call).
+    expect(deps.prManager.convertToDraftIfEngineMarkedReady).toHaveBeenCalled();
+    expect(counter.fired).toBe(1);
+    // The subsequent clean re-review posted through the real poster and marked ready.
+    expect(deps.prManager.markReadyForReview).toHaveBeenCalled();
   });
 });
