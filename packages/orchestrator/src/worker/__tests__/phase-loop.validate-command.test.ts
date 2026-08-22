@@ -7,7 +7,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 // project selection before narrowing. Mock it to a non-empty result so FR-002's
 // targeted narrowing is reachable (a real bugfix run has a git checkout the probe
 // can resolve; a temp dir does not).
-let probeStdout = '[{"name":"pkg-a","path":"/tmp/packages/a"}]';
+const probeStdout = '[{"name":"pkg-a","path":"/tmp/packages/a"}]';
 const execFileSpy = vi.fn(
   (_cmd: string, _args: string[], _opts: unknown, cb: unknown) => {
     const callback = cb as (err: unknown, res?: { stdout: string; stderr: string }) => void;

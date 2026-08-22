@@ -35,7 +35,7 @@ import { hashValidationEvidence } from './evidence-hash.js';
 import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { classifyDiff, isTestFile, type Classification } from './diff-classifier.js';
@@ -2106,8 +2106,20 @@ export class PhaseLoop {
     // `targeted`/`docs-only-skip-tests` yet select zero pnpm projects, producing
     // a vacuous `pnpm --filter … build/test`. Probe the selection; an empty
     // selection — or a probe error (fail-safe) — overrides to the full default.
+    //
+    // The probe only ever fires when the diff touches a root-level path that
+    // belongs to NO workspace package (the exact FR-003 trigger set: root
+    // `package.json`, `scripts/**`, root `vitest.config.ts`). A change that lives
+    // under a package directory (has a `package.json` ancestor in the checkout)
+    // is guaranteed to be in the `...[origin/<base>]` selection — it is itself a
+    // change to that package vs the base ref — so probing is provably redundant
+    // and is skipped (avoids a spawn on the common package-scoped path).
+    const hasRootLevelChange = changedFiles.some(
+      (f) => !this.pathBelongsToPackage(context.checkoutPath, f),
+    );
     if (
       isBuiltInDefault &&
+      hasRootLevelChange &&
       (classification.kind === 'targeted' || classification.kind === 'docs-only-skip-tests')
     ) {
       const selectsZero = await this.probeSelectsZeroProjects(context.checkoutPath, base);
@@ -2138,6 +2150,29 @@ export class PhaseLoop {
     );
 
     return { effectiveCommand, baseRef, base, changedFiles, classification };
+  }
+
+  /**
+   * #1166 (FR-003): does a changed path live inside a workspace package — i.e.
+   * does any ancestor directory (up to, but excluding, the checkout root) hold a
+   * `package.json`? A path that does is guaranteed to be in the targeted
+   * `...[origin/<base>]` selection (it is a change to that package vs the base),
+   * so the zero-project probe can be skipped for it. Root-level paths (root
+   * `package.json`, `scripts/**`, root `vitest.config.ts`) return `false` — they
+   * are the only paths that can produce a vacuous zero-project targeted command.
+   * Pure fs probing in the wiring layer (Q3=A keeps `classifyDiff` no-I/O).
+   */
+  private pathBelongsToPackage(checkoutPath: string, file: string): boolean {
+    let dir = dirname(file);
+    while (dir && dir !== '.' && dir !== '/') {
+      if (existsSync(join(checkoutPath, dir, 'package.json'))) {
+        return true;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return false;
   }
 
   /**
