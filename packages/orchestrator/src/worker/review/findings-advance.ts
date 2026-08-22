@@ -26,6 +26,12 @@ export function filterNewFindings(
  *
  * 1. `open` finding whose file is in `delta.changedFiles` and whose id matches a
  *    `reviewerAddressed` finding ⇒ `resolved`.
+ * 1b. `open` finding carrying a `synthetic` kind (validate-failure synthesis /
+ *    body-only external feedback) whose id matches a `reviewerAddressed`
+ *    finding ⇒ `resolved` REGARDLESS of delta membership. Its `file` is a
+ *    command string or placeholder that can never be a changed path, so the
+ *    delta rule would carry it open forever and ride every validate failure to
+ *    the remediation cap; the reviewer's explicit re-emission is the evidence.
  * 2. `open` findings not in the delta ⇒ unchanged (Q2 — evidence-based;
  *    anti-vanish carry-forward, SC-005).
  * 3. `resolved` findings ⇒ never touched (Q1 — terminal).
@@ -45,7 +51,11 @@ export function advanceArtifact(
 
   const priorFindings = prior?.findings ?? [];
   const transitioned: ReviewFinding[] = priorFindings.map((f) => {
-    if (f.status === 'open' && deltaFiles.has(f.file) && addressed.has(f.id)) {
+    if (
+      f.status === 'open' &&
+      addressed.has(f.id) &&
+      (f.synthetic !== undefined || deltaFiles.has(f.file))
+    ) {
       return { ...f, status: 'resolved' as const };
     }
     // resolved stays resolved (Q1); open-outside-delta stays open (Q2).

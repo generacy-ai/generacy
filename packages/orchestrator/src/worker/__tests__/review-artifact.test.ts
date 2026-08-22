@@ -266,3 +266,109 @@ describe('computeVerdict severity/verdict matrix (SC-002)', () => {
     });
   }
 });
+
+describe('synthetic findings + consumedReviewScopeHeadSha (schema back-compat)', () => {
+  let checkoutPath: string;
+
+  beforeEach(async () => {
+    checkoutPath = await fs.mkdtemp(path.join(os.tmpdir(), 'review-artifact-syn-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(checkoutPath, { recursive: true, force: true });
+  });
+
+  it('round-trips `synthetic` on a finding and `consumedReviewScopeHeadSha` on the artifact', async () => {
+    const artifact: ReviewArtifact = {
+      findings: [
+        finding({ file: 'pnpm test && pnpm build', title: 'validate phase failed', synthetic: 'validate' }),
+        finding({ file: '(pr-review)', title: 'External feedback from octocat', synthetic: 'external-body' }),
+        finding(),
+      ],
+      verdict: 'changes-required',
+      round: 2,
+      lastReviewedCommitSha: 'abc123',
+      remediationCount: 1,
+      markedReadyByEngine: false,
+      consumedReviewScopeHeadSha: 'merge456',
+    };
+    await writeReviewArtifact(checkoutPath, WORKFLOW_ID, artifact);
+    const read = await readReviewArtifact(checkoutPath, WORKFLOW_ID);
+    expect(read).toEqual(artifact);
+    expect(readReviewArtifactSync(checkoutPath, WORKFLOW_ID)).toEqual(artifact);
+    expect(read?.findings.map((f) => f.synthetic)).toEqual(['validate', 'external-body', undefined]);
+  });
+
+  it('parses a pre-existing sidecar lacking both fields (absent ⇒ undefined, not a parse failure)', async () => {
+    const filePath = getReviewArtifactPath(checkoutPath, WORKFLOW_ID);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'pnpm test && pnpm build',
+            title: 'validate phase failed',
+            detail: 'boom',
+            round: 1,
+            status: 'open',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'abc',
+      }),
+      'utf-8',
+    );
+    const read = await readReviewArtifact(checkoutPath, WORKFLOW_ID);
+    expect(read).not.toBeNull();
+    expect(read?.findings[0]?.synthetic).toBeUndefined();
+    expect(read?.consumedReviewScopeHeadSha).toBeUndefined();
+    expect('synthetic' in (read?.findings[0] ?? {})).toBe(false);
+  });
+
+  it('rejects an unknown synthetic kind (closed enum)', async () => {
+    const filePath = getReviewArtifactPath(checkoutPath, WORKFLOW_ID);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        findings: [{ ...finding(), synthetic: 'bogus' }],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'abc',
+      }),
+      'utf-8',
+    );
+    expect(await readReviewArtifact(checkoutPath, WORKFLOW_ID)).toBeNull();
+  });
+
+  it('candidate findings never carry `synthetic` — the agent cannot self-tag a finding', async () => {
+    const candidatePath = getReviewCandidatePath(checkoutPath, WORKFLOW_ID);
+    await fs.mkdir(path.dirname(candidatePath), { recursive: true });
+    await fs.writeFile(
+      candidatePath,
+      JSON.stringify({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'pnpm test && pnpm build',
+            title: 'validate phase failed',
+            detail: 'fixed',
+            status: 'resolved',
+            synthetic: 'validate',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+    const candidates = await readCandidateFindings(checkoutPath, WORKFLOW_ID, 2);
+    expect(candidates).toHaveLength(1);
+    expect(candidates?.[0]).not.toHaveProperty('synthetic');
+    // The deterministic id still matches the engine-synthesized copy.
+    expect(candidates?.[0]?.id).toBe(
+      deriveFindingId('pnpm test && pnpm build', 'validate phase failed'),
+    );
+  });
+});

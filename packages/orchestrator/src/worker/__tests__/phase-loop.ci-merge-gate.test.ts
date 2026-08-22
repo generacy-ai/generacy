@@ -15,7 +15,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { PhaseLoop } from '../phase-loop.js';
+import { PhaseLoop, CI_PAUSE_MARKER } from '../phase-loop.js';
 import type { PhaseLoopDeps } from '../phase-loop.js';
 import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../types.js';
 import { getPhaseSequence } from '../types.js';
@@ -95,7 +95,9 @@ function createMockDeps(): PhaseLoopDeps {
 interface ContextOverrides {
   ciRuns?: CiRun[];
   ciRunsFn?: ReturnType<typeof vi.fn>;
+  ciSource?: 'check-runs' | 'actions-runs';
   issueLabels?: string[];
+  issueCommentBodies?: string[];
   startPhase?: WorkflowPhase;
   command?: 'process' | 'continue';
 }
@@ -103,7 +105,10 @@ interface ContextOverrides {
 function createMockContext(checkoutPath: string, overrides: ContextOverrides = {}): WorkerContext {
   const getCiRunsForSha =
     overrides.ciRunsFn ??
-    vi.fn().mockResolvedValue({ runs: overrides.ciRuns ?? [], source: 'check-runs' });
+    vi.fn().mockResolvedValue({
+      runs: overrides.ciRuns ?? [],
+      source: overrides.ciSource ?? 'check-runs',
+    });
   return {
     workerId: 'test-worker',
     item: {
@@ -126,6 +131,15 @@ function createMockContext(checkoutPath: string, overrides: ContextOverrides = {
       getIssue: vi.fn().mockResolvedValue({ labels: overrides.issueLabels ?? [] }),
       getCiRunsForSha,
       addIssueComment: vi.fn().mockResolvedValue(undefined),
+      getIssueComments: vi.fn().mockResolvedValue(
+        (overrides.issueCommentBodies ?? []).map((body, idx) => ({
+          id: idx + 1,
+          body,
+          author: 'bot',
+          created_at: '',
+          updated_at: '',
+        })),
+      ),
       removeLabels: vi.fn().mockResolvedValue(undefined),
     } as any,
     logger: mockLogger,
@@ -234,6 +248,35 @@ describe('#1133 — CI-aware merge gate (phase-loop)', () => {
     // approve→resume terminal no-op (SC-003) sees the label state the pause really
     // leaves and cockpit treats the PR as merge-eligible while it waits.
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('validate');
+  });
+
+  it('on-ci-green pause clears the Redis remediation-budget mirror (loop converged) so a later address-pr-feedback re-entry starts fresh', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'success' }],
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const tracker = {
+      clearRaw: vi.fn().mockResolvedValue(undefined),
+      getValueRaw: vi.fn().mockResolvedValue(null),
+      setValueRaw: vi.fn().mockResolvedValue(undefined),
+    };
+    const depsWithTracker = { ...deps, phaseTracker: tracker } as unknown as PhaseLoopDeps;
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, depsWithTracker, sequence);
+
+    // Still a non-completing approval pause…
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    // …but the review↔remediate loop has converged (validate + CI green), so the
+    // durable budget mirror must be cleared here, not only on `completed: true`.
+    expect(tracker.clearRaw).toHaveBeenCalledWith(
+      expect.stringMatching(/^remediation-count:/),
+    );
   });
 
   it('SC-003: a continue re-entry at validate with completed:validate + completed:implementation-review is a merge-eligible terminal no-op', async () => {
@@ -396,5 +439,161 @@ describe('#1157 — red-CI pause (phase-loop)', () => {
     expect(result.gateHit).toBe(true);
     expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('validate', 'waiting-for:ci');
     expect(context.github.getCiRunsForSha).not.toHaveBeenCalled();
+  });
+});
+
+// Post-#1157 review: the CI merge gate must be usable on tokens lacking
+// `checks:read` (the `actions/runs` fallback), and the pause comment must report
+// the REAL verdict + source and dedupe on re-pause.
+describe('CI merge gate — actions-runs trust + pause comment verdict/source/dedupe', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+  let checkoutPath: string;
+
+  beforeEach(async () => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+    checkoutPath = await mkdtemp(path.join(tmpdir(), 'phase-loop-ci-trust-'));
+  });
+
+  afterEach(async () => {
+    await rm(checkoutPath, { recursive: true, force: true });
+  });
+
+  it('actions-runs green is trusted: the implementation-review gate opens (no waiting-for:ci pause)', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'success' }],
+      ciSource: 'actions-runs',
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    expect(deps.labelManager.onGateHit).toHaveBeenCalledWith(
+      'validate',
+      'waiting-for:implementation-review',
+    );
+    expect(deps.labelManager.onGateHit).not.toHaveBeenCalledWith('validate', 'waiting-for:ci');
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('validate');
+  });
+
+  it('red CI pause comment carries the marker and reports the real verdict + source + sha', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+      ciSource: 'actions-runs',
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(deps.labelManager.onGateHit).toHaveBeenCalledWith('validate', 'waiting-for:ci');
+    expect(context.github.addIssueComment).toHaveBeenCalledTimes(1);
+    const body = (context.github.addIssueComment as any).mock.calls[0][3] as string;
+    expect(body).toContain(CI_PAUSE_MARKER);
+    expect(body).toContain('CI verdict: `not-passed` (source: actions-runs) for head `a1b2c3d4`');
+    expect(body).not.toContain('CI is red');
+  });
+
+  it('timeout pause comment reports verdict pending', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'skipped' }],
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 0,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    const body = (context.github.addIssueComment as any).mock.calls[0][3] as string;
+    expect(body).toContain(CI_PAUSE_MARKER);
+    expect(body).toContain('CI verdict: `pending` (source: check-runs)');
+  });
+
+  it('re-pause on the same verdict/sha does not re-post when the latest issue comment carries the marker', async () => {
+    // First pause: capture the body it posts.
+    const first = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+    await phaseLoop.executeLoop(first, config, deps, sequence);
+    const posted = (first.github.addIssueComment as any).mock.calls[0][3] as string;
+
+    // Second pause (operator added completed:ci, validate re-ran, CI still red
+    // on the same head): the latest issue comment is the one just posted.
+    const second = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+      issueCommentBodies: ['earlier chatter', posted],
+    });
+    const deps2 = createMockDeps();
+    const result = await phaseLoop.executeLoop(second, config, deps2, sequence);
+
+    expect(result.gateHit).toBe(true);
+    expect(deps2.labelManager.onGateHit).toHaveBeenCalledWith('validate', 'waiting-for:ci');
+    expect(second.github.getIssueComments).toHaveBeenCalledWith(OWNER, REPO, ISSUE);
+    expect(second.github.addIssueComment).not.toHaveBeenCalled();
+  });
+
+  it('re-pause with a different sha re-posts even though the latest comment carries the marker', async () => {
+    const first = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+    });
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+    await phaseLoop.executeLoop(first, config, deps, sequence);
+    const posted = (first.github.addIssueComment as any).mock.calls[0][3] as string;
+
+    const second = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+      issueCommentBodies: [posted],
+    });
+    (second.github.getCurrentCommitSha as any).mockResolvedValue('ffffffff');
+    const deps2 = createMockDeps();
+    await phaseLoop.executeLoop(second, config, deps2, sequence);
+
+    expect(second.github.addIssueComment).toHaveBeenCalledTimes(1);
+    const body = (second.github.addIssueComment as any).mock.calls[0][3] as string;
+    expect(body).toContain('for head `ffffffff`');
+  });
+
+  it('a failing dedupe read still posts the pause comment (best-effort)', async () => {
+    const context = createMockContext(checkoutPath, {
+      ciRuns: [{ status: 'completed', conclusion: 'failure' }],
+    });
+    (context.github.getIssueComments as any).mockRejectedValue(new Error('gh boom'));
+    const config = createConfig({
+      ciMergeGateEnabled: true,
+      ciWaitTimeoutMs: 900_000,
+      gates: { 'speckit-feature': [CI_GREEN_GATE] },
+    });
+    const sequence = getPhaseSequence('speckit-feature', false) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(context, config, deps, sequence);
+
+    expect(result.gateHit).toBe(true);
+    expect(context.github.addIssueComment).toHaveBeenCalledTimes(1);
   });
 });

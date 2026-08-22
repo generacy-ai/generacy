@@ -59,3 +59,29 @@ describe('buildVerificationPrompt (FR-004 / SC-006)', () => {
     expect(out).toContain('Open findings: none.');
   });
 });
+
+describe('buildVerificationPrompt — synthetic findings', () => {
+  it('tags a synthetic finding and explains how to confirm it', () => {
+    const out = buildVerificationPrompt({
+      round: 3,
+      openFindings: [
+        finding({
+          id: 'v1',
+          file: 'pnpm test && pnpm build',
+          line: undefined,
+          title: 'validate phase failed',
+          synthetic: 'validate',
+        }),
+      ],
+      charter: 'verification',
+    });
+    expect(out).toContain('validate phase failed (pnpm test && pnpm build) [synthetic: validate]');
+    expect(out).toContain('`[synthetic: validate]`');
+    expect(out).toContain('`status: "resolved"`');
+  });
+
+  it('does not emit the synthetic explainer when no finding is synthetic', () => {
+    const out = buildVerificationPrompt({ round: 2, openFindings: [finding()], charter: 'verification' });
+    expect(out).not.toContain('[synthetic:');
+  });
+});

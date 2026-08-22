@@ -21,6 +21,13 @@
 //     terminal no-op short-circuit must fire so `validate` does NOT re-run.
 //     WITHOUT FR-001 the strip removes `completed:implementation-review` and the
 //     short-circuit's two-label precondition is not met → validate re-runs.
+//     The retain set is the explicit one the worker passes
+//     (`resolveResumeRetainSuffixes({ ciMergeGateEnabled: true })`).
+//   Follow-ups (post-#1154 review): the retain set is EXPLICIT, not "every
+//     human gate" — `completed:clarification` must be stripped so a resumed
+//     clarify with follow-up questions pauses again, and `completed:ci` must be
+//     stripped so a validate re-pause leaves no stale `completed:ci` for the
+//     label monitor to pair forever.
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,12 +35,12 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
 import { PhaseLoop } from '../phase-loop.js';
 import type { PhaseLoopDeps } from '../phase-loop.js';
-import { LabelManager } from '../label-manager.js';
+import { LabelManager, resolveResumeRetainSuffixes } from '../label-manager.js';
 import type { WorkerContext, Logger, WorkflowPhase, PhaseResult } from '../types.js';
 import { getPhaseSequence } from '../types.js';
 import type { WorkerConfig } from '../config.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../review-artifact.js';
 import {
   bumpRemediationCount,
   readReviewArtifactSync,
@@ -97,6 +104,11 @@ function makeLabelBackedGithub(initialLabels: string[]) {
     commitExistsInCheckout: vi.fn(async () => true),
     getIssueLabels: vi.fn(async () => [...labels]),
     addIssueComment: vi.fn(async () => undefined),
+    getIssueComments: vi.fn(async () => []),
+    getCiRunsForSha: vi.fn(async () => ({
+      runs: [{ status: 'completed', conclusion: 'failure' }],
+      source: 'check-runs' as const,
+    })),
   };
 }
 
@@ -137,23 +149,13 @@ function makeScriptedReviewExecutor(checkoutPath: string, verdicts: Verdict[]) {
 
 function makeFindingsReader(
   checkoutPath: string,
-): (context: WorkerContext) => Promise<{ artifact: FindingsArtifact; round: number } | null> {
+): (context: WorkerContext) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> {
   return async () => {
     const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     if (!ra) return null;
-    // #1156 (FR-005): readFindingsArtifact returns { artifact, round } — the
-    // round is read from the sidecar (authoritative, monotonic), not passed in.
-    return {
-      artifact: {
-        verdict: ra.verdict,
-        findings: ra.findings.map((f, idx) => ({
-          marker: `finding-${idx}`,
-          text: f.title,
-          severity: 'blocking' as const,
-        })),
-      },
-      round: ra.round,
-    };
+    // Live seam shape (#1161): the canonical artifact (round lives in `ra.round`)
+    // plus the blocking severity used for the poster's render projection.
+    return { artifact: ra, blockingSeverity: 'critical' };
   };
 }
 
@@ -364,9 +366,13 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
 
       const labelManager = new LabelManager(github as any, OWNER, REPO, ISSUE, mockLogger);
 
-      await labelManager.onResumeStart();
+      // claude-cli-worker passes the config-derived retain set; with the CI
+      // merge gate ON it includes `implementation-review`.
+      await labelManager.onResumeStart({
+        retainCompletedSuffixes: resolveResumeRetainSuffixes({ ciMergeGateEnabled: true }),
+      });
 
-      // FR-001: implementation-review (a human gate) survived; completed:validate
+      // Retain set: implementation-review survived; completed:validate
       // (a phase completion, never a strip candidate) is untouched; pause labels
       // cleared; agent:in-progress added.
       expect(github.labels.has('completed:implementation-review')).toBe(true);
@@ -399,6 +405,107 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
       // validate must NOT re-run — no revalidation, no review executor invocation.
       expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
       expect(reviewExecutor.execute).not.toHaveBeenCalled();
+    });
+
+    it('clarify resume with follow-up questions pauses again (completed:clarification is stripped)', async () => {
+      // The operator answered the first round (`completed:clarification`); the
+      // resumed clarify phase writes a NEW pending question.
+      const github = makeLabelBackedGithub([
+        'waiting-for:clarification',
+        'agent:paused',
+      ]);
+      await github.addLabels(OWNER, REPO, ISSUE, ['completed:clarification']);
+
+      const labelManager = new LabelManager(github as any, OWNER, REPO, ISSUE, mockLogger);
+      await labelManager.onResumeStart({
+        retainCompletedSuffixes: resolveResumeRetainSuffixes({ ciMergeGateEnabled: false }),
+      });
+
+      // The answer to the PREVIOUS round is consumed by the strip.
+      expect(github.labels.has('completed:clarification')).toBe(false);
+      expect(github.labels.has('waiting-for:clarification')).toBe(false);
+      expect(github.labels.has('agent:paused')).toBe(false);
+
+      const deps = baseDeps(labelManager);
+      // The clarify phase "asks a follow-up": the spawned CLI leaves an
+      // unanswered question in specs/<issue>-*/clarifications.md.
+      const specDir = path.join(checkoutPath, 'specs', `${ISSUE}-feature`);
+      (deps.cliSpawner.spawnPhase as any).mockImplementation(async (phase: WorkflowPhase) => {
+        if (phase === 'clarify') {
+          await fs.mkdir(specDir, { recursive: true });
+          await fs.writeFile(
+            path.join(specDir, 'clarifications.md'),
+            [
+              '# Clarifications',
+              '',
+              '### Q1: Follow-up',
+              '**Context**: after the first answer',
+              '**Question**: which option?',
+              '**Answer**: [PENDING]',
+              '',
+            ].join('\n'),
+          );
+        }
+        return makeSuccessResult(phase);
+      });
+
+      const ctx = makeContext(github, checkoutPath, workflowName, 'clarify');
+      const config = makeConfig({
+        gates: {
+          [workflowName]: [
+            { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
+          ],
+        },
+      });
+      const result = await phaseLoop.executeLoop(ctx, config, deps, ['clarify'] as WorkflowPhase[]);
+
+      // The follow-up question re-raised the gate instead of being skipped as
+      // "already satisfied" by the stale completion label.
+      expect(result.completed).toBe(false);
+      expect(result.gateHit).toBe(true);
+      expect(github.labels.has('waiting-for:clarification')).toBe(true);
+      expect(github.labels.has('agent:paused')).toBe(true);
+      expect(github.labels.has('completed:clarification')).toBe(false);
+    });
+
+    it('ci re-pause after a completed:ci resume leaves no stale completed:ci', async () => {
+      // The operator answered `waiting-for:ci` with `completed:ci`; validate
+      // re-runs and CI is still red on the head → it must re-pause cleanly.
+      const github = makeLabelBackedGithub(['waiting-for:ci', 'agent:paused']);
+      await github.addLabels(OWNER, REPO, ISSUE, ['completed:ci']);
+
+      const labelManager = new LabelManager(github as any, OWNER, REPO, ISSUE, mockLogger);
+      await labelManager.onResumeStart({
+        retainCompletedSuffixes: resolveResumeRetainSuffixes({ ciMergeGateEnabled: true }),
+      });
+
+      expect(github.labels.has('completed:ci')).toBe(false);
+      expect(github.labels.has('waiting-for:ci')).toBe(false);
+
+      const deps = baseDeps(labelManager);
+      const ctx = makeContext(github, checkoutPath, workflowName, 'validate');
+      const config = makeConfig({
+        ciMergeGateEnabled: true,
+        ciWaitTimeoutMs: 900_000,
+        gates: {
+          [workflowName]: [
+            { phase: 'validate', gateLabel: 'waiting-for:implementation-review', condition: 'on-ci-green' },
+          ],
+        },
+      });
+      const result = await phaseLoop.executeLoop(ctx, config, deps, ['validate'] as WorkflowPhase[]);
+
+      // Re-paused on CI with a clean label pair: no stale completed:ci for the
+      // label monitor to pair with the fresh waiting-for:ci.
+      expect(result.completed).toBe(false);
+      expect(result.gateHit).toBe(true);
+      expect(github.labels.has('waiting-for:ci')).toBe(true);
+      expect(github.labels.has('agent:paused')).toBe(true);
+      expect(github.labels.has('completed:ci')).toBe(false);
+      expect(github.labels.has('completed:validate')).toBe(false);
+      // The pause comment reports the real verdict + source.
+      const body = (github.addIssueComment.mock.calls[0] as any[])[3] as string;
+      expect(body).toContain('CI verdict: `not-passed` (source: check-runs)');
     });
   },
 );

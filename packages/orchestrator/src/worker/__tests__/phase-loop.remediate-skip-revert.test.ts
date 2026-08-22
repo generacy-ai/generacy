@@ -16,7 +16,7 @@ import { PhaseLoop } from '../phase-loop.js';
 import type { PhaseLoopDeps } from '../phase-loop.js';
 import type { WorkerContext, Logger, WorkflowPhase, PhaseResult } from '../types.js';
 import type { WorkerConfig } from '../config.js';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../review-artifact.js';
 import { readReviewArtifactSync, writeReviewArtifact } from '../review-artifact.js';
 
 const mockLogger = {
@@ -72,21 +72,13 @@ function makeScriptedReviewExecutor(checkoutPath: string, verdicts: Verdict[]) {
 
 function makeFindingsReader(
   checkoutPath: string,
-): (context: WorkerContext) => Promise<{ artifact: FindingsArtifact; round: number } | null> {
+): (context: WorkerContext) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> {
   return async () => {
     const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     if (!ra) return null;
-    return {
-      artifact: {
-        verdict: ra.verdict,
-        findings: ra.findings.map((f, idx) => ({
-          marker: `finding-${idx}`,
-          text: f.title,
-          severity: 'blocking' as const,
-        })),
-      },
-      round: ra.round,
-    };
+    // Live seam shape (#1161): the canonical artifact (round lives in `ra.round`)
+    // plus the blocking severity used for the poster's render projection.
+    return { artifact: ra, blockingSeverity: 'critical' };
   };
 }
 

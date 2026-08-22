@@ -38,6 +38,40 @@ export function isEngineSidecar(p: string): boolean {
   return ENGINE_SIDECAR_PREFIXES.some((prefix) => p.startsWith(prefix));
 }
 
+/** The engine's bookkeeping directory; every `ENGINE_SIDECAR_PREFIXES` entry lives under it. */
+export const ENGINE_STATE_DIR = '.generacy';
+
+/**
+ * `git clean -e` exclude patterns derived from `ENGINE_SIDECAR_PREFIXES`, so the
+ * cross-run checkout reset (`RepoCheckout.switchBranch` / `updateRepo`) spares
+ * exactly the sidecars the staging filter refuses to commit. Without this every
+ * re-entry (new run, address-pr-feedback, merge-conflict re-arm) wiped the
+ * review artifact: the round restarted at 1 (so `isRoundAlreadyPosted` suppressed
+ * every later review post), `markedReadyByEngine` was lost, and open findings +
+ * `lastReviewedCommitSha` were lost.
+ *
+ * Patterns are gitignore-style, anchored at the repo root by their embedded
+ * slash — `.generacy/review-findings-*` spares `.generacy/review-findings-<id>.json`
+ * but still lets `git clean` remove any other untracked file under `.generacy/`
+ * (e.g. a stray `.generacy/epics/draft.md` from a previous run).
+ */
+export function engineSidecarCleanExcludes(): string[] {
+  return ENGINE_SIDECAR_PREFIXES.map((prefix) => `${prefix}*`);
+}
+
+/**
+ * True when `p` is a *collapsed* `.generacy` directory entry (`.generacy` or
+ * `.generacy/`) rather than a file path. `git status --porcelain` without
+ * `--untracked-files=all` reports a wholly-untracked directory as one `?? .generacy/`
+ * line; `isEngineSidecar` cannot see the files inside it, so staging the entry
+ * would commit every sidecar at once — the original #1162 failure, reachable in
+ * any target repo with no tracked `.generacy/config.yaml`. The staging filter
+ * skips such entries (belt-and-braces to `getStatus` expanding untracked dirs).
+ */
+export function isCollapsedEngineStateDir(p: string): boolean {
+  return p === ENGINE_STATE_DIR || p === `${ENGINE_STATE_DIR}/`;
+}
+
 /**
  * Path prefixes excluded from the "product diff" check.
  *

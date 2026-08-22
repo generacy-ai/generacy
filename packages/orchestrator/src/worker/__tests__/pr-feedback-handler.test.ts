@@ -32,6 +32,7 @@ const mockGitHub = {
   getPRReviewThreads: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
+  stageFiles: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn(),
@@ -189,6 +190,7 @@ describe('PrFeedbackHandler', () => {
     mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
     mockGitHub.getStatus = vi.fn().mockResolvedValue({ has_changes: false, staged: [], unstaged: [], untracked: [] });
     mockGitHub.stageAll = vi.fn().mockResolvedValue(undefined);
+    mockGitHub.stageFiles = vi.fn().mockResolvedValue(undefined);
     mockGitHub.commit = vi.fn().mockResolvedValue(undefined);
     mockGitHub.push = vi.fn().mockResolvedValue(undefined);
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
@@ -247,6 +249,62 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
+  describe('engine sidecar filtering on the legacy commit path (#1162)', () => {
+    it('stages and commits only non-sidecar paths, with an explicit pathspec', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false, 'src/index.ts', 15),
+      ]);
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+      // Sidecars now survive the cross-run `git clean` (repo-checkout.ts), so
+      // they show up as untracked alongside the real fix.
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true,
+        staged: ['src/index.ts'],
+        unstaged: ['src/util.ts'],
+        untracked: [
+          '.generacy/review-findings-test-owner-test-repo-42.json',
+          '.generacy/pause-context-42.json',
+          '.generacy/',
+        ],
+      });
+
+      await handler.handle(item, checkoutPath);
+
+      expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).toHaveBeenCalledWith(['src/index.ts', 'src/util.ts']);
+      expect(mockGitHub.commit).toHaveBeenCalledWith(
+        expect.stringContaining('Address PR #100 review feedback'),
+        ['src/index.ts', 'src/util.ts'],
+      );
+    });
+
+    it('skips the commit entirely when only engine sidecars changed', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false, 'src/index.ts', 15),
+      ]);
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true,
+        staged: [],
+        unstaged: [],
+        untracked: ['.generacy/review-findings-test-owner-test-repo-42.json'],
+      });
+
+      await handler.handle(item, checkoutPath);
+
+      expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).not.toHaveBeenCalled();
+      expect(mockGitHub.commit).not.toHaveBeenCalled();
+      expect(mockGitHub.push).not.toHaveBeenCalled();
+    });
+  });
+
   describe('handle - successful flow', () => {
     it('processes unresolved comments, commits changes, posts replies, and removes label', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1, 2] });
@@ -293,9 +351,9 @@ describe('PrFeedbackHandler', () => {
       );
 
       // Should stage, commit, and push
-      expect(mockGitHub.stageAll).toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).toHaveBeenCalled();
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('Address PR #100 review feedback'),
+        expect.stringContaining('Address PR #100 review feedback'), expect.any(Array),
       );
       expect(mockGitHub.push).toHaveBeenCalledWith('origin', 'feature-branch');
 
@@ -358,7 +416,7 @@ describe('PrFeedbackHandler', () => {
       await handler.handle(item, checkoutPath);
 
       // Should not stage, commit, or push
-      expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).not.toHaveBeenCalled();
       expect(mockGitHub.commit).not.toHaveBeenCalled();
       expect(mockGitHub.push).not.toHaveBeenCalled();
 
@@ -1228,13 +1286,13 @@ describe('PrFeedbackHandler', () => {
       await handler.handle(item, checkoutPath);
 
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('Address PR #100 review feedback'),
+        expect.stringContaining('Address PR #100 review feedback'), expect.any(Array),
       );
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('issue #42'),
+        expect.stringContaining('issue #42'), expect.any(Array),
       );
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('Co-Authored-By: Claude Sonnet 4.5'),
+        expect.stringContaining('Co-Authored-By: Claude Sonnet 4.5'), expect.any(Array),
       );
     });
   });

@@ -94,3 +94,51 @@ describe('#1164 review-charter — conflicted-path allowlist', () => {
     expect(charter).toContain('.generacy/review-findings-acme_widgets_42.json');
   });
 });
+
+describe('review-charter — scoped review combined with a verification pass', () => {
+  const verification = {
+    prompt: 'Verification pass — Round 2\n\nOpen findings to verify:\n\n- [critical] Prior open finding (src/a.ts)\n  still there',
+    deltaFiles: ['packages/orchestrator/src/a.ts'],
+  };
+
+  it('names the conflicted paths AND carries the still-open prior findings', () => {
+    const charter = buildReviewCharter({
+      ...BASE,
+      round: 2,
+      diffWindow: {
+        baseSha: 'base123',
+        headSha: 'head456',
+        conflictedPaths: ['packages/orchestrator/src/a.ts'],
+      },
+      verification,
+    });
+    expect(charter).toContain('- packages/orchestrator/src/a.ts');
+    expect(charter.toLowerCase()).toContain('inspect only these conflicted paths');
+    expect(charter.toLowerCase()).toContain('merged-in base branch');
+    // The still-open prior findings ride along (verification framing).
+    expect(charter).toContain('Prior open finding');
+    expect(charter).toContain('## Confirming an addressed finding');
+    // A scoped verification pass is neither a whole-PR review nor trivially flagged.
+    expect(charter).not.toContain('## Empty or trivial diff');
+    expect(charter).not.toContain('changes on this pull request branch');
+  });
+
+  it('falls back to the exact range when no conflictedPaths, still carrying open findings', () => {
+    const charter = buildReviewCharter({
+      ...BASE,
+      round: 2,
+      diffWindow: { baseSha: 'base123', headSha: 'head456' },
+      verification,
+    });
+    expect(charter).toContain('`base123..head456`');
+    expect(charter).toContain('Prior open finding');
+    expect(charter).toContain('## Confirming an addressed finding');
+  });
+
+  it('the verification pass tells the reviewer how to re-emit synthetic findings as resolved', () => {
+    const charter = buildReviewCharter({ ...BASE, round: 2, verification });
+    expect(charter).toContain('`[synthetic: validate]`');
+    expect(charter).toContain('`[synthetic: external-body]`');
+    expect(charter).toContain('`status: "resolved"`');
+  });
+});

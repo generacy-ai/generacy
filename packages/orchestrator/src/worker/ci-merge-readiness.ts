@@ -16,7 +16,19 @@ export interface CiReadiness {
  * while CI was still `pending` — the caller pauses with `waiting-for:ci`
  * (Q1-C / FR-004) rather than declaring green.
  */
-export type CiWaitOutcome = { kind: 'green' | 'not-passed' | 'timeout' };
+export type CiWaitOutcome = {
+  kind: 'green' | 'not-passed' | 'timeout';
+  /**
+   * The aggregated verdict behind `kind` (`pending` on `timeout`). Surfaced so
+   * the pause comment can report the REAL verdict rather than a canned reason.
+   */
+  verdict: CiVerdict;
+  /**
+   * Which readout produced the verdict. `undefined` only when every readout
+   * threw before the wait window elapsed (timeout with no successful poll).
+   */
+  source?: CiReadiness['source'];
+};
 
 export interface EvaluateCiReadinessParams {
   github: GitHubClient;
@@ -32,14 +44,14 @@ export interface EvaluateCiReadinessParams {
  * verdict. Never declares green on `pending` (FR-004). A thrown readout
  * propagates — `waitForCiGreen` treats it as transient.
  *
- * #1157 FR-007 (Q5→C): the `actions/runs` fallback only enumerates
- * GitHub-Actions workflow runs for the branch and is blind to third-party
- * required checks (external status contexts), so a `green` aggregated from it
- * may be a false green. When `source === 'actions-runs'` (the primary
- * `check-runs` path failed → token likely lacks `checks:read`) a would-be
- * `green` is failed-closed to `not-passed`, routing into the recoverable red-CI
- * pause rather than leaving a false green live. `pending`/`not-passed` and all
- * `check-runs`-sourced verdicts are returned unchanged.
+ * Source trust: the `actions/runs` fallback (used when the primary
+ * `check-runs` readout fails — typically a token lacking `checks:read`) only
+ * enumerates GitHub-Actions workflow runs for the branch and is blind to
+ * third-party required checks (external status contexts). A `green` aggregated
+ * from it is TRUSTED — the blind spot is a documented limitation, logged at
+ * `warn` — because failing it closed (the #1157 FR-007 downgrade) made every
+ * validate on such a token pause with a "CI is red" reason while CI was green,
+ * leaving the merge gate unusable.
  */
 export async function evaluateCiReadiness(
   params: EvaluateCiReadinessParams,
@@ -51,14 +63,14 @@ export async function evaluateCiReadiness(
     headSha,
     branch,
   );
-  let verdict = aggregateCiVerdict(runs);
+  const verdict = aggregateCiVerdict(runs);
   if (source === 'actions-runs' && verdict === 'green') {
     logger?.warn(
       { owner, repo, headSha, runCount: runs.length },
-      '#1157 FR-007: actions/runs fallback cannot see third-party required checks; ' +
-        'downgrading would-be green to not-passed (checks:read likely missing)',
+      'CI green sourced from the actions/runs fallback (check-runs unavailable — ' +
+        'token likely lacks checks:read); third-party required checks are not ' +
+        'visible to this readout. Trusting green.',
     );
-    verdict = 'not-passed';
   }
   return {
     verdict,
@@ -106,15 +118,17 @@ export async function waitForCiGreen(
 
   const start = now();
   let attempt = 0;
+  let lastSource: CiReadiness['source'] | undefined;
 
   for (;;) {
     try {
       const readiness = await evaluateCiReadiness({ ...readinessParams, logger });
+      lastSource = readiness.source;
       if (readiness.verdict === 'green') {
-        return { kind: 'green' };
+        return { kind: 'green', verdict: 'green', source: readiness.source };
       }
       if (readiness.verdict === 'not-passed') {
-        return { kind: 'not-passed' };
+        return { kind: 'not-passed', verdict: 'not-passed', source: readiness.source };
       }
       // pending → keep waiting
     } catch (err) {
@@ -126,7 +140,7 @@ export async function waitForCiGreen(
 
     const elapsed = now() - start;
     if (elapsed >= ciWaitTimeoutMs) {
-      return { kind: 'timeout' };
+      return { kind: 'timeout', verdict: 'pending', source: lastSource };
     }
 
     const delay = Math.min(backoffForAttempt(attempt), ciWaitTimeoutMs - elapsed);

@@ -56,6 +56,7 @@ const mockGitHub = {
   listPrCommentBodies: vi.fn().mockResolvedValue([]),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
+  stageFiles: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn().mockResolvedValue(undefined),
@@ -186,7 +187,7 @@ describe('PrFeedbackHandler push-guard integration (#1051 T025)', () => {
       },
     ]);
     mockGitHub.getStatus.mockResolvedValue({
-      has_changes: true, staged: [], unstaged: [], untracked: [], branch: 'feature-100', hasUnpushed: false, unpushedCount: 0,
+      has_changes: true, staged: [], unstaged: ['x.ts'], untracked: [], branch: 'feature-100', hasUnpushed: false, unpushedCount: 0,
     });
     mockGitHub.getIssue.mockResolvedValue({
       number: 100, title: 'issue', state: 'open', labels: [], assignees: [], body: '', created_at: '', updated_at: '',
@@ -249,7 +250,7 @@ describe('PrFeedbackHandler push-guard integration (#1051 T025)', () => {
 
     // Push NOT called.
     expect(mockGitHub.push).not.toHaveBeenCalled();
-    expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+    expect(mockGitHub.stageFiles).not.toHaveBeenCalled();
     expect(mockGitHub.commit).not.toHaveBeenCalled();
   });
 
@@ -312,7 +313,7 @@ describe('PrFeedbackHandler push-guard integration (#1051 T025)', () => {
     expect(refuseCall).toBeUndefined();
 
     // Normal push flow proceeds.
-    expect(mockGitHub.stageAll).toHaveBeenCalled();
+    expect(mockGitHub.stageFiles).toHaveBeenCalled();
     expect(mockGitHub.commit).toHaveBeenCalled();
     expect(mockGitHub.push).toHaveBeenCalled();
   });

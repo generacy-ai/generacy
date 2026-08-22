@@ -51,22 +51,26 @@ describe('evaluateCiReadiness', () => {
     expect(readiness.source).toBe('check-runs');
   });
 
-  // #1157 FR-007 (Q5→C): the actions/runs fallback is blind to third-party
-  // required checks, so a would-be `green` aggregated from it is failed-closed
-  // to `not-passed`. See contracts/fr-007-fallback-guard.md.
-  it('actions-runs + would-be green → downgraded to not-passed (FR-007)', async () => {
+  // The actions/runs fallback is blind to third-party required checks, but a
+  // `green` read from it is TRUSTED (documented limitation, logged at warn).
+  // The #1157 FR-007 fail-closed downgrade made every validate on a token
+  // lacking `checks:read` pause with a "CI is red" reason while CI was green.
+  it('actions-runs + green → stays green and logs the blind-spot warning', async () => {
     const { github } = githubReturning([
       {
         runs: [{ status: 'completed', conclusion: 'success' }],
         source: 'actions-runs',
       },
     ]);
-    const readiness = await evaluateCiReadiness({ github, ...baseParams });
-    expect(readiness.verdict).toBe('not-passed');
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+    const readiness = await evaluateCiReadiness({ github, ...baseParams, logger });
+    expect(readiness.verdict).toBe('green');
     expect(readiness.source).toBe('actions-runs');
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(logger.warn.mock.calls[0][1])).toMatch(/third-party/i);
   });
 
-  it('check-runs + green → stays green (FR-007 guard does not fire)', async () => {
+  it('check-runs + green → stays green', async () => {
     const { github } = githubReturning([
       {
         runs: [{ status: 'completed', conclusion: 'success' }],
@@ -77,7 +81,7 @@ describe('evaluateCiReadiness', () => {
     expect(readiness.verdict).toBe('green');
   });
 
-  it('actions-runs + pending → unchanged (only green is downgraded)', async () => {
+  it('actions-runs + pending → unchanged', async () => {
     const { github } = githubReturning([
       { runs: [], source: 'actions-runs' },
     ]);
@@ -85,7 +89,7 @@ describe('evaluateCiReadiness', () => {
     expect(readiness.verdict).toBe('pending');
   });
 
-  it('actions-runs + not-passed → unchanged (already blocked)', async () => {
+  it('actions-runs + not-passed → unchanged', async () => {
     const { github } = githubReturning([
       {
         runs: [{ status: 'completed', conclusion: 'failure' }],
@@ -110,7 +114,7 @@ describe('waitForCiGreen', () => {
       sleep,
       now: () => 0,
     });
-    expect(outcome).toEqual({ kind: 'green' });
+    expect(outcome).toEqual({ kind: 'green', verdict: 'green', source: 'check-runs' });
     expect(calls()).toBe(1);
     expect(sleep).not.toHaveBeenCalled();
   });
@@ -126,7 +130,7 @@ describe('waitForCiGreen', () => {
       sleep: vi.fn(async () => {}),
       now: () => 0,
     });
-    expect(outcome).toEqual({ kind: 'not-passed' });
+    expect(outcome).toEqual({ kind: 'not-passed', verdict: 'not-passed', source: 'check-runs' });
   });
 
   it('pending → timeout after the wait window with bounded backoff (SC-005)', async () => {
@@ -145,7 +149,7 @@ describe('waitForCiGreen', () => {
       sleep,
       now: () => clock,
     });
-    expect(outcome).toEqual({ kind: 'timeout' });
+    expect(outcome).toEqual({ kind: 'timeout', verdict: 'pending', source: 'check-runs' });
     // Bounded, increasing backoff capped at 30s; last delay clamped to remaining.
     expect(slept[0]).toBe(5_000);
     expect(slept[1]).toBe(10_000);
@@ -172,7 +176,7 @@ describe('waitForCiGreen', () => {
       sleep,
       now: () => clock,
     });
-    expect(outcome).toEqual({ kind: 'green' });
+    expect(outcome).toEqual({ kind: 'green', verdict: 'green', source: 'check-runs' });
     expect(calls()).toBe(2);
     expect(sleep).toHaveBeenCalledTimes(1);
   });

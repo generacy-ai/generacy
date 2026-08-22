@@ -45,7 +45,8 @@ vi.mock('node:util', () => ({
 // Import SUT (after mocks are declared)
 // ---------------------------------------------------------------------------
 
-import { RepoCheckout } from '../repo-checkout.js';
+import { RepoCheckout, sidecarPreservingCleanArgs } from '../repo-checkout.js';
+import { ENGINE_SIDECAR_PREFIXES } from '../product-diff.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -209,6 +210,60 @@ describe('RepoCheckout', () => {
       const resetIdx = callOrder.lastIndexOf('reset');
       expect(fetchIdx).toBeGreaterThanOrEqual(0);
       expect(resetIdx).toBeGreaterThan(fetchIdx);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // #1162: cross-run clean must spare engine sidecars (both reset sites)
+  // -------------------------------------------------------------------------
+  describe('sidecar-preserving git clean (#1162)', () => {
+    it('sidecarPreservingCleanArgs() derives one -e pattern per ENGINE_SIDECAR_PREFIXES entry', () => {
+      const args = sidecarPreservingCleanArgs();
+      expect(args.slice(0, 2)).toEqual(['clean', '-fd']);
+      const excludes = args.slice(2);
+      expect(excludes).toEqual(
+        ENGINE_SIDECAR_PREFIXES.flatMap((prefix) => ['-e', `${prefix}*`]),
+      );
+      // Sanity: the review artifact — the sidecar whose loss resets the round — is covered.
+      expect(excludes).toContain('.generacy/review-findings-*');
+      // Exclusions are scoped to sidecars, never the whole .generacy/ tree.
+      expect(excludes).not.toContain('.generacy');
+      expect(excludes).not.toContain('.generacy/');
+    });
+
+    it('updateRepo (ensureCheckout on an existing dir) runs git clean with the sidecar excludes', async () => {
+      mockStat
+        .mockRejectedValueOnce(enoentError())
+        .mockResolvedValue({ isDirectory: () => true });
+
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const cleanCalls = findAllCalls('git', ['clean']);
+      expect(cleanCalls).toHaveLength(1);
+      expect(cleanCalls[0]![1]).toEqual(sidecarPreservingCleanArgs());
+      expect(cleanCalls[0]![2]).toEqual({ cwd: '/workspace/worker-1/octocat/repo' });
+    });
+
+    it('switchBranch runs git clean with the sidecar excludes', async () => {
+      await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
+
+      const cleanCalls = findAllCalls('git', ['clean']);
+      expect(cleanCalls).toHaveLength(1);
+      expect(cleanCalls[0]![1]).toEqual(sidecarPreservingCleanArgs());
+      expect(cleanCalls[0]![2]).toEqual({ cwd: '/workspace/worker-1/octocat/repo' });
+    });
+
+    it('never runs a bare `git clean -fd` at either reset site', async () => {
+      mockStat
+        .mockRejectedValueOnce(enoentError())
+        .mockResolvedValue({ isDirectory: () => true });
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+      await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
+
+      for (const call of findAllCalls('git', ['clean'])) {
+        expect(call[1]).not.toEqual(['clean', '-fd']);
+        expect(call[1]).toContain('-e');
+      }
     });
   });
 
@@ -559,7 +614,9 @@ describe('RepoCheckout', () => {
       await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
 
       const resetHeadIdx = callOrder.findIndex((c) => c === 'reset(--hard,HEAD)');
-      const cleanIdx = callOrder.findIndex((c) => c === 'clean(-fd)');
+      // #1162: clean now carries `-e <sidecar-pattern>` excludes; match the
+      // semantic step (`clean -fd ...`), not the exact argv.
+      const cleanIdx = callOrder.findIndex((c) => c.startsWith('clean(-fd'));
       // #1051 FR-001: fetch call is now `fetch(origin,--prune)`; use startsWith
       // so this ordering assertion tracks the semantic step rather than the exact argv.
       const fetchIdx = callOrder.findIndex((c) => c.startsWith('fetch(origin'));
@@ -630,7 +687,9 @@ describe('RepoCheckout', () => {
       await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'my-branch');
 
       const resetHeadIdx = callOrder.findIndex((c) => c === 'reset(--hard,HEAD)');
-      const cleanIdx = callOrder.findIndex((c) => c === 'clean(-fd)');
+      // #1162: clean now carries `-e <sidecar-pattern>` excludes; match the
+      // semantic step (`clean -fd ...`), not the exact argv.
+      const cleanIdx = callOrder.findIndex((c) => c.startsWith('clean(-fd'));
       // #1051 FR-001: fetch call is now `fetch(origin,--prune)`; use startsWith
       // so this ordering assertion tracks the semantic step rather than the exact argv.
       const fetchIdx = callOrder.findIndex((c) => c.startsWith('fetch(origin'));

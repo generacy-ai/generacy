@@ -16,6 +16,10 @@
 //        gate falls back to the disk value, and nothing crashes.
 //   reset — a `completed:remediation-limit` resume resets disk to 0 AND clears
 //        the durable Redis mirror via `clearRaw`.
+//   completion — a loop that converges (`completed: true`) clears the Redis
+//        mirror so a later re-entry (address-pr-feedback re-seeds disk at 0)
+//        cannot reconcile a stale spent budget back up and park at the cap
+//        with zero attempts; a gate pause (non-completing exit) keeps it.
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -168,7 +172,7 @@ function capContext(checkoutPath: string, labels: string[] = []): WorkerContext 
           if (idx >= 0) labelSet.splice(idx, 1);
         }
       }),
-      listPrCommentBodies: vi.fn().mockResolvedValue([]),
+      getIssueComments: vi.fn().mockResolvedValue([]),
     } as any,
     logger: mockLogger,
     signal: new AbortController().signal,
@@ -270,6 +274,53 @@ describe('PhaseLoop remediation-count persistence (#1162 SC-003 / FR-003)', () =
     expect(tracker.getValueRaw).toHaveBeenCalledWith(REMEDIATION_COUNT_KEY);
     // getValueRaw returned null, so no seed was attempted; disk stays capped.
     expect(readReviewArtifactSync(checkoutPath, WORKFLOW_ID)?.remediationCount).toBe(MAX);
+  });
+
+  it('completion: a converging loop clears the Redis mirror so a post-completion re-entry starts fresh', async () => {
+    // Prior rounds spent MAX remediations, but the latest review is clean:
+    // the cap gate must not fire (verdict check) and the loop converges.
+    await writeReviewArtifact(checkoutPath, WORKFLOW_ID, {
+      findings: [],
+      verdict: 'clean',
+      round: MAX + 1,
+      lastReviewedCommitSha: 'clean',
+      remediationCount: MAX,
+    });
+    const tracker = makeTracker({ [REMEDIATION_COUNT_KEY]: String(MAX) });
+    const deps = baseDeps();
+    deps.phaseTracker = tracker as any;
+    deps.settings = CAPPED_SETTINGS;
+    // Inert review executor (stub) leaves the clean disk artifact untouched.
+
+    const ctx = capContext(checkoutPath);
+    const result = await phaseLoop.executeLoop(ctx, capConfig(), deps, ['review'] as WorkflowPhase[]);
+
+    expect(result.completed).toBe(true);
+    expect(result.gateHit).toBe(false);
+    // The durable mirror was cleared on the completed terminal path.
+    expect(tracker.clearRaw).toHaveBeenCalledWith(REMEDIATION_COUNT_KEY);
+    expect(await tracker.getValueRaw(REMEDIATION_COUNT_KEY)).toBeNull();
+  });
+
+  it('gate pause: a non-completing exit at the cap keeps the Redis mirror', async () => {
+    await seedCappedState(checkoutPath);
+    const tracker = makeTracker({ [REMEDIATION_COUNT_KEY]: String(MAX) });
+    const deps = baseDeps();
+    deps.phaseTracker = tracker as any;
+    deps.settings = CAPPED_SETTINGS;
+    const reviewExecutor = makeScriptedReviewExecutor(checkoutPath);
+    deps.reviewExecutor = reviewExecutor as any;
+
+    const ctx = capContext(checkoutPath);
+    const sequence = getPhaseSequence(WORKFLOW, true) as WorkflowPhase[];
+    const result = await phaseLoop.executeLoop(ctx, capConfig(), deps, sequence);
+
+    // Parked at the cap — a non-completing exit.
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    // The spent budget persists across the pause (restart-safe).
+    expect(tracker.clearRaw).not.toHaveBeenCalledWith(REMEDIATION_COUNT_KEY);
+    expect(await tracker.getValueRaw(REMEDIATION_COUNT_KEY)).toBe(String(MAX));
   });
 
   it('reset: a completed:remediation-limit resume zeroes disk and clears the Redis mirror', async () => {
