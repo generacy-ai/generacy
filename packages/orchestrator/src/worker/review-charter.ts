@@ -81,15 +81,35 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
     lines.push('');
     lines.push(verification.prompt);
   } else if (diffWindow) {
-    // FR-002 (#1131) — resolution-scoped: name the exact base..head range.
-    lines.push(
-      'You are performing a correctness and regression review of a merge-conflict ' +
-        `resolution. Inspect ONLY the diff in the range \`${diffWindow.baseSha}..${diffWindow.headSha}\` ` +
-        '(the merge commit that resolved the conflict, relative to the pre-merge ' +
-        'branch tip) for defects: logic errors, regressions, broken invariants, ' +
-        'security issues, and incorrect handling of edge cases introduced by the ' +
-        'resolution. Ignore files and changes outside this range.',
-    );
+    if (diffWindow.conflictedPaths && diffWindow.conflictedPaths.length > 0) {
+      // FR-003 (#1164) — conflicted-path allowlist. The raw `baseSha..headSha`
+      // parent-1 diff also contains everything the merged-in base branch brought
+      // along; scope the review to the files that actually had conflict markers.
+      lines.push(
+        'You are performing a correctness and regression review of a merge-conflict ' +
+          'resolution. Inspect ONLY these conflicted paths — the files that had ' +
+          'conflict markers the resolution had to reconcile — for defects: logic ' +
+          'errors, regressions, broken invariants, security issues, and incorrect ' +
+          'handling of edge cases introduced by the resolution. Ignore all other ' +
+          'files, including changes brought in from the merged-in base branch.',
+      );
+      lines.push('');
+      lines.push('Conflicted paths:');
+      lines.push('');
+      for (const path of diffWindow.conflictedPaths) {
+        lines.push(`- ${path}`);
+      }
+    } else {
+      // FR-002 (#1131) — resolution-scoped: name the exact base..head range.
+      lines.push(
+        'You are performing a correctness and regression review of a merge-conflict ' +
+          `resolution. Inspect ONLY the diff in the range \`${diffWindow.baseSha}..${diffWindow.headSha}\` ` +
+          '(the merge commit that resolved the conflict, relative to the pre-merge ' +
+          'branch tip) for defects: logic errors, regressions, broken invariants, ' +
+          'security issues, and incorrect handling of edge cases introduced by the ' +
+          'resolution. Ignore files and changes outside this range.',
+      );
+    }
   } else {
     lines.push(
       'You are performing a correctness and regression review of the changes on ' +
@@ -140,8 +160,10 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
         'new sub-blocking (advisory) findings on this pass.',
     );
     lines.push('');
-  } else {
-    // FR-004 → US3 — flag an implausibly empty/trivial diff (round-1 whole-PR only).
+  } else if (!diffWindow) {
+    // FR-004 → US3 (#1164) — flag an implausibly empty/trivial diff ONLY on the
+    // round-1 whole-PR review. A resolution-scoped (`diffWindow`) review over a
+    // small-but-valid conflict resolution must not be flagged as trivial.
     lines.push('## Empty or trivial diff');
     lines.push('');
     lines.push(

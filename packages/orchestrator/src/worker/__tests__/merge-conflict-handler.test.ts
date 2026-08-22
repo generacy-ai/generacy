@@ -279,8 +279,8 @@ describe('MergeConflictHandler (#898 T013)', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     );
 
@@ -356,8 +356,8 @@ describe('MergeConflictHandler (#898 T013)', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     );
     // Push must have been called at least once
@@ -643,8 +643,8 @@ describe('MergeConflictHandler (#898 T013)', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     );
     const queueSnapshot = {
@@ -729,8 +729,8 @@ describe('MergeConflictHandler (#898 T013)', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     );
     // #902 FR-006 assertion helper on terminal state.

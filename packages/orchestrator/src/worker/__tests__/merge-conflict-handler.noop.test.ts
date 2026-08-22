@@ -149,8 +149,8 @@ describe('#902 T014 no-op branch (baseIsAncestor === true)', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     );
 

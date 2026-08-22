@@ -443,9 +443,22 @@ export class ClaudeCliWorker {
             );
           }
 
+          // #1164 FR-008: clear the ownership (`agent:*`) labels only AFTER the
+          // dispatcher has enqueued the re-arm item. `applySuccessDisposition` no
+          // longer clears them (crash-window fix) — the dispatcher hands us this
+          // closure to run post-enqueue. Best-effort; the dispatcher swallows a
+          // failure. The worker builds it because the dispatcher has no
+          // `GitHubClient` in worker mode.
+          const afterEnqueue = async (): Promise<void> => {
+            await github.removeLabels(item.owner, item.repo, item.issueNumber, [
+              'agent:in-progress',
+              'agent:paused',
+            ]);
+          };
+
           return {
             status: 'completed',
-            postComplete: { kind: 'rearm', rearmItem },
+            postComplete: { kind: 'rearm', rearmItem, afterEnqueue },
           };
         }
 
