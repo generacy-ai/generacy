@@ -172,6 +172,32 @@ describe('PrManager staging filter (#1162 FR-001)', () => {
     expect(commit).toHaveBeenCalledWith(expect.any(String), ['src/staged-only.ts']);
   });
 
+  it('G7: a collapsed `.generacy/` directory entry is never staged (wholly-untracked .generacy)', async () => {
+    // A status backend without `--untracked-files=all` reports a wholly
+    // untracked `.generacy/` as ONE directory entry. `isEngineSidecar` cannot
+    // see the sidecars inside it, so staging the entry would commit them all —
+    // the original #1162 failure in any repo with no tracked `.generacy/config.yaml`.
+    const status = makeStatus({
+      untracked: ['.generacy/', 'src/new.ts'],
+    });
+    const { github, stageFiles, commit } = makeGithub(status);
+
+    await commitAndPush(makeManager(github));
+
+    expect(stageFiles).toHaveBeenCalledWith(['src/new.ts']);
+    expect(commit).toHaveBeenCalledWith(expect.any(String), ['src/new.ts']);
+  });
+
+  it('G7: a collapsed `.generacy` (no trailing slash) entry is skipped too, and alone yields no commit', async () => {
+    const status = makeStatus({ untracked: ['.generacy'] });
+    const { github, stageFiles, commit } = makeGithub(status);
+
+    await commitAndPush(makeManager(github));
+
+    expect(stageFiles).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+
   it('G6: a pre-staged sidecar in the index is excluded from the commit pathspec', async () => {
     // Some other actor (e.g. an implement agent running `git add -A`) left a
     // sidecar staged in the index. The whole-index `git commit` would fold it

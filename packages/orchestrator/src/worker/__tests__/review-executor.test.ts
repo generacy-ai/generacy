@@ -669,5 +669,332 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
       expect(prompt).toContain(`${sha0}..${sha1}`);
       expect(prompt.toLowerCase()).toContain('merge-conflict');
     });
+
+    // -----------------------------------------------------------------------
+    // Scope consumption: the scope is applied exactly once per `headSha`, even
+    // when a prior artifact exists (the real path: conflicts surface at validate
+    // entry, AFTER round 1 persisted the sidecar). Subsequent rounds fall back
+    // to the `lastReviewedCommitSha`..HEAD delta (#1164 cap-burn fix preserved).
+    // -----------------------------------------------------------------------
+    async function seedPriorArtifact(prior: unknown): Promise<void> {
+      const priorPath = getReviewArtifactPath(checkoutPath, workflowId);
+      await mkdir(path.dirname(priorPath), { recursive: true });
+      await writeFile(priorPath, JSON.stringify(prior), 'utf-8');
+    }
+
+    function makeScopedContextWithPaths(
+      github: GitHubClient,
+      reviewScope: { baseSha: string; headSha: string; conflictedPaths?: string[] },
+    ): WorkerContext {
+      return { ...makeContext(github), reviewScope } as WorkerContext;
+    }
+
+    it('applies the scope on a round with a PRIOR artifact: scoped + verification charter, allowlisted delta, consumption persisted, lastReviewedCommitSha = merge HEAD', async () => {
+      const [sha0, sha1] = await initRepoWithCommits(checkoutPath, 2);
+      await seedPriorArtifact({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior open finding',
+            detail: 'Raised in round 1.',
+            round: 1,
+            status: 'open',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'r1sha',
+        remediationCount: 1,
+      });
+      // The reviewer confirms the prior finding within the conflicted path.
+      const { launcher, launch } = makeLauncher({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior open finding',
+            detail: 'Resolved by the conflict resolution.',
+            status: 'resolved',
+          },
+        ],
+      });
+      // Raw parent-1 diff of the merge commit: brings upstream-only files too.
+      const getFilesChangedBetween = vi
+        .fn()
+        .mockResolvedValue(['upstream/only.ts', 'src/a.ts', 'f1.txt']);
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue('mergehead'),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getFilesChangedBetween,
+      });
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(
+        makeScopedContextWithPaths(github, {
+          baseSha: sha0!,
+          headSha: sha1!,
+          conflictedPaths: ['src/a.ts'],
+        }),
+      );
+      expect(result.success).toBe(true);
+
+      // The delta was the resolution window (not lastReviewedCommitSha..HEAD).
+      expect(getFilesChangedBetween).toHaveBeenCalledWith(sha0, sha1);
+      expect(getFilesChangedBetween).not.toHaveBeenCalledWith('r1sha', 'mergehead');
+
+      // Charter is BOTH scoped (conflicted paths, ignore upstream) AND a
+      // verification pass carrying the still-open prior finding.
+      expect(launch).toHaveBeenCalledTimes(1);
+      const prompt = launch.mock.calls[0]![0].intent.prompt as string;
+      expect(prompt).toContain('Conflicted paths:');
+      expect(prompt).toContain('- src/a.ts');
+      expect(prompt).not.toContain('- upstream/only.ts');
+      expect(prompt).toContain('Prior open finding');
+      expect(prompt).toContain('## Confirming an addressed finding');
+
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.round).toBe(2);
+      expect(persisted!.consumedReviewScopeHeadSha).toBe(sha1);
+      // Next round's delta base is the merge HEAD — never re-spans the upstream merge.
+      expect(persisted!.lastReviewedCommitSha).toBe('mergehead');
+      expect(persisted!.remediationCount).toBe(1);
+      expect(persisted!.findings[0]!.status).toBe('resolved');
+      expect(persisted!.verdict).toBe('clean');
+    });
+
+    it('does NOT re-apply a consumed scope: the next round is a plain delta verification pass', async () => {
+      const [sha0, sha1] = await initRepoWithCommits(checkoutPath, 2);
+      await seedPriorArtifact({
+        findings: [],
+        verdict: 'clean',
+        round: 2,
+        lastReviewedCommitSha: 'mergehead',
+        remediationCount: 0,
+        consumedReviewScopeHeadSha: sha1,
+      });
+      const { launcher, launch } = makeLauncher({ findings: [] });
+      const getFilesChangedBetween = vi.fn().mockResolvedValue(['src/b.ts']);
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue('r3head'),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getFilesChangedBetween,
+      });
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      await executor.execute(
+        makeScopedContextWithPaths(github, {
+          baseSha: sha0!,
+          headSha: sha1!,
+          conflictedPaths: ['src/a.ts'],
+        }),
+      );
+
+      // Delta spans the remediation commits (lastReviewed..HEAD), not the scope.
+      expect(getFilesChangedBetween).toHaveBeenCalledWith('mergehead', 'r3head');
+      expect(getFilesChangedBetween).not.toHaveBeenCalledWith(sha0, sha1);
+      const prompt = launch.mock.calls[0]![0].intent.prompt as string;
+      expect(prompt).not.toContain('Conflicted paths:');
+      expect(prompt).not.toContain(`${sha0}..${sha1}`);
+      expect(prompt).toContain('- src/b.ts');
+
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.round).toBe(3);
+      expect(persisted!.consumedReviewScopeHeadSha).toBe(sha1);
+    });
+
+    it('applies a NEW scope (different headSha) even though an older one was consumed', async () => {
+      const [, sha1, sha2] = await initRepoWithCommits(checkoutPath, 3);
+      await seedPriorArtifact({
+        findings: [],
+        verdict: 'clean',
+        round: 2,
+        lastReviewedCommitSha: sha1,
+        remediationCount: 0,
+        consumedReviewScopeHeadSha: sha1,
+      });
+      const { launcher, launch } = makeLauncher({ findings: [] });
+      const getFilesChangedBetween = vi.fn().mockResolvedValue(['f2.txt']);
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue(sha2),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getFilesChangedBetween,
+      });
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      await executor.execute(makeScopedContextWithPaths(github, { baseSha: sha1!, headSha: sha2! }));
+
+      expect(getFilesChangedBetween).toHaveBeenCalledWith(sha1, sha2);
+      const prompt = launch.mock.calls[0]![0].intent.prompt as string;
+      expect(prompt).toContain(`${sha1}..${sha2}`);
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.consumedReviewScopeHeadSha).toBe(sha2);
+    });
+
+    it('empty window WITH a prior artifact does not short-circuit — runs the delta verification pass and records consumption', async () => {
+      const [sha] = await initRepoWithCommits(checkoutPath, 1);
+      await seedPriorArtifact({
+        findings: [
+          {
+            severity: 'critical',
+            file: 'src/a.ts',
+            title: 'Prior open finding',
+            detail: 'Raised in round 1.',
+            round: 1,
+            status: 'open',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'r1sha',
+        remediationCount: 0,
+      });
+      const { launcher, launch } = makeLauncher({ findings: [] });
+      const getFilesChangedBetween = vi.fn().mockResolvedValue(['src/b.ts']);
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue('r2head'),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getFilesChangedBetween,
+      });
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      const result = await executor.execute(
+        makeScopedContextWithPaths(github, { baseSha: sha!, headSha: sha! }),
+      );
+      expect(result.success).toBe(true);
+      // A short-circuit here would leave the changes-required prior untouched
+      // and re-trigger remediate every round; instead the real pass runs.
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(getFilesChangedBetween).toHaveBeenCalledWith('r1sha', 'r2head');
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.round).toBe(2);
+      expect(persisted!.consumedReviewScopeHeadSha).toBe(sha);
+      // Anti-vanish still holds: the omitted finding stays open.
+      expect(persisted!.findings[0]!.status).toBe('open');
+    });
+  });
+
+  describe('synthetic findings resolve on re-emission (validate-origin / body-only external)', () => {
+    async function seedPriorArtifact(prior: unknown): Promise<void> {
+      const priorPath = getReviewArtifactPath(checkoutPath, workflowId);
+      await mkdir(path.dirname(priorPath), { recursive: true });
+      await writeFile(priorPath, JSON.stringify(prior), 'utf-8');
+    }
+
+    it('a re-emitted synthetic:validate finding resolves although its "file" (the command) is never in the delta', async () => {
+      const command = 'pnpm test && pnpm build';
+      await seedPriorArtifact({
+        findings: [
+          {
+            severity: 'critical',
+            file: command,
+            title: 'validate phase failed',
+            detail: 'FAIL src/foo.test.ts',
+            round: 2,
+            status: 'open',
+            synthetic: 'validate',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 2,
+        lastReviewedCommitSha: 'failsha',
+        remediationCount: 1,
+      });
+      const { launcher, launch } = makeLauncher({
+        findings: [
+          {
+            severity: 'critical',
+            file: command,
+            title: 'validate phase failed',
+            detail: 'The remediation fixed the failing test.',
+            status: 'resolved',
+          },
+        ],
+      });
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue('fixsha'),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getFilesChangedBetween: vi.fn().mockResolvedValue(['src/foo.ts']),
+      });
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      await executor.execute(makeContext(github));
+
+      // The charter surfaced the synthetic finding with its tag + instructions.
+      const prompt = launch.mock.calls[0]![0].intent.prompt as string;
+      expect(prompt).toContain('[synthetic: validate]');
+      expect(prompt).toContain('validate phase failed');
+
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.round).toBe(3);
+      expect(persisted!.findings).toHaveLength(1);
+      expect(persisted!.findings[0]!.status).toBe('resolved');
+      expect(persisted!.findings[0]!.synthetic).toBe('validate');
+      expect(persisted!.verdict).toBe('clean');
+      expect(persisted!.remediationCount).toBe(1);
+    });
+
+    it('an omitted synthetic finding is still carried forward open (anti-vanish)', async () => {
+      await seedPriorArtifact({
+        findings: [
+          {
+            severity: 'critical',
+            file: '(pr-review)',
+            title: 'External feedback from octocat',
+            detail: 'Do X',
+            round: 1,
+            status: 'open',
+            synthetic: 'external-body',
+          },
+        ],
+        verdict: 'changes-required',
+        round: 1,
+        lastReviewedCommitSha: 'seedsha',
+        remediationCount: 0,
+      });
+      const { launcher } = makeLauncher({ findings: [] });
+      const github = makeGithub({
+        getCurrentCommitSha: vi.fn().mockResolvedValue('r2head'),
+        commitExistsInCheckout: vi.fn().mockResolvedValue(true),
+        getFilesChangedBetween: vi.fn().mockResolvedValue(['src/x.ts']),
+      });
+      const executor = new ReviewExecutor({
+        agentLauncher: launcher,
+        config: baseConfig,
+        settings: null,
+        logger,
+      });
+
+      await executor.execute(makeContext(github));
+
+      const persisted = await readReviewArtifact(checkoutPath, workflowId);
+      expect(persisted!.findings[0]!.status).toBe('open');
+      expect(persisted!.verdict).toBe('changes-required');
+    });
   });
 });

@@ -16,9 +16,11 @@ export const GATE_MAPPING: Record<string, { phase: WorkflowPhase; resumeFrom: Wo
   'manual-validation':      { phase: 'validate',   resumeFrom: 'validate' },
   'remediation-limit':      { phase: 'review',     resumeFrom: 'review' },
   // #1154 FR-004: `waiting-for:ci` is raised during `validate` (CI wait-timeout),
-  // so resume re-runs `validate` to re-verify CI is green on the new head. This
-  // entry also auto-includes `ci` in the derived `HUMAN_GATE_SUFFIXES`, giving
-  // `completed:ci` the same resume-strip exemption as every other gate.
+  // so resume re-runs `validate` to re-verify CI is green on the new head.
+  // NOTE: `completed:ci` is deliberately NOT in the resume-strip retain set
+  // (`resolveResumeRetainSuffixes` in label-manager.ts) — it is consumed by the
+  // resolver before the strip and must not linger, or a later `waiting-for:ci`
+  // re-pause would pair with the stale label and re-enqueue every poll.
   'ci':                     { phase: 'validate',   resumeFrom: 'validate' },
 };
 

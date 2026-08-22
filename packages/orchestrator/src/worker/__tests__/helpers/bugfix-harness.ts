@@ -35,7 +35,7 @@ import type { PhaseLoopDeps } from '../../phase-loop.js';
 import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../../types.js';
 import { DEFAULT_VALIDATE_COMMAND, type WorkerConfig } from '../../config.js';
 import { ReviewPoster } from '../../review-poster.js';
-import type { FindingsArtifact, ReviewVerdict } from '../../review-findings-artifact.js';
+import { deriveFindingId, type ReviewArtifact, type ReviewFinding, type Verdict } from '../../review-artifact.js';
 import type { CiRun } from '@generacy-ai/workflow-engine';
 import type { GitHubClient, CreateReviewInput, Review } from '@generacy-ai/workflow-engine';
 import type { OrchestratorSettings } from '@generacy-ai/config';
@@ -62,7 +62,7 @@ export {
   fullWorkspaceCount,
 } from './bugfix-fixture-graph.js';
 export type { FixtureGraph, PhaseLoopDeps, WorkerContext, WorkerConfig, WorkflowPhase };
-export type { FindingsArtifact, ReviewVerdict, CiRun, CreateReviewInput, Review, GitHubClient };
+export type { ReviewArtifact, ReviewFinding, Verdict, CiRun, CreateReviewInput, Review, GitHubClient };
 
 export const mockLogger = {
   info: () => {},
@@ -382,7 +382,7 @@ export interface BugfixDepsOptions {
    * Verdict returned by `readFindingsArtifact` keyed by review round. Round 1
    * defaults to `clean`; supply a per-round map to steer remediate cycles.
    */
-  verdictByRound?: (round: number) => FindingsArtifact;
+  verdictByRound?: (round: number) => ReviewArtifact;
   /** Explicit gate list for `gateChecker.checkGates`. Defaults to `[]`. */
   gates?: ReturnType<typeof onCiGreenGate>;
   /** Ledger the validate stub records the branch-side effective command into. */
@@ -416,14 +416,18 @@ export function createBugfixDeps(options: BugfixDepsOptions = {}): BugfixDeps {
   );
 
   // Round-steered verdict for the review phase (US1 clean happy path by default).
-  let lastVerdict: ReviewVerdict | null = null;
+  let lastVerdict: Verdict | null = null;
   let callRound = 0;
   const verdictByRound =
     options.verdictByRound ??
-    ((): FindingsArtifact => ({
-      verdict: 'clean',
-      findings: [{ marker: 'f-adv-1', text: 'nit', severity: 'advisory' }],
-    }));
+    ((round: number): ReviewArtifact =>
+      makeReviewArtifact({
+        verdict: 'clean',
+        // Advisory-only: a `minor` finding is below the bugfix `critical` blocking
+        // severity, so it renders as non-blocking.
+        findings: [makeFinding({ severity: 'minor', file: 'src/nit.ts', title: 'nit', round })],
+        round,
+      }));
 
   const deps: BugfixDeps = {
     validateCommands,
@@ -478,9 +482,12 @@ export function createBugfixDeps(options: BugfixDepsOptions = {}): BugfixDeps {
     }),
     readFindingsArtifact: vi.fn(async (_ctx: WorkerContext) => {
       callRound += 1;
-      const artifact = verdictByRound(callRound);
+      // Live seam shape (#1161): `round` lives only in `artifact.round` (pinned
+      // to the call count so per-round steering stays monotonic), paired with
+      // the blocking severity — `critical`, matching `bugfixSettings()`.
+      const artifact = { ...verdictByRound(callRound), round: callRound };
       lastVerdict = artifact.verdict;
-      return { artifact, round: callRound };
+      return { artifact, blockingSeverity: 'critical' as const };
     }),
     remediateTrigger: () => lastVerdict === 'changes-required',
   };
@@ -600,19 +607,51 @@ export function fireOnceTrigger(): () => boolean {
   };
 }
 
-/** Findings artifact with a round-1 blocking "missing regression test" finding. */
-export function missingRegressionTestArtifact(round: number): FindingsArtifact {
+/**
+ * Build a canonical `ReviewFinding` (#1161 shape) from the fields a scenario
+ * cares about; `id` is derived exactly as the engine derives it.
+ */
+export function makeFinding(
+  f: Pick<ReviewFinding, 'severity' | 'file' | 'title'> & Partial<ReviewFinding>,
+): ReviewFinding {
+  return {
+    id: deriveFindingId(f.file, f.title),
+    detail: f.title,
+    round: 1,
+    status: 'open',
+    ...f,
+  };
+}
+
+/** Build a canonical `ReviewArtifact` (#1161 shape) with sane defaults. */
+export function makeReviewArtifact(
+  a: Pick<ReviewArtifact, 'verdict'> & Partial<ReviewArtifact>,
+): ReviewArtifact {
+  return {
+    findings: [],
+    round: 1,
+    lastReviewedCommitSha: 'deadbeef',
+    remediationCount: 0,
+    markedReadyByEngine: false,
+    ...a,
+  };
+}
+
+/** Review artifact with a round-1 blocking "missing regression test" finding. */
+export function missingRegressionTestArtifact(round: number): ReviewArtifact {
   if (round === 1) {
-    return {
+    return makeReviewArtifact({
       verdict: 'changes-required',
       findings: [
-        {
-          marker: 'f-block-1',
-          text: 'Missing regression test that fails without the fix',
-          severity: 'blocking',
-        },
+        makeFinding({
+          severity: 'critical',
+          file: 'packages/core/src/x.ts',
+          title: 'Missing regression test that fails without the fix',
+          round,
+        }),
       ],
-    };
+      round,
+    });
   }
-  return { verdict: 'clean', findings: [] };
+  return makeReviewArtifact({ verdict: 'clean', findings: [], round });
 }

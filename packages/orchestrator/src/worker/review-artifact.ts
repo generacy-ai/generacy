@@ -30,6 +30,7 @@ export type FindingStatus = 'open' | 'resolved';
 
 const SeveritySchema = z.enum(['critical', 'major', 'minor']);
 const FindingStatusSchema = z.enum(['open', 'resolved']);
+const SyntheticFindingKindSchema = z.enum(['validate', 'external-body']);
 
 export const ReviewFindingSchema = z.object({
   // #1161 (INV-4): stable per-finding identity, deterministic from `(file, title)`
@@ -44,9 +45,22 @@ export const ReviewFindingSchema = z.object({
   detail: z.string().min(1),
   round: z.number().int().positive(),
   status: FindingStatusSchema,
+  // Engine-synthesized findings that carry no repository-path anchor:
+  //  - `'validate'`: the phase loop's validate-failure synthesis
+  //    (`synthesizeValidateChangesRequiredArtifact`), whose `file` holds the
+  //    effective validate command;
+  //  - `'external-body'`: a body-only external review comment seeded by
+  //    `SeedAwareReviewExecutor`, whose `file` is the `(pr-review)` placeholder.
+  // `advanceArtifact`'s evidence rule (`file ∈ delta`) can never hold for these,
+  // so a synthetic finding resolves on the reviewer's re-emission alone; the
+  // validate-SUCCESS path additionally auto-resolves open `'validate'` ones.
+  // Optional with no default so pre-existing sidecars parse unchanged; absent ⇒
+  // a real, path-anchored finding.
+  synthetic: SyntheticFindingKindSchema.optional(),
 });
 
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+export type SyntheticFindingKind = z.infer<typeof SyntheticFindingKindSchema>;
 
 /**
  * #1161 (INV-4): deterministic per-finding identity. `sha256(file + '\0' + title)`
@@ -81,6 +95,14 @@ export const ReviewArtifactSchema = z.object({
   // and must still parse. Only ever written `true` by the engine's own
   // `markReadyForReview`, so reconstruction can never demote a human-ready PR.
   markedReadyByEngine: z.boolean().default(false),
+  // Resolution-scoped review consumption marker. A merge-conflict re-arm pins a
+  // fixed `reviewScope` on the `WorkerContext` that nothing clears; the executor
+  // applies the scope exactly once — on the first round whose
+  // `reviewScope.headSha` differs from this value — then stamps it here so every
+  // later round falls back to the `lastReviewedCommitSha`..HEAD delta (which
+  // spans the remediation commits). Optional: absent on pre-existing sidecars
+  // and on every artifact written outside a scoped round.
+  consumedReviewScopeHeadSha: z.string().min(1).optional(),
 });
 
 export type ReviewArtifact = z.infer<typeof ReviewArtifactSchema>;

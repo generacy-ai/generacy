@@ -8,6 +8,7 @@ import {
 import type { Comment, GitHubClient, Review, ReviewThread } from '@generacy-ai/workflow-engine';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import { isEngineSidecar, isCollapsedEngineStateDir } from './product-diff.js';
 import {
   parseAcknowledgedFindings,
   parseSingleMarkerEntries,
@@ -1059,9 +1060,27 @@ Please proceed with addressing the feedback.`;
       'Staging and committing changes',
     );
 
-    // Stage all changes
+    // Stage everything EXCEPT engine sidecars (#1162). Sidecars under
+    // `.generacy/` now survive the cross-run `git clean` (repo-checkout.ts keeps
+    // them so the review loop can resume), so a whole-index `git add -A` here
+    // would commit them onto the PR branch. Mirror PrManager.commitAndPush:
+    // filter with `isEngineSidecar`/`isCollapsedEngineStateDir`, stage the
+    // filtered set, and commit with an explicit pathspec so a pre-staged sidecar
+    // is never folded in by a whole-index commit.
+    const { staged = [], unstaged = [], untracked = [] } = status;
+    const toStage = [...new Set([...staged, ...unstaged, ...untracked])].filter(
+      (p) => !isEngineSidecar(p) && !isCollapsedEngineStateDir(p),
+    );
+    if (toStage.length === 0) {
+      this.logger.info(
+        { prNumber, issueNumber },
+        'Only engine sidecars changed — nothing product-level to commit, skipping commit/push',
+      );
+      return false;
+    }
+
     try {
-      await github.stageAll();
+      await github.stageFiles(toStage);
     } catch (error) {
       this.logger.error(
         { error: String(error), prNumber },
@@ -1078,7 +1097,7 @@ Automated feedback addressing for issue #${issueNumber}.
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
 
     try {
-      await github.commit(commitMessage);
+      await github.commit(commitMessage, toStage);
     } catch (error) {
       this.logger.error(
         { error: String(error), prNumber },

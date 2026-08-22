@@ -34,6 +34,11 @@ export interface ReviewCharterInput {
    * the last reviewed commit, enumerates the still-open findings to confirm, and
    * restricts NEW findings to `blockingSeverity` or higher. Absent ⇒ round-1
    * whole-PR review (data-model "Round-1 special case").
+   *
+   * May be combined with `diffWindow`: a merge-conflict re-arm whose scope is
+   * applied on a round >= 2 is BOTH resolution-scoped (inspect only the
+   * conflicted paths / range) AND a verification pass (the still-open prior
+   * findings are carried into the charter for confirmation).
    */
   verification?: {
     /** `buildVerificationPrompt` output — the still-open-findings framing. */
@@ -55,7 +60,39 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
 
   lines.push(`# Code review — round ${round}`);
   lines.push('');
-  if (verification) {
+  if (verification && diffWindow) {
+    // Scoped verification pass: a merge-conflict resolution re-arm applied on a
+    // round with a prior artifact. The review target is the resolution window
+    // (conflicted-path allowlist when known, else the exact range), and the
+    // still-open prior findings are carried in below for confirmation.
+    if (diffWindow.conflictedPaths && diffWindow.conflictedPaths.length > 0) {
+      lines.push(
+        'You are performing a VERIFICATION re-review of a merge-conflict resolution. ' +
+          'Inspect ONLY these conflicted paths — the files that had conflict markers ' +
+          'the resolution had to reconcile — for defects: logic errors, regressions, ' +
+          'broken invariants, security issues, and incorrect handling of edge cases ' +
+          'introduced by the resolution. Ignore all other files, including changes ' +
+          'brought in from the merged-in base branch.',
+      );
+      lines.push('');
+      lines.push('Conflicted paths:');
+      lines.push('');
+      for (const path of diffWindow.conflictedPaths) {
+        lines.push(`- ${path}`);
+      }
+    } else {
+      lines.push(
+        'You are performing a VERIFICATION re-review of a merge-conflict resolution. ' +
+          `Inspect ONLY the diff in the range \`${diffWindow.baseSha}..${diffWindow.headSha}\` ` +
+          '(the merge commit that resolved the conflict, relative to the pre-merge ' +
+          'branch tip) for defects: logic errors, regressions, broken invariants, ' +
+          'security issues, and incorrect handling of edge cases introduced by the ' +
+          'resolution. Ignore files and changes outside this range.',
+      );
+    }
+    lines.push('');
+    lines.push(verification.prompt);
+  } else if (verification) {
     // #1126 (activated #1161) — convergence verification pass (round >= 2).
     // Delta-scoped: name ONLY the files changed since the last reviewed commit,
     // then embed the still-open-findings framing produced by
@@ -146,6 +183,20 @@ export function buildReviewCharter(input: ReviewCharterInput): string {
         'engine ties your confirmation to the original finding, so do not paraphrase ' +
         'either. A finding you simply omit is treated as STILL OPEN, not resolved — ' +
         'when in doubt, re-emit it with `status: "open"`.',
+    );
+    lines.push('');
+    // Synthetic (engine-generated) findings have no path anchor, so the
+    // engine cannot use "its file is in the delta" as evidence; your explicit
+    // re-emission is the only signal. Without it they ride every round to the
+    // remediation cap.
+    lines.push(
+      'This applies equally to findings tagged `[synthetic: validate]` (synthesized ' +
+        'from a failing `validate` run; `file` is the validate command, not a path) and ' +
+        '`[synthetic: external-body]` (seeded from a PR-level review comment; `file` is ' +
+        'the `(pr-review)` placeholder). There is no file to open for these — judge ' +
+        'whether the changes since the last review address the failure or feedback ' +
+        'described in the finding detail, and if so re-emit the finding with the EXACT ' +
+        'SAME `file` and `title` and `status: "resolved"`.',
     );
     lines.push('');
     // The verification pass must not raise fresh advisory noise; only genuine new

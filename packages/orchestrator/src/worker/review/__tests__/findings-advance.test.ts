@@ -226,3 +226,69 @@ describe('advanceArtifact (FR-006 / SC-002 / SC-004)', () => {
     expect(merged.filter((f) => f.id === 'dup')).toHaveLength(1);
   });
 });
+
+describe('advanceArtifact — synthetic findings resolve on re-emission regardless of delta', () => {
+  // A validate-failure synthesis stores the validate COMMAND in `file`; a
+  // body-only external finding stores the `(pr-review)` placeholder. Neither
+  // can ever appear in `delta.files`, so the plain evidence rule carried them
+  // open forever and every validate failure rode to the remediation cap.
+  it('resolves an addressed synthetic:validate finding whose file is not in the delta', () => {
+    const prior = artifact({
+      findings: [
+        finding({
+          id: 'v1',
+          file: 'pnpm test && pnpm build',
+          title: 'validate phase failed',
+          synthetic: 'validate',
+        }),
+      ],
+    });
+    const merged = advanceArtifact(
+      prior,
+      delta({ files: ['src/fixed.ts'] }),
+      [finding({ id: 'v1', file: 'pnpm test && pnpm build', status: 'resolved', synthetic: undefined })],
+      [],
+      'critical',
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.status).toBe('resolved');
+    // The synthetic tag survives the transition.
+    expect(merged[0]?.synthetic).toBe('validate');
+    expect(computeVerdict(merged, 'critical')).toBe('clean');
+  });
+
+  it('resolves an addressed synthetic:external-body finding whose file is the placeholder', () => {
+    const prior = artifact({
+      findings: [finding({ id: 'e1', file: '(pr-review)', synthetic: 'external-body' })],
+    });
+    const merged = advanceArtifact(
+      prior,
+      delta({ files: ['src/a.ts'] }),
+      [finding({ id: 'e1', file: '(pr-review)', status: 'resolved' })],
+      [],
+      'critical',
+    );
+    expect(merged[0]?.status).toBe('resolved');
+  });
+
+  it('keeps an UNaddressed synthetic finding open (anti-vanish still applies)', () => {
+    const prior = artifact({
+      findings: [finding({ id: 'v1', file: 'pnpm test', synthetic: 'validate' })],
+    });
+    const merged = advanceArtifact(prior, delta({ files: ['src/a.ts'] }), [], [], 'critical');
+    expect(merged[0]?.status).toBe('open');
+    expect(computeVerdict(merged, 'critical')).toBe('changes-required');
+  });
+
+  it('does not relax the delta rule for a non-synthetic finding outside the delta', () => {
+    const prior = artifact({ findings: [finding({ id: 'r1', file: 'src/a.ts' })] });
+    const merged = advanceArtifact(
+      prior,
+      delta({ files: ['src/b.ts'] }),
+      [finding({ id: 'r1', file: 'src/a.ts', status: 'resolved' })],
+      [],
+      'critical',
+    );
+    expect(merged[0]?.status).toBe('open');
+  });
+});

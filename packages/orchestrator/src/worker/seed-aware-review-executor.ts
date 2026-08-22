@@ -79,6 +79,11 @@ export class SeedAwareReviewExecutor implements ReviewExecutorLike {
         id: deriveFindingId(file, title),
         severity: SEEDED_FINDING_SEVERITY,
         file,
+        // A body-only comment has no path anchor: its `file` is the placeholder,
+        // which can never appear in a review delta. Mark it synthetic so
+        // `advanceArtifact` resolves it on the reviewer's re-emission alone
+        // instead of carrying it open to the remediation cap.
+        ...(f.path === undefined ? { synthetic: 'external-body' as const } : {}),
         ...(f.line !== undefined ? { line: f.line } : {}),
         title,
         // #1159 FR-004: the review comment body is attacker-controllable content

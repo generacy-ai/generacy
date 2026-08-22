@@ -4,7 +4,7 @@ import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
-import { isEngineSidecar } from './product-diff.js';
+import { isEngineSidecar, isCollapsedEngineStateDir } from './product-diff.js';
 import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js';
 
 /**
@@ -143,10 +143,14 @@ export class PrManager {
       // sidecar that some other actor pre-staged into the index is never folded
       // into the commit by the whole-index `git commit` — the "never committed"
       // guarantee (FR-001/SC-001) holds even against a dirty index.
+      //
+      // A collapsed `.generacy/` directory entry (a status backend that does not
+      // expand untracked directories) is skipped too: its contents are opaque to
+      // the sidecar filter, and staging it would commit every sidecar at once.
       const status = await this.github.getStatus();
       const { staged = [], unstaged = [], untracked = [] } = status;
       const toStage = [...new Set([...staged, ...unstaged, ...untracked])].filter(
-        (p) => !isEngineSidecar(p),
+        (p) => !isEngineSidecar(p) && !isCollapsedEngineStateDir(p),
       );
       if (toStage.length > 0) {
         // Stage first so untracked members of `toStage` are known to git before

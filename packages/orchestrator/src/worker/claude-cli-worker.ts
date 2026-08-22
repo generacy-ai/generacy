@@ -16,7 +16,7 @@ import {
   resolveWorkflowOverrides,
 } from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
-import { LabelManager } from './label-manager.js';
+import { LabelManager, resolveResumeRetainSuffixes } from './label-manager.js';
 import { StageCommentManager } from './stage-comment-manager.js';
 import { GateChecker } from './gate-checker.js';
 import { CliSpawner } from './cli-spawner.js';
@@ -886,7 +886,13 @@ export class ClaudeCliWorker {
 
       // 7b. On resume, clean up gate labels before starting the phase loop
       if (item.command === 'continue') {
-        await labelManager.onResumeStart();
+        // Retain set: only gate completions the resumed phase consumes itself
+        // (remediation-limit always; implementation-review only under the
+        // CI-merge gate). Everything else is stripped so a resumed phase can
+        // pause again (clarify follow-ups, ci re-pause).
+        await labelManager.onResumeStart({
+          retainCompletedSuffixes: resolveResumeRetainSuffixes(this.config),
+        });
       }
 
       // 7c. Handle tasks-review gate resume for epics (T015)

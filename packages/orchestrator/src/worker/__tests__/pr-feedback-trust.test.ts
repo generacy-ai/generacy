@@ -23,6 +23,7 @@ const mockGitHub: Record<string, ReturnType<typeof vi.fn>> = {
   replyToPRComment: vi.fn(),
   resolveReviewThread: vi.fn(),
   stageAll: vi.fn(),
+  stageFiles: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   // #1051 pre-push guard mock — defaults to "no PR in any state" so the
@@ -131,6 +132,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
       untracked: [],
     });
     mockGitHub.stageAll.mockResolvedValue(undefined);
+    mockGitHub.stageFiles.mockResolvedValue(undefined);
     mockGitHub.commit.mockResolvedValue(undefined);
     mockGitHub.push.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);

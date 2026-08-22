@@ -39,7 +39,7 @@ import type { WorkerContext, Logger, WorkflowPhase, PhaseResult } from '../worke
 import { getPhaseSequence } from '../worker/types.js';
 import type { WorkerConfig } from '../worker/config.js';
 import type { ReviewExecutor } from '../worker/review-executor.js';
-import type { FindingsArtifact } from '../worker/review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../worker/review-artifact.js';
 import { SeedAwareReviewExecutor } from '../worker/seed-aware-review-executor.js';
 import { writeExternalFeedbackSeed } from '../worker/external-feedback-seed.js';
 import {
@@ -238,21 +238,13 @@ function makeCleanDelegate(checkoutPath: string): ReviewExecutor {
 
 function makeFindingsReader(
   checkoutPath: string,
-): (context: WorkerContext) => Promise<{ artifact: FindingsArtifact; round: number } | null> {
+): (context: WorkerContext) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> {
   return async () => {
     const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     if (!ra) return null;
-    return {
-      artifact: {
-        verdict: ra.verdict,
-        findings: ra.findings.map((f, idx) => ({
-          marker: `finding-${idx}`,
-          text: f.title,
-          severity: 'blocking' as const,
-        })),
-      },
-      round: ra.round,
-    };
+    // Live seam shape (#1161): the canonical artifact (round lives in `ra.round`)
+    // plus the blocking severity used for the poster's render projection.
+    return { artifact: ra, blockingSeverity: 'critical' };
   };
 }
 

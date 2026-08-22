@@ -118,6 +118,11 @@ describe('SeedAwareReviewExecutor (#1130)', () => {
     expect(bodyFinding?.file).toBe('(pr-review)');
     const inlineFinding = artifact?.findings.find((f) => f.file === 'src/a.ts');
     expect(inlineFinding?.line).toBe(12);
+    // The body-only finding is tagged synthetic so the convergence merge can
+    // resolve it on re-emission (its placeholder file is never in a delta); the
+    // path-anchored finding stays a real finding.
+    expect(bodyFinding?.synthetic).toBe('external-body');
+    expect(inlineFinding?.synthetic).toBeUndefined();
 
     // Consume-once: seed deleted so convergence rounds delegate.
     expect(await readExternalFeedbackSeed(checkoutPath, WORKFLOW_ID)).toBeNull();

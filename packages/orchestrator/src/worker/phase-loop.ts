@@ -8,7 +8,7 @@ import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
-import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, deriveFindingId, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
+import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, deriveFindingId, computeVerdict, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
 import { waitForCiGreen } from './ci-merge-readiness.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
@@ -54,6 +54,10 @@ const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement
  * `maybePostUntrustedNotice`).
  */
 const REMEDIATION_LIMIT_MARKER = '<!-- generacy-remediation-limit -->';
+/** Hidden dedupe marker for the `waiting-for:ci` pause comment. */
+export const CI_PAUSE_MARKER = '<!-- generacy-ci-pause -->';
+/** Prefix of the per-pause fingerprint line: `<!-- generacy-ci-pause verdict=<v> sha=<sha> -->`. */
+const CI_PAUSE_MARKER_PREFIX = '<!-- generacy-ci-pause';
 
 /**
  * #1134 (US2): outcome of the speckit-bugfix targeted-validate classification.
@@ -382,6 +386,7 @@ export class PhaseLoop {
           { startPhase: context.startPhase, runId },
           '#1133: implementation-review gate already satisfied — terminal no-op resume, skipping phase loop',
         );
+        await this.clearRemediationBudgetMirror(context, deps);
         return { results, completed: true, lastPhase: 'validate', gateHit: false };
       }
     }
@@ -1181,6 +1186,18 @@ export class PhaseLoop {
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
 
+      // 4b. Validate green ⇒ the proof that every validate-origin failure is
+      // fixed. Auto-resolve any still-open `synthetic: 'validate'` finding in
+      // the review sidecar (counterpart of the failure-path synthesis above) so
+      // a stale `changes-required` cannot re-trigger remediate later.
+      if (phase === 'validate' && result.success) {
+        await this.resolveSyntheticValidateFindings(
+          context,
+          resolveWorkflowOverrides(config, deps.settings ?? null, context.item.workflowName)
+            .review.blockingSeverity,
+        );
+      }
+
       // 5. Commit, push, and ensure draft PR exists (before marking complete)
       const commitOutcome = await prManager.commitPushAndEnsurePr(phase);
       const { prUrl, hasChanges } = commitOutcome;
@@ -1396,6 +1413,7 @@ export class PhaseLoop {
             phase,
             reason:
               'Could not resolve the PR head commit SHA; CI merge-readiness cannot be evaluated.',
+            ci: { verdict: 'unknown', headSha: 'unknown' },
             context,
             deps,
             results,
@@ -1432,6 +1450,7 @@ export class PhaseLoop {
           return await this.pauseForCiReadiness({
             phase,
             reason: 'CI did not turn green within the merge-readiness timeout',
+            ci: { verdict: outcome.verdict, source: outcome.source, headSha },
             context,
             deps,
             results,
@@ -1453,7 +1472,8 @@ export class PhaseLoop {
           return await this.pauseForCiReadiness({
             phase,
             reason:
-              'CI is red (not-passed) for the head commit; the merge gate will not open until CI is green.',
+              'CI has not passed for the head commit; the merge gate will not open until CI is green.',
+            ci: { verdict: outcome.verdict, source: outcome.source, headSha },
             context,
             deps,
             results,
@@ -1582,17 +1602,27 @@ export class PhaseLoop {
                 'Add `completed:remediation-limit` to resume with a fresh remediation budget.',
               ].join('\n');
               // #1154 FR-005: dedupe on the hidden marker so a re-parked cap does
-              // not re-post the same comment every resume cycle.
-              const prNumber = prManager.getPrNumber();
+              // not re-post the same comment every resume cycle. The comment is
+              // posted to the ISSUE (`addIssueComment(issueNumber)`), so the
+              // dedupe MUST read the issue's comments — the earlier PR-side read
+              // (`listPrCommentBodies(prNumber)`) never saw the marker and
+              // re-posted on every re-park. Independent of whether a PR exists.
+              // A failed dedupe read must not suppress the gate body — fall
+              // back to posting (a duplicate beats a silent park).
               let alreadyPosted = false;
-              if (prNumber !== undefined) {
-                const existingComments = await context.github.listPrCommentBodies(
+              try {
+                const existingComments = await context.github.getIssueComments(
                   context.item.owner,
                   context.item.repo,
-                  prNumber,
+                  context.item.issueNumber,
                 );
-                alreadyPosted = existingComments.some((b) =>
-                  b.includes(REMEDIATION_LIMIT_MARKER),
+                alreadyPosted = existingComments.some((c) =>
+                  c.body.includes(REMEDIATION_LIMIT_MARKER),
+                );
+              } catch (error) {
+                this.logger.warn(
+                  { error: String(error), phase, gateLabel: gate.gateLabel },
+                  'Remediation-limit comment dedupe read failed — posting without dedupe',
                 );
               }
               if (!alreadyPosted) {
@@ -1712,6 +1742,17 @@ export class PhaseLoop {
         // waiting-for:implementation-review + agent:paused.
         if (gate.condition === 'on-ci-green') {
           await labelManager.onPhaseComplete(phase);
+          // The review↔remediate loop has CONVERGED here (validate green, CI
+          // green) even though the loop returns `completed: false` for the
+          // approval pause. Clear the Redis remediation-budget mirror now: a
+          // later `address-pr-feedback` re-entry (reviewer requests changes at
+          // this gate) clears the disk artifact and must start with a fresh
+          // budget, not inherit the N remediations spent before convergence —
+          // otherwise the gate's `max(disk, redis)` reconcile re-seeds N and the
+          // human's feedback parks at `waiting-for:remediation-limit` with zero
+          // attempts. Non-converged exits (merge-conflicts, ci, failures) keep
+          // the mirror so the cap stays global across those re-entries.
+          await this.clearRemediationBudgetMirror(context, deps);
         }
 
         await labelManager.onGateHit(phase, gate.gateLabel);
@@ -1924,12 +1965,44 @@ export class PhaseLoop {
     }
 
     this.logger.info('Phase loop completed successfully — all phases done');
+    await this.clearRemediationBudgetMirror(context, deps);
     return {
       results,
       completed: true,
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
     };
+  }
+
+  /**
+   * Clear the durable Redis mirror of the remediation budget
+   * (`remediation-count:<owner>:<repo>:<issue>:<branch>`) on a SUCCESSFUL
+   * loop completion (`completed: true`). The mirror must persist across every
+   * non-completing exit (gate pauses, failures, push refusals) so a restart
+   * resumes with the spent budget; but a workflow that converged after N
+   * remediations would otherwise leave N in Redis, and a later re-entry
+   * (e.g. address-pr-feedback, which clears the disk sidecar and re-seeds at
+   * 0) would reconcile `max(disk, redis)` back up to N — parking the human's
+   * feedback at the cap with zero attempts when N ≥ max. Best-effort: a Redis
+   * failure never changes the completion outcome.
+   */
+  private async clearRemediationBudgetMirror(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+  ): Promise<void> {
+    if (!deps.phaseTracker) return;
+    const { owner, repo, issueNumber } = context.item;
+    const branch = context.branch ?? 'no-branch';
+    const key = `remediation-count:${owner}:${repo}:${issueNumber}:${branch}`;
+    try {
+      await deps.phaseTracker.clearRaw(key);
+      this.logger.info({ key }, 'Phase loop completed — cleared remediation budget mirror');
+    } catch (error) {
+      this.logger.warn(
+        { key, error: String(error) },
+        'Failed to clear remediation budget mirror on completion — continuing',
+      );
+    }
   }
 
   /**
@@ -1952,7 +2025,10 @@ export class PhaseLoop {
    */
   private async synthesizeValidateChangesRequiredArtifact(
     context: WorkerContext,
-    validateCommand: string,
+    // Retained for call-site stability; the finding id now derives from the
+    // EFFECTIVE command (the `file` field) so a reviewer re-emission with the
+    // same `file` + `title` yields the same deterministic id (INV-4).
+    _validateCommand: string,
     effectiveValidateCommand: string,
     validateEvidence: { stdout: string; stderr: string },
   ): Promise<{ round: number }> {
@@ -1961,12 +2037,18 @@ export class PhaseLoop {
     const round = (prior?.round ?? 0) + 1;
     const head = await context.github.getCurrentCommitSha();
     const finding: ReviewFinding = {
-      id: deriveFindingId(validateCommand, 'validate phase failed'),
+      id: deriveFindingId(effectiveValidateCommand, 'validate phase failed'),
       severity: 'critical',
       // #1158 T013 (FR-008): cite the effective (possibly targeted) command,
       // not the flat `config.validateCommand`.
       file: effectiveValidateCommand,
       title: 'validate phase failed',
+      // No path anchor: `file` is a command string that can never appear in a
+      // review delta. Tag it so `advanceArtifact` resolves it on the reviewer's
+      // re-emission alone, and so a green validate can auto-resolve it
+      // (`resolveSyntheticValidateFindings`). Without this the finding rode
+      // every validate failure to the remediation cap.
+      synthetic: 'validate',
       // #1159 FR-005: raw validate stdout/stderr can contain
       // attacker-influenced content (e.g. a test name or assertion message
       // echoing a PR-controlled string) that lands verbatim in the remediate
@@ -1980,7 +2062,12 @@ export class PhaseLoop {
       status: 'open',
     };
     await writeReviewArtifact(context.checkoutPath, workflowId, {
-      findings: [...(prior?.findings ?? []), finding],
+      // A repeat validate failure re-synthesizes a finding with the SAME
+      // deterministic id (same command + title). Replace any prior copy —
+      // typically the one a review just resolved — rather than appending a
+      // duplicate id, which would break the id-uniqueness invariant the
+      // convergence merge and the poster's thread marker rely on.
+      findings: [...(prior?.findings ?? []).filter((f) => f.id !== finding.id), finding],
       verdict: 'changes-required',
       round,
       lastReviewedCommitSha: head,
@@ -1991,8 +2078,67 @@ export class PhaseLoop {
       // #1156: carry the cross-run ready flag forward (D-7 — same reasoning as
       // the review executor's per-round rewrite).
       markedReadyByEngine: prior?.markedReadyByEngine ?? false,
+      // Carry the scoped-review consumption marker forward so a validate
+      // failure after a merge-conflict re-arm does not re-apply the scope.
+      ...(prior?.consumedReviewScopeHeadSha !== undefined
+        ? { consumedReviewScopeHeadSha: prior.consumedReviewScopeHeadSha }
+        : {}),
     });
     return { round };
+  }
+
+  /**
+   * Validate-SUCCESS counterpart of `synthesizeValidateChangesRequiredArtifact`.
+   * A passing `validate` is the proof that every validate-origin failure is
+   * fixed, so flip any still-open `synthetic: 'validate'` finding in the
+   * sidecar to `resolved` and recompute the verdict. Covers the paths where no
+   * review round gets to confirm the fix — the flag-OFF one-shot remediate
+   * (#1165), a resume that re-enters at `validate`, or a reviewer that omitted
+   * the re-emission — so the stale `changes-required` cannot re-trigger
+   * remediate on the next review entry. No-op when there is no artifact or no
+   * open synthetic validate finding; leaves every other field untouched.
+   * Best-effort: a sidecar I/O failure is logged, never fatal to a green run.
+   */
+  private async resolveSyntheticValidateFindings(
+    context: WorkerContext,
+    blockingSeverity: Severity,
+  ): Promise<void> {
+    const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    try {
+      const artifact = await readReviewArtifact(context.checkoutPath, workflowId);
+      if (!artifact) {
+        return;
+      }
+      const stale = artifact.findings.filter(
+        (f) => f.status === 'open' && f.synthetic === 'validate',
+      );
+      if (stale.length === 0) {
+        return;
+      }
+      const findings: ReviewFinding[] = artifact.findings.map((f) =>
+        f.status === 'open' && f.synthetic === 'validate'
+          ? { ...f, status: 'resolved' as const }
+          : f,
+      );
+      // Recompute with the single `computeVerdict` at the per-workflow blocking
+      // severity so this agrees with the review executor: any other open
+      // blocking finding keeps the verdict at changes-required.
+      const verdict = computeVerdict(findings, blockingSeverity);
+      await writeReviewArtifact(context.checkoutPath, workflowId, {
+        ...artifact,
+        findings,
+        verdict,
+      });
+      this.logger.info(
+        { workflowId, resolved: stale.map((f) => f.id), verdict },
+        'validate passed — auto-resolved open synthetic validate findings',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), workflowId },
+        'validate passed but auto-resolving synthetic validate findings failed — continuing',
+      );
+    }
   }
 
   /**
@@ -2672,6 +2818,17 @@ export class PhaseLoop {
   private async pauseForCiReadiness(params: {
     phase: WorkflowPhase;
     reason: string;
+    /**
+     * The real CI readout behind the pause: aggregated verdict (`'unknown'`
+     * when the head SHA could not be resolved), which readout produced it, and
+     * the head SHA evaluated. Reported verbatim in the pause comment and used
+     * as the dedupe fingerprint.
+     */
+    ci: {
+      verdict: 'green' | 'not-passed' | 'pending' | 'unknown';
+      source?: 'check-runs' | 'actions-runs';
+      headSha: string;
+    };
     context: WorkerContext;
     deps: PhaseLoopDeps;
     results: PhaseResult[];
@@ -2685,6 +2842,7 @@ export class PhaseLoop {
     const {
       phase,
       reason,
+      ci,
       context,
       deps,
       results,
@@ -2696,6 +2854,10 @@ export class PhaseLoop {
       currentIndex,
     } = params;
     const { labelManager, stageCommentManager, jobEventEmitter } = deps;
+    this.logger.warn(
+      { phase, ciVerdict: ci.verdict, ciSource: ci.source ?? 'none', headSha: ci.headSha, reason },
+      'CI merge readiness paused',
+    );
 
     jobEventEmitter?.('job:paused', {
       jobId: context.jobId,
@@ -2713,23 +2875,66 @@ export class PhaseLoop {
     await labelManager.onGateHit(phase, 'waiting-for:ci');
 
     // FR-004: best-effort reason comment. A failure here MUST NOT change the
-    // pause outcome or any other step (INV-5).
+    // pause outcome or any other step (INV-5). Reports the REAL verdict and
+    // its source (not a canned "CI is red"), and is deduped on a hidden
+    // marker + verdict/sha fingerprint: when the latest issue comment already
+    // carries the same fingerprint (a re-pause on the same head with the same
+    // verdict — e.g. every `completed:ci` → validate → re-pause cycle), the
+    // comment is not re-posted.
     try {
+      const fingerprint = `${CI_PAUSE_MARKER_PREFIX} verdict=${ci.verdict} sha=${ci.headSha} -->`;
       const body = [
+        CI_PAUSE_MARKER,
+        fingerprint,
         '## CI merge readiness paused',
         '',
         reason,
+        '',
+        `CI verdict: \`${ci.verdict}\` (source: ${ci.source ?? 'none'}) for head \`${ci.headSha}\`.`,
+        ...(ci.source === 'actions-runs'
+          ? [
+              '',
+              '_Verdict read from the `actions/runs` fallback (the `check-runs` readout '
+                + 'was unavailable — the token likely lacks `checks:read`); third-party '
+                + 'required checks are not visible to this readout._',
+            ]
+          : []),
         '',
         'The workflow is paused with `waiting-for:ci` + `agent:paused`. Re-run '
           + 'validation (CI, tests, PR ready-marking, and the merge gate) by '
           + 'adding `completed:ci` once CI is green.',
       ].join('\n');
-      await context.github.addIssueComment(
-        context.item.owner,
-        context.item.repo,
-        context.item.issueNumber,
-        body,
-      );
+      let alreadyPosted = false;
+      try {
+        const existing = await context.github.getIssueComments(
+          context.item.owner,
+          context.item.repo,
+          context.item.issueNumber,
+        );
+        const latest = existing[existing.length - 1];
+        alreadyPosted =
+          latest !== undefined
+          && latest.body.includes(CI_PAUSE_MARKER)
+          && latest.body.includes(fingerprint);
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), phase },
+          'CI pause comment dedupe read failed — posting without dedupe',
+        );
+      }
+      if (alreadyPosted) {
+        this.logger.info(
+          { phase, ciVerdict: ci.verdict, headSha: ci.headSha },
+          'CI pause comment already posted for this verdict/sha — skipping re-post',
+        );
+      } else {
+        await context.github.addIssueComment(
+          context.item.owner,
+          context.item.repo,
+          context.item.issueNumber,
+          body,
+        );
+      }
     } catch (error) {
       this.logger.warn(
         { error: String(error), phase },

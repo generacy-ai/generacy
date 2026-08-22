@@ -40,11 +40,33 @@ export function buildVerificationPrompt(parts: VerificationPromptParts): string 
     lines.push('Open findings: none.');
   } else {
     lines.push('Open findings to verify:');
+    let hasSynthetic = false;
     for (const f of parts.openFindings) {
       const location = f.line != null ? `${f.file}:${f.line}` : f.file;
       lines.push('');
-      lines.push(`- [${f.severity}] ${f.title} (${location})`);
+      if (f.synthetic !== undefined) {
+        // Engine-synthesized, no path anchor: the `file` field holds the failing
+        // validate command / the `(pr-review)` placeholder. Flag it so the agent
+        // knows the "location" is not a file to open, and re-emits it verbatim.
+        hasSynthetic = true;
+        lines.push(`- [${f.severity}] ${f.title} (${location}) [synthetic: ${f.synthetic}]`);
+      } else {
+        lines.push(`- [${f.severity}] ${f.title} (${location})`);
+      }
       lines.push(`  ${f.detail}`);
+    }
+    if (hasSynthetic) {
+      lines.push('');
+      lines.push(
+        'Findings tagged `[synthetic: validate]` were synthesized by the engine from a ' +
+          'failing `validate` run — their `file` is the validate command that failed, not ' +
+          'a repository path. Findings tagged `[synthetic: external-body]` were seeded from ' +
+          'a PR-level review comment with no file anchor — their `file` is the `(pr-review)` ' +
+          'placeholder. For each, judge whether the changes since the last review address ' +
+          'the failure or feedback described in its detail. If they do, re-emit the finding ' +
+          'with the EXACT SAME `file` and `title` and `status: "resolved"`; if not, re-emit ' +
+          'it with `status: "open"`.',
+      );
     }
   }
 

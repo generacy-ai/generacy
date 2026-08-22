@@ -1275,7 +1275,16 @@ export class GhCliGitHubClient implements GitHubClient {
     const branchResult = await executeCommand('git', ['branch', '--show-current'], { cwd: this.workdir });
     const branch = branchResult.stdout.trim();
 
-    const statusResult = await executeCommand('git', ['status', '--porcelain'], { cwd: this.workdir });
+    // `--untracked-files=all`: report every untracked file individually. The
+    // default collapses a wholly-untracked directory into one `?? dir/` entry,
+    // which hides the files inside from path-based consumers (e.g. the
+    // orchestrator's engine-sidecar staging filter, #1162 — a bare `.generacy/`
+    // entry would be staged wholesale, committing every sidecar).
+    const statusResult = await executeCommand(
+      'git',
+      ['status', '--porcelain', '--untracked-files=all'],
+      { cwd: this.workdir },
+    );
     const lines = statusResult.stdout.split('\n').filter(l => l);
 
     const staged: string[] = [];

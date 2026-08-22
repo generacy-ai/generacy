@@ -90,25 +90,49 @@ export class ReviewExecutor implements ReviewExecutorLike {
 
     // 2. Determine the review round from any prior engine-written artifact.
     //    Read BEFORE the reviewScope branch (#1164 FR-001) so scope usage can be
-    //    gated on round 1 only.
+    //    gated on whether THIS scope was already consumed.
     const priorRound = await readReviewArtifact(checkoutPath, workflowId);
     const round = (priorRound?.round ?? 0) + 1;
 
-    // #1131/#1164: resolution-scoped review, honored on round 1 only. A
+    // #1131/#1164: resolution-scoped review, honored exactly once per scope. A
     // merge-conflict re-arm supplies a fixed `reviewScope`; nothing clears it,
-    // so applying it on round 2+ would pin every re-review to the original
+    // so applying it on every round would pin each re-review to the original
     // pre-remediation window (making the remediation commits invisible) and the
-    // same findings would re-report every round until the remediation cap. Gate
-    // scope usage on `!priorRound` — round 2+ falls back to the standard #1126
-    // delta (`lastReviewedCommitSha`..HEAD), which spans the remediation commits.
-    // An empty scoped window short-circuits to a synthetic success (FR-011,
-    // SC-004) and lets the loop advance to `validate`. Absent scope ⇒ whole-PR
-    // review, byte-identical to pre-#1131 (FR-010).
+    // same findings would re-report every round until the remediation cap.
+    //
+    // The #1164 gate was `!priorRound` — but on the real path conflicts surface
+    // at validate entry (`runPreValidateBaseMerge`), i.e. AFTER round 1 has
+    // persisted the sidecar, so the scoped review never ran and the re-review
+    // was a plain verification pass whose delta spanned the whole upstream
+    // base merge. Gate instead on "this scope not yet consumed": apply iff
+    // `reviewScope.headSha !== prior.consumedReviewScopeHeadSha`, then persist
+    // the headSha on the artifact (step 11) so round N+1 falls back to the
+    // standard #1126 delta (`lastReviewedCommitSha`..HEAD), which spans the
+    // remediation commits — preserving the #1164 cap-burn fix. With a prior
+    // artifact the scoped round is ALSO a verification pass (the still-open
+    // prior findings ride along in the charter, step 3).
+    //
+    // An empty scoped window with NO prior artifact short-circuits to a
+    // synthetic success (FR-011, SC-004) and lets the loop advance to
+    // `validate`. With a prior artifact it instead falls through to the normal
+    // verification pass (the scope is still recorded as consumed) — a
+    // short-circuit there would leave a `changes-required` prior untouched and
+    // re-trigger remediate every round. Absent scope ⇒ whole-PR review,
+    // byte-identical to pre-#1131 (FR-010).
     const { reviewScope } = context;
-    const scopedReview = priorRound ? undefined : reviewScope;
+    const scopeAlreadyConsumed =
+      reviewScope !== undefined &&
+      priorRound?.consumedReviewScopeHeadSha === reviewScope.headSha;
+    let scopedReview = scopeAlreadyConsumed ? undefined : reviewScope;
+    if (scopeAlreadyConsumed) {
+      this.logger.info(
+        { headSha: reviewScope?.headSha, round, workflowId },
+        'Resolution-scoped review already consumed for this scope — falling back to the delta review',
+      );
+    }
     if (scopedReview) {
       const isEmpty = await this.isEmptyWindow(checkoutPath, scopedReview);
-      if (isEmpty) {
+      if (isEmpty && !priorRound) {
         this.logger.info(
           { baseSha: scopedReview.baseSha, headSha: scopedReview.headSha, workflowId },
           'Resolution-scoped review window is empty — skipping review, advancing to validate',
@@ -120,6 +144,13 @@ export class ReviewExecutor implements ReviewExecutorLike {
           durationMs: Date.now() - startedAt,
           output: [],
         };
+      }
+      if (isEmpty) {
+        this.logger.info(
+          { baseSha: scopedReview.baseSha, headSha: scopedReview.headSha, round, workflowId },
+          'Resolution-scoped review window is empty with a prior artifact — running the delta verification pass instead',
+        );
+        scopedReview = undefined;
       }
     }
 
@@ -137,7 +168,7 @@ export class ReviewExecutor implements ReviewExecutorLike {
       markedReadyByEngine: false,
     };
     const prBaseRef = await this.resolvePrBaseRef(context);
-    const delta = await computeReviewDelta({
+    const rawDelta = await computeReviewDelta({
       github: context.github,
       artifact: priorForDelta,
       prBaseRef,
@@ -150,6 +181,16 @@ export class ReviewExecutor implements ReviewExecutorLike {
           }
         : {}),
     });
+    // #1164 FR-003: when the scope carries a conflicted-path allowlist, the raw
+    // `baseSha..headSha` parent-1 diff also lists everything the merged-in base
+    // brought along. Restrict the delta to the allowlist so both the charter's
+    // file list and `advanceArtifact`'s evidence rule see only the files the
+    // agent was actually told to inspect.
+    const scopedAllowlist = scopedReview?.conflictedPaths;
+    const delta =
+      scopedAllowlist && scopedAllowlist.length > 0
+        ? { ...rawDelta, files: [...scopedAllowlist] }
+        : rawDelta;
 
     // 3. Build the in-process charter naming the agent's sidecar write target.
     //    #1155: the agent writes the *candidate* path; the engine reads it and
@@ -158,6 +199,9 @@ export class ReviewExecutor implements ReviewExecutorLike {
     //    verification-framed: `buildVerificationPrompt` output is fed into the
     //    charter — NOT discarded (#1126/#1161, FR-005 / INV-C3). Round 1 keeps
     //    the whole-PR profile (data-model "Round-1 special case").
+    //    A scoped round with a prior artifact passes BOTH `diffWindow` and
+    //    `verification` — the charter then names the resolution window AND the
+    //    still-open prior findings to confirm.
     const sidecarRelPath = getReviewCandidateRelPath(workflowId);
     const verification = priorRound
       ? {
@@ -343,6 +387,9 @@ export class ReviewExecutor implements ReviewExecutorLike {
     const verdict = computeVerdict(merged, blockingSeverity);
 
     // 10. Stamp the commit reviewed (INV-C2 — the next round's delta base).
+    //     On a scoped round HEAD is the resolution merge commit the re-arm
+    //     checked out (`reviewScope.headSha`), so the next round's delta starts
+    //     AFTER the upstream merge and never re-spans it.
     const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
 
     // 11. Persist the engine-authoritative artifact atomically (round advances
@@ -358,6 +405,14 @@ export class ReviewExecutor implements ReviewExecutorLike {
       lastReviewedCommitSha,
       remediationCount: priorRound?.remediationCount ?? 0,
       markedReadyByEngine: priorRound?.markedReadyByEngine ?? false,
+      // Mark the supplied scope consumed (whether it was applied this round or
+      // already recorded on the prior) so it is never re-applied; carry any
+      // prior marker forward when no scope was supplied.
+      ...(reviewScope !== undefined
+        ? { consumedReviewScopeHeadSha: reviewScope.headSha }
+        : priorRound?.consumedReviewScopeHeadSha !== undefined
+          ? { consumedReviewScopeHeadSha: priorRound.consumedReviewScopeHeadSha }
+          : {}),
     });
 
     // 12. Clear the candidate so it cannot be re-ingested on a later round.

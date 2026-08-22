@@ -121,6 +121,7 @@ function makeGithub(
     getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
     getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
     getIssue: vi.fn(async () => ({ labels: [...labels] })),
+    getIssueComments: vi.fn().mockResolvedValue([]),
     addIssueComment,
     removeLabels,
     addLabels,

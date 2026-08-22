@@ -55,6 +55,7 @@ const mockGitHub = {
   listOpenPullRequests: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
+  stageFiles: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn(),
@@ -1847,6 +1848,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       untracked: [],
     });
     mockGitHub.stageAll = vi.fn().mockResolvedValue(undefined);
+    mockGitHub.stageFiles = vi.fn().mockResolvedValue(undefined);
     mockGitHub.commit = vi.fn().mockResolvedValue(undefined);
     mockGitHub.push = vi.fn().mockResolvedValue(undefined);
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
@@ -1967,15 +1969,15 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(prompt).toContain('Do NOT resolve any review threads');
 
     // Verify changes were staged, committed, and pushed
-    expect(mockGitHub.stageAll).toHaveBeenCalled();
+    expect(mockGitHub.stageFiles).toHaveBeenCalled();
     expect(mockGitHub.commit).toHaveBeenCalledWith(
-      expect.stringContaining('Address PR #100 review feedback'),
+      expect.stringContaining('Address PR #100 review feedback'), expect.any(Array),
     );
     expect(mockGitHub.commit).toHaveBeenCalledWith(
-      expect.stringContaining('issue #42'),
+      expect.stringContaining('issue #42'), expect.any(Array),
     );
     expect(mockGitHub.commit).toHaveBeenCalledWith(
-      expect.stringContaining('Co-Authored-By: Claude Sonnet 4.5'),
+      expect.stringContaining('Co-Authored-By: Claude Sonnet 4.5'), expect.any(Array),
     );
     expect(mockGitHub.push).toHaveBeenCalledWith('origin', '42-add-tests');
 
@@ -2302,7 +2304,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     await handler.handle(queueItem, '/tmp/workspace/test-org/test-repo');
 
     // Should not commit or push
-    expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+    expect(mockGitHub.stageFiles).not.toHaveBeenCalled();
     expect(mockGitHub.commit).not.toHaveBeenCalled();
     expect(mockGitHub.push).not.toHaveBeenCalled();
 

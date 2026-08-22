@@ -1,13 +1,15 @@
 // #1154 SC-004 (FR-005): the "Remediation limit reached" gate-body comment is
-// marker-deduped. On a resume/re-pause cycle where the same cap gate fires again,
-// the hidden `REMEDIATION_LIMIT_MARKER` already present in `listPrCommentBodies`
-// suppresses a second `addIssueComment`. Once the marker is gone (fresh PR / cleared
-// history), a genuinely new cap pause posts the comment once more.
+// marker-deduped. The comment is posted to the ISSUE (`addIssueComment`), so the
+// dedupe MUST read the issue's comments (`getIssueComments`) — the original
+// implementation read PR comments (`listPrCommentBodies(prNumber)`), never found
+// the marker, and re-posted on every re-park. On a resume/re-pause cycle where
+// the same cap gate fires again, the hidden `REMEDIATION_LIMIT_MARKER` already
+// present in the issue comments suppresses a second `addIssueComment`. Once the
+// marker is gone (cleared history), a genuinely new cap pause posts once more.
 //
 // Drives PhaseLoop.executeLoop to the #1128 remediation-cap gate (rc >= max &&
 // verdict === 'changes-required') so the real posting/dedupe path in phase-loop.ts
-// runs. Unlike the cap harness, `getPrNumber()` returns a real PR number so the
-// `listPrCommentBodies` marker grep is exercised.
+// runs.
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +20,7 @@ import type { WorkerContext, Logger, WorkflowPhase, PhaseResult } from '../types
 import { getPhaseSequence } from '../types.js';
 import type { WorkerConfig } from '../config.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
-import type { FindingsArtifact } from '../review-findings-artifact.js';
+import type { ReviewArtifact, Severity } from '../review-artifact.js';
 import {
   bumpRemediationCount,
   readReviewArtifactSync,
@@ -75,22 +77,17 @@ function makeScriptedReviewExecutor(checkoutPath: string) {
 
 function makeFindingsReader(
   checkoutPath: string,
-): (context: WorkerContext, round: number) => Promise<FindingsArtifact | null> {
+): (context: WorkerContext) => Promise<{ artifact: ReviewArtifact; blockingSeverity: Severity } | null> {
   return async () => {
     const ra = readReviewArtifactSync(checkoutPath, WORKFLOW_ID);
     if (!ra) return null;
-    return {
-      verdict: ra.verdict,
-      findings: ra.findings.map((f, idx) => ({
-        marker: `finding-${idx}`,
-        text: f.title,
-        severity: 'blocking' as const,
-      })),
-    };
+    // Live seam shape (#1161): the canonical artifact (round lives in `ra.round`)
+    // plus the blocking severity used for the poster's render projection.
+    return { artifact: ra, blockingSeverity: 'critical' };
   };
 }
 
-function baseDeps(prCommentBodies: string[]): PhaseLoopDeps {
+function baseDeps(prNumber: number | undefined = PR_NUMBER): PhaseLoopDeps {
   return {
     labelManager: {
       onPhaseStart: vi.fn().mockResolvedValue(undefined),
@@ -121,7 +118,7 @@ function baseDeps(prCommentBodies: string[]): PhaseLoopDeps {
     } as any,
     prManager: {
       commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
-      getPrNumber: vi.fn().mockReturnValue(PR_NUMBER),
+      getPrNumber: vi.fn().mockReturnValue(prNumber),
       convertToDraftIfEngineMarkedReady: vi.fn().mockResolvedValue(undefined),
       markReadyForReview: vi.fn().mockResolvedValue(undefined),
     } as any,
@@ -130,7 +127,7 @@ function baseDeps(prCommentBodies: string[]): PhaseLoopDeps {
 
 function capContext(
   checkoutPath: string,
-  prCommentBodies: string[],
+  issueCommentBodies: string[],
   addIssueComment: ReturnType<typeof vi.fn>,
 ): WorkerContext {
   return {
@@ -153,7 +150,12 @@ function capContext(
       getIssue: vi.fn().mockResolvedValue({ labels: [], state: 'open' }),
       addIssueComment,
       removeLabels: vi.fn().mockResolvedValue(undefined),
-      listPrCommentBodies: vi.fn().mockResolvedValue(prCommentBodies),
+      // ISSUE-side read — the surface the dedupe must consult.
+      getIssueComments: vi.fn().mockResolvedValue(
+        issueCommentBodies.map((body, idx) => ({ id: idx + 1, body, author: 'bot', created_at: '', updated_at: '' })),
+      ),
+      // PR-side read — must NOT be consulted (wrong object; see header).
+      listPrCommentBodies: vi.fn().mockResolvedValue([]),
     } as any,
     logger: mockLogger,
     signal: new AbortController().signal,
@@ -224,12 +226,12 @@ describe('PhaseLoop remediation-limit comment dedupe (#1154 SC-004 / FR-005)', (
     vi.clearAllMocks();
   });
 
-  it('suppresses a second comment when the marker is already present on the PR', async () => {
+  it('suppresses a second comment when the marker is already present in the ISSUE comments', async () => {
     await seedCappedState(checkoutPath);
     const addIssueComment = vi.fn().mockResolvedValue(undefined);
-    // A prior cap pause already posted the marked comment.
+    // A prior cap pause already posted the marked comment on the issue.
     const priorComment = `${REMEDIATION_LIMIT_MARKER}\n## Remediation limit reached\n...`;
-    const deps = baseDeps([priorComment]);
+    const deps = baseDeps();
     wireExecutors(deps, checkoutPath);
     deps.settings = { workflows: { [WORKFLOW]: { maxRemediations: MAX } } } as OrchestratorSettings;
 
@@ -240,20 +242,22 @@ describe('PhaseLoop remediation-limit comment dedupe (#1154 SC-004 / FR-005)', (
     // Re-parked at the same cap gate.
     expect(result.completed).toBe(false);
     expect(result.gateHit).toBe(true);
-    // The marker grep found the prior comment → no duplicate posted.
-    expect(ctx.github.listPrCommentBodies).toHaveBeenCalledWith(OWNER, REPO, PR_NUMBER);
+    // The marker grep read the ISSUE comments (the object the comment is posted
+    // to) and found the prior comment → no duplicate posted.
+    expect(ctx.github.getIssueComments).toHaveBeenCalledWith(OWNER, REPO, ISSUE);
+    expect(ctx.github.listPrCommentBodies).not.toHaveBeenCalled();
     expect(addIssueComment).not.toHaveBeenCalled();
   });
 
-  it('posts the comment once when no marker is present on the PR', async () => {
+  it('posts the comment once when no marker is present in the issue comments', async () => {
     await seedCappedState(checkoutPath);
     const addIssueComment = vi.fn().mockResolvedValue(undefined);
-    // Fresh PR history — marker absent.
-    const deps = baseDeps([]);
+    // Fresh issue history — marker absent.
+    const deps = baseDeps();
     wireExecutors(deps, checkoutPath);
     deps.settings = { workflows: { [WORKFLOW]: { maxRemediations: MAX } } } as OrchestratorSettings;
 
-    const ctx = capContext(checkoutPath, [], addIssueComment);
+    const ctx = capContext(checkoutPath, ['unrelated chatter'], addIssueComment);
     const sequence = getPhaseSequence(WORKFLOW, true) as WorkflowPhase[];
     const result = await phaseLoop.executeLoop(ctx, capConfig(), deps, sequence);
 
@@ -264,5 +268,23 @@ describe('PhaseLoop remediation-limit comment dedupe (#1154 SC-004 / FR-005)', (
     const body = addIssueComment.mock.calls[0][3] as string;
     expect(body).toContain(REMEDIATION_LIMIT_MARKER);
     expect(body).toContain('src/cap.ts:12');
+  });
+
+  it('still dedupes when no PR exists (getPrNumber() undefined)', async () => {
+    await seedCappedState(checkoutPath);
+    const addIssueComment = vi.fn().mockResolvedValue(undefined);
+    const priorComment = `${REMEDIATION_LIMIT_MARKER}\n## Remediation limit reached\n...`;
+    const deps = baseDeps(undefined);
+    wireExecutors(deps, checkoutPath);
+    deps.settings = { workflows: { [WORKFLOW]: { maxRemediations: MAX } } } as OrchestratorSettings;
+
+    const ctx = capContext(checkoutPath, [priorComment], addIssueComment);
+    const sequence = getPhaseSequence(WORKFLOW, true) as WorkflowPhase[];
+    const result = await phaseLoop.executeLoop(ctx, capConfig(), deps, sequence);
+
+    expect(result.completed).toBe(false);
+    expect(result.gateHit).toBe(true);
+    expect(ctx.github.getIssueComments).toHaveBeenCalledWith(OWNER, REPO, ISSUE);
+    expect(addIssueComment).not.toHaveBeenCalled();
   });
 });

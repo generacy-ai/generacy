@@ -5,7 +5,10 @@ import {
   EXCLUDED_PATH_PREFIXES,
   EXCLUDED_EXACT_PATHS,
   ENGINE_SIDECAR_PREFIXES,
+  ENGINE_STATE_DIR,
   isEngineSidecar,
+  engineSidecarCleanExcludes,
+  isCollapsedEngineStateDir,
   isProductFile,
   resolveBaseRef,
   computeProductDiff,
@@ -54,6 +57,49 @@ describe('ENGINE_SIDECAR_PREFIXES / isEngineSidecar', () => {
   it('does NOT match ordinary product paths', () => {
     expect(isEngineSidecar('packages/orchestrator/src/worker/phase-loop.ts')).toBe(false);
     expect(isEngineSidecar('README.md')).toBe(false);
+  });
+});
+
+// #1162 follow-up: the cross-run checkout reset must spare the same sidecars
+// the staging filter refuses to commit — derived from the same prefix list.
+describe('engineSidecarCleanExcludes', () => {
+  it('yields one `<prefix>*` git-clean exclude per sidecar prefix, in order', () => {
+    expect(engineSidecarCleanExcludes()).toEqual([
+      '.generacy/review-findings-*',
+      '.generacy/review-candidate-*',
+      '.generacy/pause-context-*',
+      '.generacy/external-feedback-*',
+      '.generacy/workflow-state-*',
+    ]);
+    expect(engineSidecarCleanExcludes()).toEqual(
+      ENGINE_SIDECAR_PREFIXES.map((p) => `${p}*`),
+    );
+  });
+
+  it('every prefix lives under ENGINE_STATE_DIR', () => {
+    for (const prefix of ENGINE_SIDECAR_PREFIXES) {
+      expect(prefix.startsWith(`${ENGINE_STATE_DIR}/`)).toBe(true);
+    }
+  });
+});
+
+describe('isCollapsedEngineStateDir', () => {
+  it('matches a bare .generacy directory entry with or without trailing slash', () => {
+    expect(isCollapsedEngineStateDir('.generacy/')).toBe(true);
+    expect(isCollapsedEngineStateDir('.generacy')).toBe(true);
+  });
+
+  it('does NOT match files under .generacy or look-alike paths', () => {
+    expect(isCollapsedEngineStateDir('.generacy/config.yaml')).toBe(false);
+    expect(isCollapsedEngineStateDir('.generacy/review-findings-x.json')).toBe(false);
+    expect(isCollapsedEngineStateDir('.generacyx')).toBe(false);
+    expect(isCollapsedEngineStateDir('foo/.generacy/')).toBe(false);
+    expect(isCollapsedEngineStateDir('README.md')).toBe(false);
+  });
+
+  it('is disjoint from isEngineSidecar (a collapsed dir is not itself a sidecar)', () => {
+    expect(isEngineSidecar('.generacy/')).toBe(false);
+    expect(isEngineSidecar('.generacy')).toBe(false);
   });
 });
 
