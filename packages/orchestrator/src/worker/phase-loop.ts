@@ -1782,13 +1782,39 @@ export class PhaseLoop {
         return { results, completed: false, lastPhase: phase, gateHit: true };
       }
 
+      // `completed:review` must mean "review reached a CLEAN verdict", not
+      // merely "the review phase executed". A `changes-required` verdict means
+      // the loop is about to remediate + re-review, so granting completed:review
+      // here would (a) misreport progress (cockpit STAGE_COMPLETE_PIPELINE_ORDER
+      // treats it as a stage-complete marker) and (b) let a label-derived resume
+      // resolve straight past the open review into `validate` (the merge-conflict
+      // path in claude-cli-worker documents exactly this trap). Read the verdict
+      // up front so the grant can be gated on it. Verdict is strictly
+      // `clean` | `changes-required`, so `!== 'clean'` aligns with the
+      // remediateTrigger and on-remediation-limit gate, both of which key on the
+      // sidecar — never on this label — so withholding the label is safe.
+      const reviewArtifactRead =
+        phase === 'review' && result.success && deps.readFindingsArtifact
+          ? await deps.readFindingsArtifact(context)
+          : null;
+
       // 6b. #958 FR-008 — grant `completed:<phase>` only after every gate
       // evaluation returned "skip" (either not active, or already satisfied).
       // The pre-#958 placement (before gate check) meant any code path that
       // skipped the gate left the advance-authorizing label in place. This
       // ordering also lets `LabelManager.onGateHit` drop its dead-code
       // retract-the-completed-label branch (T012).
-      await labelManager.onPhaseComplete(phase);
+      if (
+        phase === 'review'
+        && reviewArtifactRead
+        && reviewArtifactRead.artifact.verdict !== 'clean'
+      ) {
+        // Review ran but requires changes — clear phase:review WITHOUT granting
+        // completed:review; the clean grant lands on the converging pass.
+        await labelManager.onPhaseExecutedWithoutCompletion(phase);
+      } else {
+        await labelManager.onPhaseComplete(phase);
+      }
 
       // 7. Record phase completion time
       const phaseTs = phaseTimestamps.get(phase);
@@ -1823,7 +1849,9 @@ export class PhaseLoop {
         && deps.readFindingsArtifact
         && deps.reviewPoster
       ) {
-        const read = await deps.readFindingsArtifact(context);
+        // Reuse the artifact already read above for the completed:review gating
+        // (same canonical sidecar) instead of reading it a second time.
+        const read = reviewArtifactRead;
         if (read) {
           const { artifact, blockingSeverity } = read;
           await deps.reviewPoster.postRound(artifact.findings, artifact.round, blockingSeverity);

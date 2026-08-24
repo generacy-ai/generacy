@@ -74,6 +74,7 @@ function createMockDeps(github: GitHubClient): PhaseLoopDeps {
     labelManager: {
       onPhaseStart: vi.fn().mockResolvedValue(undefined),
       onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+      onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn().mockResolvedValue(undefined),
       onGateHit: vi.fn().mockResolvedValue(undefined),
     } as any,
@@ -301,6 +302,7 @@ describe('#1164 T009 — scoped-review remediation converges (SC-001/FR-002)', (
       labelManager: {
         onPhaseStart: vi.fn().mockResolvedValue(undefined),
         onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+        onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
         onError: vi.fn().mockResolvedValue(undefined),
         onGateHit: vi.fn().mockResolvedValue(undefined),
         onRepeatedError: vi.fn().mockResolvedValue(undefined),

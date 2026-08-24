@@ -53,6 +53,7 @@ function createMockDeps(labelSink: LabelSink): PhaseLoopDeps {
     labelManager: {
       onPhaseStart: vi.fn().mockResolvedValue(undefined),
       onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+      onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn().mockResolvedValue(undefined),
       onGateHit: vi.fn(async (_phase: WorkflowPhase, gateLabel: string) => {
         labelSink.seen.push(gateLabel);

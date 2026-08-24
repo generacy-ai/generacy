@@ -113,6 +113,7 @@ function createDeps(
           phaseStarts.push(phase);
         }),
         onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+        onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
         onError,
         onRepeatedError,
         onGateHit: vi.fn().mockResolvedValue(undefined),
