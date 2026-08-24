@@ -10,6 +10,7 @@ import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, deriveFindingId, computeVerdict, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
 import { waitForCiGreen } from './ci-merge-readiness.js';
+import { evaluateTasksMd, type TasksMdEvaluation } from './tasks-md-fallback.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -185,6 +186,15 @@ export interface PhaseLoopDeps {
    * falls back to the built-in per-workflow default when absent.
    */
   settings?: OrchestratorSettings | null;
+  /**
+   * #1187: tasks.md safety-net evaluator. When the implement phase succeeds
+   * without emitting a `SPECKIT_IMPLEMENT_PARTIAL` sentinel
+   * (`implementResult === undefined`), the loop calls this to decide whether
+   * unchecked tasks remain and a partial `implementResult` should be
+   * synthesized to re-enter implement. Defaults to the FS-backed
+   * {@link evaluateTasksMd}; injectable for tests.
+   */
+  evaluateTasksMd?: (context: WorkerContext) => TasksMdEvaluation;
 }
 
 /**
@@ -867,6 +877,39 @@ export class PhaseLoop {
           this.logger.info({ sessionId: result.sessionId, phase }, 'Captured initial session ID for conversation reuse');
         }
         currentSessionId = result.sessionId;
+      }
+
+      // 3b-bis. tasks.md safety net (#1187): the agent finished the implement
+      // phase without emitting a `SPECKIT_IMPLEMENT_PARTIAL` sentinel. Parse the
+      // workflow's tasks.md and, when unchecked tasks remain, synthesize a
+      // partial `implementResult` so the increment block below drives re-entry
+      // exactly as the sentinel path would. Fires only when the sentinel is
+      // absent, so sentinel-present runs are byte-identical (SC-005).
+      if (phase === 'implement' && result.success && result.implementResult === undefined) {
+        const evalResult = (deps.evaluateTasksMd ?? evaluateTasksMd)(context);
+        if (evalResult.kind === 'incomplete') {
+          result.implementResult = {
+            partial: true,
+            tasks_remaining: evalResult.unchecked,
+            tasks_completed: evalResult.checked,
+            tasks_total: evalResult.total,
+          };
+          this.logger.info(
+            {
+              phase,
+              issueNumber: context.item.issueNumber,
+              tasksRemaining: evalResult.unchecked,
+              tasksTotal: evalResult.total,
+            },
+            'tasks.md safety net: unchecked tasks remain, re-entering implement',
+          );
+        } else if (evalResult.kind === 'unreadable') {
+          this.logger.info(
+            { phase, reason: evalResult.reason, issueNumber: context.item.issueNumber },
+            'tasks.md safety net: advancing (fallback source unavailable)',
+          );
+        }
+        // 'complete' → no-op → the increment block below is skipped → advance.
       }
 
       // 3c. Increment boundary: re-invoke implement with a fresh session if partial

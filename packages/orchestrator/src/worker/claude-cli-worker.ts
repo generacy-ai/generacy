@@ -32,6 +32,7 @@ import {
   readReviewArtifact,
   clearReviewArtifact,
 } from './review-artifact.js';
+import { evaluateTasksMd } from './tasks-md-fallback.js';
 import { parseExternalFeedback } from './pr-feedback-parser.js';
 import { writeExternalFeedbackSeed } from './external-feedback-seed.js';
 import { resolveExternalFeedbackThreads } from './external-feedback-resolver.js';
@@ -985,6 +986,8 @@ export class ClaudeCliWorker {
         reviewExecutor,
         remediateExecutor,
         settings: orchSettings,
+        // #1187: tasks.md safety net — on by default (correctness fix, no flag).
+        evaluateTasksMd,
         remediateTrigger: (ctx) =>
           readReviewArtifactSync(
             ctx.checkoutPath,
