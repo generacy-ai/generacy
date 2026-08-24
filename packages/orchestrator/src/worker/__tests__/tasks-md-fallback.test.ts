@@ -72,6 +72,65 @@ describe('countTasks grammar matrix (FR-007)', () => {
   });
 });
 
+describe('countTasks heading grammar matrix (SC-002)', () => {
+  it('counts an unchecked `### T001 Description` heading', () => {
+    expect(countTasks('### T001 Description')).toEqual({ unchecked: 1, checked: 0, total: 1 });
+  });
+
+  it('counts a checked `### T001 [DONE] Description` heading', () => {
+    expect(countTasks('### T001 [DONE] Description')).toEqual({
+      unchecked: 0,
+      checked: 1,
+      total: 1,
+    });
+  });
+
+  it('counts `[DONE]` at any heading level 1–6', () => {
+    const content = ['# T001 [DONE]', '## T002 [DONE]', '###### T003 [DONE]'].join('\n');
+    expect(countTasks(content)).toEqual({ unchecked: 0, checked: 3, total: 3 });
+  });
+
+  it('treats `[DONE]` after the title as unchecked (Q2=B strict)', () => {
+    expect(countTasks('### T001 Description [DONE]')).toEqual({
+      unchecked: 1,
+      checked: 0,
+      total: 1,
+    });
+  });
+
+  it('treats a `[DONE]` mid-title as unchecked (Q2=B strict)', () => {
+    expect(countTasks('### T005 Verify [DONE] rendering')).toEqual({
+      unchecked: 1,
+      checked: 0,
+      total: 1,
+    });
+  });
+
+  it('rejects a range/summary heading (hyphen boundary, Q3=A)', () => {
+    expect(countTasks('### T001-T026 remaining')).toEqual({ unchecked: 0, checked: 0, total: 0 });
+  });
+
+  it('rejects en-dash and em-dash range headings (Q3=A)', () => {
+    expect(countTasks('### T001–T026 remaining')).toEqual({ unchecked: 0, checked: 0, total: 0 });
+    expect(countTasks('### T001—T026 remaining')).toEqual({ unchecked: 0, checked: 0, total: 0 });
+  });
+
+  it('does not count non-anchored headings that merely mention a task ID', () => {
+    const content = ['### Phase 3.1: T012', '### Task T001', '### Notes on T001'].join('\n');
+    expect(countTasks(content)).toEqual({ unchecked: 0, checked: 0, total: 0 });
+  });
+
+  it('sums a mixed checkbox + heading file (FR-003)', () => {
+    const content = [
+      '- [x] T001 checkbox done',
+      '- [ ] T002 checkbox remaining',
+      '### T003 [DONE] heading done',
+      '### T004 heading remaining',
+    ].join('\n');
+    expect(countTasks(content)).toEqual({ unchecked: 2, checked: 2, total: 4 });
+  });
+});
+
 describe('evaluateTasksMd classification matrix', () => {
   let checkoutPath: string;
 
@@ -104,6 +163,22 @@ describe('evaluateTasksMd classification matrix', () => {
     const result = evaluateTasksMd(contextFor(checkoutPath, 42));
 
     expect(result).toEqual({ kind: 'complete', unchecked: 0, checked: 2, total: 2 });
+  });
+
+  it('classifies a heading-grammar tasks.md with unfinished work as incomplete (SC-001)', async () => {
+    await writeTasksMd(checkoutPath, '42-feature', '### T001 Description\n### T002 Another');
+
+    const result = evaluateTasksMd(contextFor(checkoutPath, 42));
+
+    expect(result).toEqual({ kind: 'incomplete', unchecked: 2, checked: 0, total: 2 });
+  });
+
+  it('classifies an all-DONE heading-grammar tasks.md as complete', async () => {
+    await writeTasksMd(checkoutPath, '42-feature', '### T001 [DONE] Description');
+
+    const result = evaluateTasksMd(contextFor(checkoutPath, 42));
+
+    expect(result).toEqual({ kind: 'complete', unchecked: 0, checked: 1, total: 1 });
   });
 
   it('classifies a tasks.md with zero task lines as complete (Q4=A)', async () => {

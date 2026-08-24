@@ -908,8 +908,15 @@ export class PhaseLoop {
             { phase, reason: evalResult.reason, issueNumber: context.item.issueNumber },
             'tasks.md safety net: advancing (fallback source unavailable)',
           );
+        } else if (evalResult.kind === 'complete' && evalResult.total === 0) {
+          // FR-006: distinguish "no task lines recognized in either grammar" from
+          // a legitimate all-checked advance. All-checked (total > 0) stays silent.
+          this.logger.info(
+            { phase, issueNumber: context.item.issueNumber },
+            'tasks.md safety net: advancing — no task lines recognized in either grammar',
+          );
         }
-        // 'complete' → no-op → the increment block below is skipped → advance.
+        // 'complete' with total > 0 → no-op → the increment block below is skipped → advance.
       }
 
       // 3c. Increment boundary: re-invoke implement with a fresh session if partial
