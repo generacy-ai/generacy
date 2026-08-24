@@ -484,6 +484,138 @@ describe('PhaseLoop - implement partial re-invocation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// tasks.md safety net (#1187) — engine-side fallback when the sentinel is absent
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - tasks.md safety net (#1187)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('re-enters implement when no sentinel is emitted but tasks.md is incomplete (SC-001)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    // No implementResult (no sentinel) on either call. Fresh object per call so the
+    // synthesis block's mutation does not leak into the next spawn's result.
+    (deps.cliSpawner.spawnPhase as any).mockImplementation(async () =>
+      makeSuccessResult('implement'),
+    );
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+
+    // First evaluation: 5 remaining ⇒ re-enter. Second: complete ⇒ advance.
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValueOnce({ kind: 'incomplete', unchecked: 5, checked: 5, total: 10 })
+      .mockReturnValueOnce({ kind: 'complete', unchecked: 0, checked: 10, total: 10 });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  it('escalates via the no-progress guard when tasks.md remains equally incomplete (SC-004)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockImplementation(async () =>
+      makeSuccessResult('implement'),
+    );
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+
+    // Both evaluations report the same 10 remaining — no progress.
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValue({ kind: 'incomplete', unchecked: 10, checked: 0, total: 10 });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(false);
+    expect(result.lastPhase).toBe('implement');
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+  });
+
+  it('advances and grants completed:implement when tasks.md is complete (SC-003)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValue({ kind: 'complete', unchecked: 0, checked: 10, total: 10 });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(1);
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  it('advances (fail-open) when the fallback source is unreadable (SC-003)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValue({ kind: 'unreadable', reason: 'no spec dir for issue 329' });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(1);
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  it('does not consult the fallback when a partial sentinel is present (SC-005)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(8, 5))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValue({ kind: 'complete', unchecked: 0, checked: 13, total: 13 });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    // Sentinel drove the first increment; the fallback is only consulted on the
+    // second (no-sentinel) call, where it reports complete and the phase advances.
+    expect(deps.evaluateTasksMd).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Job lifecycle events
 // ---------------------------------------------------------------------------
 
