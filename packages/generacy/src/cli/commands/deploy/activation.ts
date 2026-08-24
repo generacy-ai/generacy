@@ -26,6 +26,7 @@ export interface ActivateOptions {
   logger: ActivationLogger;
   maxCycles?: number;
   maxRetries?: number;
+  projectId?: string;
 }
 
 /**
@@ -38,6 +39,7 @@ export async function runActivation(options: ActivateOptions): Promise<Activatio
     logger,
     maxCycles = DEFAULT_MAX_CYCLES,
     maxRetries,
+    projectId,
   } = options;
 
   const httpClient = new NativeHttpClient();
@@ -49,7 +51,7 @@ export async function runActivation(options: ActivateOptions): Promise<Activatio
       const deviceCode = await initDeviceFlow(cloudUrl, httpClient, logger, maxRetries);
 
       // Open browser for user approval
-      const activationUrl = buildActivationUrl(deviceCode.verification_uri, deviceCode.user_code, process.env['GENERACY_PROJECT_ID']);
+      const activationUrl = buildActivationUrl(deviceCode.verification_uri, deviceCode.user_code, projectId);
       console.log(`\nOpen this URL to approve the deployment:`);
       console.log(`  ${activationUrl}`);
       console.log(`\nEnter code: ${deviceCode.user_code}`);

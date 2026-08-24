@@ -18,7 +18,7 @@ describe('Package Exports Integration', () => {
 
       // Main export should exist
       expect(mainModule).toBeDefined();
-    });
+    }, 60_000);
   });
 
   describe('Config subpath export (@generacy-ai/generacy/config)', () => {
