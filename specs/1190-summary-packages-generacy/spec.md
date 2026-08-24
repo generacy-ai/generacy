@@ -125,30 +125,41 @@ pnpm vitest run tests/unit/deploy/activation.test.ts                            
 - **FR-002**: The activation test suite MUST include one deterministic case asserting
   the projectId-free URL AND one deterministic case asserting the URL with a fixed,
   test-controlled projectId, so both branches of `buildActivationUrl` are exercised.
-- **FR-003** (preferred): `runActivation` SHOULD NOT read `process.env['GENERACY_PROJECT_ID']`
-  internally. The `projectId` SHOULD be threaded in through `runActivation`'s options
-  object, and `process.env['GENERACY_PROJECT_ID']` resolved once at the CLI entry point
+- **FR-003** (decided — Clarification Q1=A): `runActivation` MUST NOT read
+  `process.env['GENERACY_PROJECT_ID']` internally. The `projectId` MUST be threaded in
+  through `runActivation`'s options object (`ActivateOptions`), and
+  `process.env['GENERACY_PROJECT_ID']` resolved once at the CLI entry point
   (`packages/generacy/src/cli/commands/deploy/index.ts`). This makes `runActivation`
-  pure with respect to its inputs.
+  pure with respect to its inputs. Tests MUST pass `projectId` explicitly rather than
+  relying on ambient env.
 - **FR-004**: Any test added/modified MUST restore environment state after itself
   (e.g. `vi.unstubAllEnvs()` in `afterEach`) so it cannot leak into sibling tests.
 - **FR-005**: A sibling audit MUST be performed: grep `packages/generacy` tests for
   assertions over values derived from `process.env` without `vi.stubEnv`/isolation, and
-  fix any additional env-leak occurrences found. (The truncated second failure in the
-  #1187 run — `exports.test.ts:17` — MUST be investigated; if it is env-leak class it
-  is in scope, if it is a separate build/import concern it MUST be documented as
-  out-of-scope with rationale.)
+  fix any additional env-leak occurrences found.
+- **FR-006** (decided — Clarification Q2=B): The truncated second failure in the #1187
+  run — `__tests__/exports.test.ts:17` — is **in scope** and MUST be fixed in this PR.
+  Its classification is corrected: it is **not** a build/dist-availability concern. With
+  `dist/index.js` present, the case fails with a **10 s vitest timeout** while the 19
+  sibling subpath-export tests pass, so the package is built and resolvable. A plain-node
+  `import('./dist/index.js')` completes in ~812 ms; the failure is **load-sensitive**
+  because resolving the package *main* barrel drags the whole CLI tree through vitest's
+  transform pipeline (~6 s transform) — green on an idle machine, reliably red on a busy
+  worker (the same env/load divergence class as the primary bug). The fix MUST use the
+  smallest option that holds and state the choice in the PR description: give the case an
+  explicit generous timeout (e.g. `60_000`), point the assertion at `dist/index.js`
+  directly to avoid transforming the source tree, or drop the main-entry smoke test (the
+  19 subpath tests already cover the consumer surface).
 
 ### Non-Functional / Constraints
 
 - **NFR-001**: No production behavior change to the activation URL itself — the URL
   produced for a given `verificationUri` / `userCode` / `projectId` MUST remain
   byte-identical to today.
-- **NFR-002**: Changeset — if only test files under `packages/generacy/**` change, the
-  changeset gate is test-only exempt and no `.changeset/*.md` is required. If FR-003 is
-  taken (production `src/` change in `activation.ts` + `index.ts`), a
-  `.changeset/1190-*.md` MUST be added: `@generacy-ai/generacy` **patch**
-  (`workflow:speckit-bugfix`; internal refactor, no public export change).
+- **NFR-002**: Changeset — FR-003 is taken (Clarification Q1=A), so the production
+  `src/` change in `activation.ts` + `index.ts` requires a `.changeset/1190-*.md`:
+  `@generacy-ai/generacy` **patch** (`workflow:speckit-bugfix`; internal refactor, no
+  public export change).
 
 ## Success Criteria
 
@@ -162,6 +173,9 @@ pnpm vitest run tests/unit/deploy/activation.test.ts                            
   without isolating that variable (verified by the FR-005 audit).
 - **SC-005**: `pnpm --filter @generacy-ai/generacy test` passes with and without
   `GENERACY_PROJECT_ID` set.
+- **SC-006**: `npx vitest run __tests__/exports.test.ts` (from `packages/generacy`)
+  passes reliably, including under load — the main-entry case no longer times out
+  (FR-006). The full #1187-class validate no longer has two failing test files.
 
 ## Out of Scope
 
@@ -169,8 +183,6 @@ pnpm vitest run tests/unit/deploy/activation.test.ts                            
 - Adding a CI job that runs the cluster's validate command with cluster-like env vars
   (issue suggestion #4) — a valuable divergence-surfacing follow-up, but broader than
   this defect fix. Recommend filing separately.
-- Fixing `exports.test.ts:17` if it is determined to be a build/import concern rather
-  than an env-leak (document the determination either way).
 
 ## Assumptions
 
