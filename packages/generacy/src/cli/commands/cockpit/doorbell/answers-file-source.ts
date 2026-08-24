@@ -407,17 +407,22 @@ export class AnswersFileSource {
     if (this.fsWatchIterator == null) return;
     const iter = this.fsWatchIterator;
     this.fsWatchIterator = null;
-    try {
-      await iter.return?.(undefined);
-    } catch {
+    // Closing the iterator releases the underlying FSWatcher handle so the
+    // event loop can drain. We must NOT await either the return() call or the
+    // watch loop: Node's fsPromises.watch async iterator does not interrupt a
+    // pending iter.next() when return() is called — it only settles once the
+    // next filesystem event arrives. Awaiting here therefore wedges graceful
+    // shutdown indefinitely on a quiescent directory. `this.running` is already
+    // false by the time we get here, so the detached loop exits cleanly the
+    // moment its pending next() resolves (or stays parked harmlessly on a
+    // closed watcher). Fire-and-forget both.
+    void Promise.resolve(iter.return?.(undefined)).catch(() => {
       /* ignore */
-    }
+    });
     if (this.fsWatchLoop != null) {
-      try {
-        await this.fsWatchLoop;
-      } catch {
+      void this.fsWatchLoop.catch(() => {
         /* ignore */
-      }
+      });
       this.fsWatchLoop = null;
     }
   }
