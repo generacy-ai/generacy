@@ -193,6 +193,7 @@ describe('#1128 — SC-006 remediate timeout integration', () => {
       labelManager: {
         onPhaseStart: vi.fn().mockResolvedValue(undefined),
         onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+        onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
         onError: vi.fn().mockResolvedValue(undefined),
         onGateHit: vi.fn().mockResolvedValue(undefined),
       } as any,

@@ -21,6 +21,7 @@ function createMockDeps(): PhaseLoopDeps {
     labelManager: {
       onPhaseStart: vi.fn().mockResolvedValue(undefined),
       onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+      onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn().mockResolvedValue(undefined),
       onGateHit: vi.fn().mockResolvedValue(undefined),
     } as any,

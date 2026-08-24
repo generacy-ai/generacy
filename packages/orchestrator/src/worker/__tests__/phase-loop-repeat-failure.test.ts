@@ -71,6 +71,7 @@ function createDeps(): DepsHandles {
       labelManager: {
         onPhaseStart: vi.fn().mockResolvedValue(undefined),
         onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+        onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
         onError,
         onRepeatedError,
         onGateHit: vi.fn().mockResolvedValue(undefined),
