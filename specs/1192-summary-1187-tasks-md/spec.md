@@ -96,12 +96,12 @@ distinct log signal,
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `countTasks` MUST recognize heading-grammar task lines matching `^#{1,6}[ \t]+T\d+\b` in addition to the existing checkbox grammar. | P1 | Same file, `tasks-md-fallback.ts`. |
-| FR-002 | A heading task line is **checked** when it carries a `[DONE]` marker after the task ID, **unchecked** otherwise. | P1 | Mirrors implement prompt `:141-142`. |
+| FR-001 | `countTasks` MUST recognize heading-grammar task lines matching an anchored regex where the `T\d+` ID immediately follows the heading marker + whitespace, in addition to the existing checkbox grammar. The boundary MUST reject range/summary follow-ons (`### T001-T026 remaining` and en-dash/em-dash variants) which the bare `\b` boundary would otherwise count. Use `^#{1,6}[ \t]+T\d+(?![-–—]\s*T?\d)\b`. Non-anchored shapes (`### Phase 3.1: T012`, `### Task T001`) are deliberately NOT tasks (clarify Q3=A). | P1 | Same file, `tasks-md-fallback.ts`. |
+| FR-002 | A heading task line is **checked** only when a `[DONE]` marker appears **immediately after the task-ID token** (`### T001 [DONE] ...`), **unchecked** otherwise (clarify Q2=B — strict position; a `[DONE]` elsewhere on the line does NOT count as done). | P1 | Mirrors implement prompt `:141-142` verbatim. |
 | FR-003 | Both grammars MUST feed the same `{unchecked, checked, total}` tally; mixed-grammar files sum both. | P1 | Keeps `tasks_remaining` comparable across increments. |
 | FR-004 | Existing checkbox counting behavior MUST remain unchanged (unchecked on a single-space capture, checked on `x`/`X`). | P1 | Additive only. |
 | FR-005 | A resolved `tasks.md` with zero task lines of either grammar MUST still classify as `complete` and advance (fail-open, preserving #1187 FR-004). | P2 | Do not turn task-less into `unreadable`. |
-| FR-006 | The zero-task-lines-of-either-grammar case SHOULD emit a distinct log signal, separable from an ordinary all-complete file. | P2 | Enough signal to tell "no tasks" from "tasks I could not recognize"; does not change classification. |
+| FR-006 | The zero-task-lines-of-either-grammar case SHOULD emit a distinct log signal, separable from an ordinary all-complete file. The signal is a log-only line in the phase-loop `complete` branch (`phase-loop.ts:906-913`) keyed on `total === 0`; the `evaluateTasksMd` evaluator stays pure/loggerless and the `TasksMdEvaluation` shape is unchanged (clarify Q1=A). | P2 | Confinement relaxes by exactly one log-only line in phase-loop.ts; classification unchanged. |
 | FR-007 | `evaluateTasksMd`'s `unreadable` paths (missing/ambiguous spec dir, unreadable `tasks.md`) MUST be unchanged. | P1 | No regression to fail-open resolution. |
 
 ## Success Criteria
@@ -109,7 +109,7 @@ distinct log signal,
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
 | SC-001 | Heading-format unfinished `tasks.md` classifies `incomplete` | 100% | `evaluateTasksMd` unit test on a `### T001`-only fixture returns `kind: 'incomplete'`. |
-| SC-002 | Grammar matrix parity | pass | `countTasks` tests: `### T001` → unchecked; `### T001 [DONE]` → checked; mixed file → summed. |
+| SC-002 | Grammar matrix parity | pass | `countTasks` tests: `### T001` → unchecked; `### T001 [DONE]` → checked; mixed file → summed; `### T001 Description [DONE]` (marker at line end) → unchecked (Q2=B); `### T001-T026 remaining` + en-dash/em-dash variants → zero tasks (Q3=A boundary). |
 | SC-003 | No regression on checkbox grammar | 100% | Existing `tasks-md-fallback.test.ts` checkbox matrix passes unchanged. |
 | SC-004 | Task-less story still advances | pass | A zero-task-line-of-either-grammar `tasks.md` returns `complete` (fail-open). |
 
@@ -120,8 +120,10 @@ distinct log signal,
   prompt's mark-complete step).
 - `[DONE]` detection is case-sensitive matching the prompt's literal `[DONE]`.
 - The fix is confined to `packages/orchestrator/src/worker/tasks-md-fallback.ts`
-  and its test file; the phase-loop increment wiring (#1187) is unchanged and
-  consumes the same `TasksMdEvaluation` shape.
+  and its test file, **plus one log-only line** in the phase-loop `complete`
+  branch (`phase-loop.ts:906-913`) for FR-006 (clarify Q1=A). The phase-loop
+  increment wiring (#1187) is otherwise unchanged and consumes the same
+  `TasksMdEvaluation` shape.
 - Applies to both `workflow:speckit-feature` and `workflow:speckit-bugfix`, since
   the fallback is workflow-agnostic.
 
