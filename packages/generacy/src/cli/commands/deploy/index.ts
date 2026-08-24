@@ -37,7 +37,7 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   // 4. Run device-flow activation
   const cloudUrl = resolveApiUrl(options.cloudUrl);
   logger.info('Starting device-flow activation...');
-  const activation = await runActivation({ cloudUrl, logger });
+  const activation = await runActivation({ cloudUrl, logger, projectId: process.env['GENERACY_PROJECT_ID'] });
 
   // 5. Fetch launch config from cloud
   logger.info('Fetching cluster configuration from cloud...');
