@@ -614,16 +614,32 @@ export function parseAnswersFromComments(
     const { stripped } = stripQuotedLines(comment.body);
     const body = stripped;
 
-    // FR-004 discriminator (#949 Q5→C): the colon here is DELIBERATE and
-    // load-bearing. It separates engine-authored question comments (which
-    // use `### Q1: Topic` shape, per `formatComment` above) from cockpit
-    // answer-block delimiters (which use `### Q1` — NO colon). Removing the
-    // colon or folding this pattern into `QN_OPENER_PATTERN` would cause the
-    // `TRANSITION_WITH_QUESTION_HEADINGS` warn (in the caller) to fire on
-    // every legitimate cockpit integration — a 100%-rate false positive.
-    // Keep colon-required. Computed on the quote-stripped body so a quoted
-    // `> ### Q1:` heading does not read as a live transition signal.
-    const sourceHadQuestionHeadings = /(?:^|\n)###\s+Q\d+:/.test(body);
+    // FR-004 discriminator (#949 Q5→C, widened by #1189): what separates an
+    // engine/agent-authored QUESTION comment from a cockpit ANSWER-block
+    // delimiter is whether the `Q<n>` heading line carries trailing content.
+    //
+    // A cockpit answer block writes a BARE heading and puts the answer on the
+    // following line:
+    //     ### Q1
+    //     **Answer:** B
+    // A question comment always names the topic on the heading line itself:
+    //     ### Q1: Topic          (engine `formatComment` shape)
+    //     ### Q1 — Topic         (agent-composed shape — #1189)
+    //
+    // The original pattern required a COLON, so the em-dash shape fell on the
+    // answer-block side of the discriminator: the guard never fired, the
+    // question comment was parsed as answers, and each question's own topic
+    // was written into `clarifications.md` as its answer — silently skipping
+    // the `on-questions` gate (#1189).
+    //
+    // Requiring "at least one non-whitespace character after `Q<n>`" keeps the
+    // no-false-positive property the colon was protecting: a bare `### Q1`
+    // (optionally followed by trailing spaces) still does NOT match, so every
+    // legitimate cockpit integration is unaffected. Computed on the
+    // quote-stripped body so a quoted `> ### Q1:` heading does not read as a
+    // live transition signal.
+    const sourceHadQuestionHeadings =
+      /(?:^|\n)#{1,6}[ \t]+(?:\*\*)?Q\d+(?:\*\*)?[ \t]*[^\s]/.test(body);
 
     // FR-005: opener is line-anchored via `(?:^|\n)` inside QN_OPENER_PATTERN
     // so mid-prose references like "as per Q1: yes" do not capture as
