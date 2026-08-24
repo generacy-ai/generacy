@@ -247,6 +247,37 @@ export class LabelManager {
   }
 
   /**
+   * Called when a phase executed successfully but must NOT be marked complete —
+   * i.e. it will loop rather than advance. Removes the `phase:<current>`
+   * in-progress label WITHOUT granting `completed:<current>`.
+   *
+   * The `review` phase uses this when its verdict is `changes-required`: the
+   * phase ran (so `phase:review` must go), but review has not reached a clean
+   * verdict, so `completed:review` must not be granted. Granting it would both
+   * misreport progress (cockpit `STAGE_COMPLETE_PIPELINE_ORDER` treats
+   * `completed:review` as a stage-complete marker) and let a label-derived
+   * resume resolve straight past the open review into `validate`
+   * (claude-cli-worker's merge-conflict path documents exactly this trap). The
+   * `completed:review` grant instead happens on the converging clean pass via
+   * `onPhaseComplete`. The cap/remediate/verdict logic is sidecar-based
+   * (`verdict` / `remediationCount` / `round`) and never keys on this label, so
+   * withholding it is safe.
+   */
+  async onPhaseExecutedWithoutCompletion(phase: WorkflowPhase): Promise<void> {
+    const phaseLabel = `phase:${phase}`;
+    await this.retryWithBackoff(async () => {
+      await this.ensureRepoLabelsExist();
+
+      this.logger.info(
+        { phase, issue: this.issueNumber },
+        `Phase executed without completion: removing ${phaseLabel} (no completed:${phase} — verdict not clean)`,
+      );
+
+      await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
+    }, { site: 'phase-executed-no-completion', labelOp: `removeLabels([${phaseLabel}])` });
+  }
+
+  /**
    * Called when a gate is hit and the workflow must pause for human review.
    *
    * Adds `waiting-for:<gate>` and `agent:paused` labels, removes `phase:<current>`.

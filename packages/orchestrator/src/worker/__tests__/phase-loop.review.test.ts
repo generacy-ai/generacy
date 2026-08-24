@@ -49,6 +49,7 @@ function createMockDeps(): PhaseLoopDeps {
     labelManager: {
       onPhaseStart: vi.fn().mockResolvedValue(undefined),
       onPhaseComplete: vi.fn().mockResolvedValue(undefined),
+      onPhaseExecutedWithoutCompletion: vi.fn().mockResolvedValue(undefined),
       onError: vi.fn().mockResolvedValue(undefined),
       onGateHit: vi.fn().mockResolvedValue(undefined),
     } as any,
@@ -242,6 +243,43 @@ describe('#1124 — review executor verdict seam + remediation cap', () => {
     expect(phaseStartOrder(deps)).toEqual(['implement', 'review', 'remediate', 'review', 'validate']);
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('remediate');
     expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
+  });
+
+  it('completed:review is gated on a clean verdict: a changes-required pass clears phase:review without granting completed:review, and only the converging clean pass grants it', async () => {
+    // round 1 → changes-required (loops through remediate), round 2 → clean.
+    const { executor } = makeReviewExecutor(checkoutPath, (r) => (r === 1 ? 'changes-required' : 'clean'));
+    deps.reviewExecutor = executor;
+    deps.remediateTrigger = remediateTrigger;
+    // Wire the production-shaped findings reader so the gate activates (it is a
+    // no-op when unwired — the pre-fix fallback).
+    deps.readFindingsArtifact = async (ctx) => {
+      const artifact = readReviewArtifactSync(
+        ctx.checkoutPath,
+        `${ctx.item.owner}/${ctx.item.repo}#${ctx.item.issueNumber}`,
+      );
+      return artifact ? { artifact, blockingSeverity: 'major' as const } : null;
+    };
+    const config = createConfig({ reviewPhaseEnabled: true });
+    const sequence = getPhaseSequence('speckit-feature', true) as WorkflowPhase[];
+
+    const result = await phaseLoop.executeLoop(createMockContext(checkoutPath), config, deps, sequence);
+
+    expect(result.completed).toBe(true);
+    expect(phaseStartOrder(deps)).toEqual(['implement', 'review', 'remediate', 'review', 'validate']);
+
+    const completeCalls = (deps.labelManager.onPhaseComplete as any).mock.calls.map((c: unknown[]) => c[0]);
+    const noCompleteCalls = (deps.labelManager.onPhaseExecutedWithoutCompletion as any).mock.calls.map(
+      (c: unknown[]) => c[0],
+    );
+
+    // The changes-required (round 1) review executed WITHOUT completion...
+    expect(noCompleteCalls).toEqual(['review']);
+    // ...and completed:review is granted exactly once — on the clean round-2 pass.
+    expect(completeCalls.filter((p: WorkflowPhase) => p === 'review')).toEqual(['review']);
+    // Sibling phases still complete normally.
+    expect(completeCalls).toContain('implement');
+    expect(completeCalls).toContain('remediate');
+    expect(completeCalls).toContain('validate');
   });
 
   it('FR-011: exhausting maxRemediations fires the on-remediation-limit gate and pauses', async () => {
