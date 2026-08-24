@@ -10,6 +10,15 @@ export default defineConfig({
     // filter has real diff paths on disk — they are not real suites and must
     // never be collected.
     exclude: ['**/*.integration.test.ts', '**/fixtures/**'],
+    // This suite is large (300+ files); a reused fork worker accumulates heap
+    // across the files it runs and crashes at Node's default ~4 GB old-space
+    // limit. Raise the per-worker limit so the run completes. (Heap is a ceiling,
+    // not a reservation — actual usage stays far below this.)
+    poolOptions: {
+      forks: {
+        execArgv: ['--max-old-space-size=8192'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

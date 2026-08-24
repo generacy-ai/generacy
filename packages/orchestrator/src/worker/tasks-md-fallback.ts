@@ -24,9 +24,33 @@ export type TasksMdEvaluation =
 const CHECKBOX_LINE = /^[ \t]*[-*+] \[( |x|X)\]/;
 
 /**
- * Pure checkbox counter over `tasks.md` content. Splits on newlines and tests
- * each line against {@link CHECKBOX_LINE}; a single-space capture is unchecked,
- * `x`/`X` is checked. Non-matching lines are ignored. Idempotent, no I/O.
+ * Matches a heading task line: `#{1,6}` + whitespace + a task ID (`T\d+`)
+ * immediately after the heading marker. The `(?![-–—]\s*T?\d)` boundary rejects
+ * range/summary follow-ons (`### T001-T026 remaining`, en-/em-dash variants) so
+ * they count as zero tasks (FR-001, Q3=A).
+ */
+const HEADING_TASK = /^#{1,6}[ \t]+T\d+(?![-–—]\s*T?\d)\b/;
+
+/**
+ * A heading task is checked only when `[DONE]` appears immediately after the
+ * task-ID token (`### T001 [DONE] ...`). Strict, case-sensitive (FR-002, Q2=B) —
+ * a `[DONE]` mid-title or at line-end leaves the task unchecked.
+ */
+const HEADING_DONE = /^#{1,6}[ \t]+T\d+[ \t]+\[DONE\]/;
+
+/**
+ * Pure task counter over `tasks.md` content, recognizing both task grammars the
+ * implement prompt emits:
+ *
+ * - **Checkbox** (`- [ ] T001` / `- [x] T001`): single-space capture is
+ *   unchecked, `x`/`X` is checked.
+ * - **Heading** (`### T001` / `### T001 [DONE]`): a {@link HEADING_TASK} match is
+ *   checked iff {@link HEADING_DONE} also matches (strict `[DONE]` position).
+ *
+ * Each line is tested against the checkbox grammar first and skipped on match
+ * (byte-identical checkbox behavior, FR-004); otherwise it is tested against the
+ * heading grammar. Both grammars increment the same counters, so mixed-grammar
+ * files sum (FR-003). Non-matching lines are ignored. Idempotent, no I/O.
  */
 export function countTasks(content: string): {
   unchecked: number;
@@ -38,13 +62,21 @@ export function countTasks(content: string): {
 
   for (const line of content.split('\n')) {
     const match = CHECKBOX_LINE.exec(line);
-    if (match === null) {
+    if (match !== null) {
+      if (match[1] === ' ') {
+        unchecked += 1;
+      } else {
+        checked += 1;
+      }
       continue;
     }
-    if (match[1] === ' ') {
-      unchecked += 1;
-    } else {
-      checked += 1;
+
+    if (HEADING_TASK.test(line)) {
+      if (HEADING_DONE.test(line)) {
+        checked += 1;
+      } else {
+        unchecked += 1;
+      }
     }
   }
 

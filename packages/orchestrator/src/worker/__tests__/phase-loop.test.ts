@@ -613,6 +613,70 @@ describe('PhaseLoop - tasks.md safety net (#1187)', () => {
     // second (no-sentinel) call, where it reports complete and the phase advances.
     expect(deps.evaluateTasksMd).toHaveBeenCalledTimes(1);
   });
+
+  it('logs the FR-006 signal when tasks.md has zero recognized task lines', async () => {
+    const captured: { info: { msg?: string }[] } = { info: [] };
+    const capturingLogger = {
+      info: (_obj: any, msg?: string) => {
+        captured.info.push({ msg });
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      child: () => capturingLogger,
+    } as unknown as Logger;
+    const phaseLoopWithLog = new PhaseLoop(capturingLogger);
+
+    const context = createMockContext('implement');
+    const config = createConfig();
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValue({ kind: 'complete', unchecked: 0, checked: 0, total: 0 });
+
+    const result = await phaseLoopWithLog.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(
+      captured.info.some((c) => c.msg?.includes('no task lines recognized in either grammar')),
+    ).toBe(true);
+  });
+
+  it('stays silent (no FR-006 signal) when tasks.md is all-checked (total > 0)', async () => {
+    const captured: { info: { msg?: string }[] } = { info: [] };
+    const capturingLogger = {
+      info: (_obj: any, msg?: string) => {
+        captured.info.push({ msg });
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      child: () => capturingLogger,
+    } as unknown as Logger;
+    const phaseLoopWithLog = new PhaseLoop(capturingLogger);
+
+    const context = createMockContext('implement');
+    const config = createConfig();
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      prUrl: null,
+      hasChanges: true,
+    });
+    deps.evaluateTasksMd = vi
+      .fn()
+      .mockReturnValue({ kind: 'complete', unchecked: 0, checked: 10, total: 10 });
+
+    const result = await phaseLoopWithLog.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(
+      captured.info.some((c) => c.msg?.includes('no task lines recognized in either grammar')),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
