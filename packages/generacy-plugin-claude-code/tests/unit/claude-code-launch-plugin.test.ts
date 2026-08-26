@@ -1,11 +1,21 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { ClaudeCodeLaunchPlugin } from '../../src/launch/claude-code-launch-plugin.js';
+import {
+  GatewayRouteUnavailableError,
+  _resetGatewayProvisionCacheForTests,
+} from '../../src/launch/route.js';
 import type {
   PhaseIntent,
   PrFeedbackIntent,
   MergeConflictIntent,
+  ReviewIntent,
+  RemediateIntent,
   ConversationTurnIntent,
   InvokeIntent,
+  ClaudeCodeIntent,
 } from '../../src/launch/types.js';
 
 describe('ClaudeCodeLaunchPlugin', () => {
@@ -386,6 +396,130 @@ describe('ClaudeCodeLaunchPlugin', () => {
       expect(spec.args[modelIdx + 1]).toBe('opus-4-7');
       expect(spec.args[effortIdx + 1]).toBe('max');
       expect(spec.args[spec.args.length - 1]).toBe('resolve');
+    });
+  });
+
+  // ---- T006 / #1198 — per-builder gateway route matrix ----
+  //
+  // Each of the six model-bearing builders must:
+  //  - inject `CLAUDE_CONFIG_DIR` + stamp `route: 'gateway'` for a gateway
+  //    model (dir provisioned), leaving argv identical modulo the model string;
+  //  - return a byte-identical spec (no `env`, no `route`) for a subscription
+  //    model AND an absent model;
+  //  - throw `GatewayRouteUnavailableError` for a gateway model + unprovisioned
+  //    dir.
+  // `buildInvokeLaunch` carries no model and must never gain `route`/gateway env.
+  describe('gateway route injection (SC-002, SC-003, SC-004, FR-009)', () => {
+    // A gateway model is any provider-qualified id (contains `/`); a
+    // subscription model is a bare Anthropic id/alias.
+    const GATEWAY_MODEL = 'openai/gpt-5.5';
+    const SUBSCRIPTION_MODEL = 'opus';
+
+    // Builders keyed by name, each producing an intent for the given model.
+    const builders: ReadonlyArray<{
+      name: string;
+      make: (model?: string) => ClaudeCodeIntent;
+    }> = [
+      {
+        name: 'phase',
+        make: (model) => ({ kind: 'phase', phase: 'implement', prompt: 'p', model }),
+      },
+      {
+        name: 'pr-feedback',
+        make: (model) => ({ kind: 'pr-feedback', prNumber: 42, prompt: 'p', model }),
+      },
+      {
+        name: 'merge-conflict',
+        make: (model) => ({ kind: 'merge-conflict', issueNumber: 7, prompt: 'p', model }),
+      },
+      {
+        name: 'review',
+        make: (model) => ({ kind: 'review', issueNumber: 7, prompt: 'p', model }),
+      },
+      {
+        name: 'remediate',
+        make: (model) => ({ kind: 'remediate', issueNumber: 7, prompt: 'p', model }),
+      },
+      {
+        name: 'conversation-turn',
+        make: (model) => ({ kind: 'conversation-turn', message: 'm', skipPermissions: true, model }),
+      },
+    ];
+
+    let dir: string;
+
+    beforeEach(() => {
+      _resetGatewayProvisionCacheForTests();
+      dir = mkdtempSync(join(tmpdir(), 'gw-plugin-'));
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    for (const { name, make } of builders) {
+      describe(name, () => {
+        it('gateway model (provisioned dir) → CLAUDE_CONFIG_DIR + route, argv unchanged', () => {
+          writeFileSync(join(dir, 'settings.json'), '{}');
+          const gwPlugin = new ClaudeCodeLaunchPlugin({ gatewayConfigDir: dir });
+          const subPlugin = new ClaudeCodeLaunchPlugin({ gatewayConfigDir: dir });
+
+          const gatewaySpec = gwPlugin.buildLaunch(make(GATEWAY_MODEL));
+          const subscriptionSpec = subPlugin.buildLaunch(make(SUBSCRIPTION_MODEL));
+
+          expect(gatewaySpec.env).toEqual({ CLAUDE_CONFIG_DIR: dir });
+          expect(gatewaySpec.route).toBe('gateway');
+
+          // argv identical modulo the model string.
+          const normalize = (args: string[]) =>
+            args.map((a) => (a === GATEWAY_MODEL || a === SUBSCRIPTION_MODEL ? '<MODEL>' : a));
+          expect(normalize(gatewaySpec.args)).toEqual(normalize(subscriptionSpec.args));
+          expect(gatewaySpec.command).toBe(subscriptionSpec.command);
+          expect(gatewaySpec.stdioProfile).toBe(subscriptionSpec.stdioProfile);
+        });
+
+        it('subscription model → byte-identical spec (no env, no route)', () => {
+          writeFileSync(join(dir, 'settings.json'), '{}');
+          const gwPlugin = new ClaudeCodeLaunchPlugin({ gatewayConfigDir: dir });
+          const bare = new ClaudeCodeLaunchPlugin();
+
+          const spec = gwPlugin.buildLaunch(make(SUBSCRIPTION_MODEL));
+          const preChangeSpec = bare.buildLaunch(make(SUBSCRIPTION_MODEL));
+
+          expect(spec).toEqual(preChangeSpec);
+          expect(spec).not.toHaveProperty('env');
+          expect(spec).not.toHaveProperty('route');
+        });
+
+        it('undefined model → byte-identical spec (no env, no route)', () => {
+          writeFileSync(join(dir, 'settings.json'), '{}');
+          const gwPlugin = new ClaudeCodeLaunchPlugin({ gatewayConfigDir: dir });
+          const bare = new ClaudeCodeLaunchPlugin();
+
+          const spec = gwPlugin.buildLaunch(make(undefined));
+          const preChangeSpec = bare.buildLaunch(make(undefined));
+
+          expect(spec).toEqual(preChangeSpec);
+          expect(spec).not.toHaveProperty('env');
+          expect(spec).not.toHaveProperty('route');
+        });
+
+        it('gateway model + unprovisioned dir → throws GatewayRouteUnavailableError', () => {
+          const gwPlugin = new ClaudeCodeLaunchPlugin({ gatewayConfigDir: dir });
+          expect(() => gwPlugin.buildLaunch(make(GATEWAY_MODEL))).toThrow(
+            GatewayRouteUnavailableError,
+          );
+        });
+      });
+    }
+
+    it('buildInvokeLaunch never gains route or gateway env, even with a provisioned dir', () => {
+      writeFileSync(join(dir, 'settings.json'), '{}');
+      const gwPlugin = new ClaudeCodeLaunchPlugin({ gatewayConfigDir: dir });
+      const intent: InvokeIntent = { kind: 'invoke', command: '/speckit:specify x' };
+      const spec = gwPlugin.buildLaunch(intent);
+      expect(spec).not.toHaveProperty('env');
+      expect(spec).not.toHaveProperty('route');
     });
   });
 });
