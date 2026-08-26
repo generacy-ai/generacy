@@ -33,9 +33,12 @@ through the shared `resolveRoute` helper from `@generacy-ai/generacy-plugin-clau
   endpoint, maps 401 → fail, other non-200 → fail, network error → fail, and returns
   detail. The new `llm-gateway` check mirrors this shape but *skips* when the URL is
   absent rather than failing.
-- `resolveRoute` is a shared helper being introduced by the LLM-gateway epic
-  (generacy-ai/generacy#1197). It maps a model string to a route (`anthropic` |
-  `gateway`). Both consumers depend on it; this issue does not define it.
+- `resolveRoute` is a shared helper owned by sibling issue generacy-ai/generacy#1198
+  under the LLM-gateway epic (generacy-ai/generacy#1197). It maps a model string to a
+  route (`anthropic` | `gateway`). Both consumers depend on it; this issue does not
+  define it. **Hard dependency (clarification Q1=A)**: if #1198 has not shipped
+  `resolveRoute` when implementation starts, this issue blocks/requeues — it must NOT
+  define the helper itself or ship a local interim classifier.
 - The `cockpit.auto.agents.*` config surface is also part of the epic; the warning
   walk must cover it when it exists.
 
@@ -69,11 +72,18 @@ before running workloads.
 
 **Acceptance Criteria**:
 - [ ] `GENERACY_LLM_GATEWAY_URL` unset → check status `skip` (not `fail`).
+- [ ] URL set + `GENERACY_LLM_GATEWAY_TOKEN` missing/empty → status `fail` with a
+  token-related suggestion, **without issuing the probe** (Q4=A, mirrors
+  `anthropic-key`'s missing-key branch).
 - [ ] URL set + endpoint returns 200 with the cluster token → status `pass`; reports
   the gateway's model list when the response provides one.
 - [ ] URL set + endpoint returns 401 → status `fail` with a token-related suggestion.
+- [ ] URL set + `GET /v1/models` returns 404/405 → fall back to a 1-token
+  `POST /v1/messages` probe (Q3=C); the fallback's response maps per FR-010.
 - [ ] URL set + connection refused / network error → status `fail` with a
   reachability suggestion and the underlying error in detail.
+- [ ] Env vars are read from `context.envVars` first, falling back to `process.env`
+  when the key is absent from the env file (Q2=C).
 
 ## Functional Requirements
 
@@ -85,27 +95,34 @@ before running workloads.
 | FR-004 | Warning text names the config path and the model string. | P1 | Consistent with effort-warning format. |
 | FR-005 | Validate exit code stays 0 on gateway warnings-only. | P1 | Matches effort-warning behavior. |
 | FR-006 | New `llm-gateway` doctor check registered in the doctor check registry. | P1 | New file under `checks/`. |
-| FR-007 | `llm-gateway` check returns `skip` when `GENERACY_LLM_GATEWAY_URL` is unset. | P1 | Not `fail`. |
-| FR-008 | When URL set: issue `GET <url>/v1/models` (or a 1-token `POST /v1/messages` with a configured model) with the cluster token; 200 → `pass`. | P1 | Reachability + auth probe. |
+| FR-007 | `llm-gateway` check returns `skip` when `GENERACY_LLM_GATEWAY_URL` is unset. | P1 | Not `fail`. Env read: `context.envVars` first, `process.env` fallback (Q2=C). |
+| FR-008 | When URL set: issue `GET <url>/v1/models` with the cluster token; on 404/405 fall back to a 1-token `POST /v1/messages` probe using a configured gateway-routed model; 200 → `pass`. | P1 | Q3=C. Auth header: `Authorization: Bearer <token>` (Q5=A). |
 | FR-009 | On `pass`, report the gateway's model list when the response includes one. | P2 | Best-effort; absence is not a failure. |
-| FR-010 | Map 401 → `fail` (token), other non-200 → `fail` (HTTP status in detail), network/timeout error → `fail` (reachability). | P1 | Mirror `anthropic-key` error mapping. |
-| FR-011 | Both consumers import `resolveRoute` from `@generacy-ai/generacy-plugin-claude-code`. | P1 | Single source of route classification. |
+| FR-010 | Map 401 → `fail` (token), other non-200 (except the FR-008 404/405 fallback trigger) → `fail` (HTTP status in detail), network/timeout error → `fail` (reachability). | P1 | Mirror `anthropic-key` error mapping. |
+| FR-011 | Both consumers import `resolveRoute` from `@generacy-ai/generacy-plugin-claude-code`. | P1 | Single source of route classification. Hard dependency on generacy#1198 (Q1=A) — block/requeue until it ships. |
+| FR-012 | URL set + `GENERACY_LLM_GATEWAY_TOKEN` missing/empty → `fail` with a token-related suggestion, without issuing the probe. | P1 | Q4=A; mirrors `anthropic-key`'s missing-key branch. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
 | SC-001 | Warning matrix coverage | gateway+no-URL → warn; gateway+URL → silent; anthropic → silent | Unit tests over `collectGatewayWarnings` (or extended `loadConfigWithWarnings`). |
-| SC-002 | Doctor check behavior against stubbed HTTP | 200 → pass; 401 → fail; ECONNREFUSED → fail; URL unset → skip | Unit tests with a stubbed `fetch`/endpoint. |
+| SC-002 | Doctor check behavior against stubbed HTTP | 200 → pass; 401 → fail; ECONNREFUSED → fail; URL unset → skip; URL set + token missing → fail without probe; 404/405 on `/v1/models` → `POST /v1/messages` fallback | Unit tests with a stubbed `fetch`/endpoint. |
 | SC-003 | Build + test suite | green | `pnpm -r build` and package tests pass. |
 | SC-004 | Config path fidelity | warning names the exact `orchestrator.agents...` / `cockpit.auto.agents...` path | Assertion in warning-matrix tests. |
 
 ## Assumptions
 
-- `resolveRoute` from `@generacy-ai/generacy-plugin-claude-code` exists (or lands with
-  this work under the epic) and returns a discriminable `gateway` vs `anthropic` route.
-- The gateway speaks the Anthropic-style `/v1/models` and/or `/v1/messages` API and
-  authenticates with `GENERACY_LLM_GATEWAY_TOKEN` as the cluster token.
+- `resolveRoute` from `@generacy-ai/generacy-plugin-claude-code` is shipped by sibling
+  issue generacy-ai/generacy#1198 and returns a discriminable `gateway` vs `anthropic`
+  route. This issue blocks/requeues until it lands (Q1=A) — it never defines the
+  helper itself.
+- The gateway guarantees the Anthropic-style `POST /v1/messages` endpoint;
+  `GET /v1/models` is optional (discovery gated behind
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` in the Claude Code gateway contract),
+  hence the Q3=C fallback. Authentication is `Authorization: Bearer
+  <GENERACY_LLM_GATEWAY_TOKEN>` (Q5=A) — the same header real launches send via
+  `ANTHROPIC_AUTH_TOKEN`, so a green check predicts a working spawn.
 - The `cockpit.auto.agents.*` config surface either exists or is optional; the walk
   must not crash when it is absent.
 - The validator reads gateway env from `process.env`, matching how the cluster
