@@ -57,8 +57,8 @@ An operator sets a gateway-shaped model on a cluster where the gateway config di
 **Acceptance Scenarios**:
 
 1. **Given** a gateway route and a missing `<gatewayConfigDir>/settings.json`, **When** a builder runs, **Then** it throws `GatewayRouteUnavailableError` whose message names the model, the gateway dir, and `GENERACY_LLM_GATEWAY_URL`.
-2. **Given** the check has run once for a process, **When** it runs again, **Then** the result is served from a per-process cache.
-3. **Given** the check previously found the dir missing (ENOENT) and the file later appears, **When** the check runs again, **Then** the cache is invalidated and the now-present `settings.json` is honored.
+2. **Given** the check has found `settings.json` present once, **When** it runs again in the same process, **Then** the positive result is served from a per-process cache (keyed per gateway dir path).
+3. **Given** the check previously found the file missing (ENOENT) and the file later appears, **When** the check runs again, **Then** the now-present `settings.json` is honored — negative results are never cached; the check re-stats on every gateway launch while missing.
 
 ### Edge Cases
 
@@ -73,18 +73,19 @@ An operator sets a gateway-shaped model on a cluster where the gateway config di
 ### Functional Requirements
 
 - **FR-001**: `@generacy-ai/generacy-plugin-claude-code` MUST export `resolveRoute(model?: string): 'subscription' | 'gateway'`, returning `'gateway'` iff `model` contains `/`, and `'subscription'` for everything else including `undefined`.
-- **FR-002**: `ClaudeCodeLaunchPlugin` MUST accept a `gatewayConfigDir` option, defaulting to `/home/node/.claude-gateway`, overridable via the `GENERACY_CLAUDE_GATEWAY_CONFIG_DIR` environment variable.
+- **FR-002**: `ClaudeCodeLaunchPlugin` MUST accept a `gatewayConfigDir` option resolved with precedence: explicit option > `GENERACY_CLAUDE_GATEWAY_CONFIG_DIR` environment variable > built-in default `/home/node/.claude-gateway`. The env var fills in only when the caller passes nothing (Clarification Q2).
 - **FR-003**: Every model-bearing builder — `buildPhaseLaunch`, `buildPrFeedbackLaunch`, `buildMergeConflictLaunch`, `buildReviewLaunch`, `buildRemediateLaunch`, `buildConversationTurnLaunch` — MUST return `env: { CLAUDE_CONFIG_DIR: <gatewayConfigDir> }` when the resolved route is `gateway`.
 - **FR-004**: Subscription-routed builders MUST return no `env` for the gateway config dir; their `LaunchSpec` MUST be byte-identical to the pre-change output.
 - **FR-005**: When the route is `gateway` and `<gatewayConfigDir>/settings.json` does not exist, the builder MUST throw a typed `GatewayRouteUnavailableError` whose message names the model, the gateway dir, and `GENERACY_LLM_GATEWAY_URL`.
-- **FR-006**: The `settings.json` existence check MUST be cached per process, with cache invalidation on the ENOENT→exists transition.
-- **FR-007**: `LaunchSpec` MUST gain an informational `route` field for logging and tests.
+- **FR-006**: The `settings.json` existence check MUST cache only the positive result per process (keyed per gateway dir path); while the file is missing, the check MUST re-stat on every gateway launch so provisioning is picked up immediately (Clarification Q3).
+- **FR-007**: `LaunchSpec` MUST gain an informational, optional `route` field set to `'gateway'` on gateway-routed launches only; subscription-routed (and `buildInvokeLaunch`) `LaunchSpec`s MUST omit the field entirely so strict deep-equal to pre-change output holds (Clarification Q1). Consumers doing route comparison (e.g. #1199 session invalidation) must call `resolveRoute(model)` directly rather than reading `LaunchSpec.route`.
 - **FR-008**: The `.generacy/config.yaml` agents schema MUST NOT change; `AgentEntrySchema.model` stays free-form.
+- **FR-009**: CLI arg construction MUST be identical across routes: the `provider/model` string passes verbatim via `--model` and `--effort` is still appended when set. Env injection (`CLAUDE_CONFIG_DIR`) is the only difference between routes (Clarification Q4).
 
 ### Key Entities
 
 - **Route**: `'subscription' | 'gateway'` — derived purely from the model string; determines whether the gateway config dir env is injected.
-- **LaunchSpec**: the structural launch descriptor (`command`, `args`, `env?`, `stdioProfile?`) gaining an informational `route` field.
+- **LaunchSpec**: the structural launch descriptor (`command`, `args`, `env?`, `stdioProfile?`) gaining an informational optional `route` field, present only on gateway-routed launches.
 - **GatewayRouteUnavailableError**: typed error surfaced when a gateway route is requested but the gateway config dir is not provisioned.
 
 ## Success Criteria *(mandatory)*
