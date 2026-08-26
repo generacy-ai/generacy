@@ -31,13 +31,23 @@ const WorkflowPhaseSchema = z.enum([
   'plan',
   'tasks',
   'implement',
+  'review',
   'validate',
+  'remediate',
 ]);
 
 export const PauseContextSchema = z.object({
   phase: WorkflowPhaseSchema,
   writtenAt: z.string(),
   issueRef: z.string(),
+  /**
+   * Merge-conflict resolution base/head SHAs (#1126 FR-007, read-side only).
+   * #1131 owns writing these on a merge-conflict re-arm; this feature only reads
+   * them to scope the re-review delta to just the resolution diff. Both optional
+   * and non-breaking — absent ⇒ the delta falls to last-reviewed then full-diff.
+   */
+  resolutionBaseSha: z.string().optional(),
+  resolutionHeadSha: z.string().optional(),
 });
 
 export type PauseContext = z.infer<typeof PauseContextSchema>;

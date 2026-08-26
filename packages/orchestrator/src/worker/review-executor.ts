@@ -1,0 +1,513 @@
+/**
+ * Review phase executor (#1124, FR-002/003/004/005/006/007).
+ *
+ * Replaces #1121's inert `runStubPhase('review')` with a real phase: build an
+ * in-process charter prompt (selected by `review.profile`), spawn the CLI via
+ * the new `review` launch intent, let the agent write a structured findings
+ * sidecar, then have the ENGINE Zod-validate the findings and RECOMPUTE the
+ * verdict. The agent-claimed verdict — if any — is ignored (FR-007), and no
+ * GitHub review state is ever written (the cluster account 422s on
+ * `REQUEST_CHANGES` on its own PR).
+ *
+ * Spawns via `agentLauncher.launch()` directly (mirroring
+ * `pr-feedback-handler.ts`), NOT `cli-spawner.spawnPhase` — the spawner
+ * type-excludes `review` by construction.
+ */
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import type { OrchestratorSettings } from '@generacy-ai/config';
+import type { ReviewIntent } from '@generacy-ai/generacy-plugin-claude-code';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import type { WorkerConfig } from './config.js';
+import {
+  resolveReviewLikeAgent,
+  resolvePhaseTimeoutMs,
+  resolveWorkflowOverrides,
+} from './config.js';
+import { buildLaunchCredentials } from './credentials-helper.js';
+import { warnIfEffortDropped } from './effort-mechanism-check.js';
+import { OutputCapture } from './output-capture.js';
+import { buildReviewCharter } from './review-charter.js';
+import {
+  clearReviewCandidate,
+  computeVerdict,
+  getReviewCandidateRelPath,
+  readCandidateFindings,
+  readReviewArtifact,
+  writeReviewArtifact,
+} from './review-artifact.js';
+import type { ReviewArtifact } from './review-artifact.js';
+import {
+  advanceArtifact,
+  composeVerificationInput,
+  computeReviewDelta,
+  buildVerificationPrompt,
+} from './review/index.js';
+import type { Logger, PhaseResult, WorkerContext } from './types.js';
+
+const execFileAsync = promisify(execFile);
+
+export interface ReviewExecutorDeps {
+  agentLauncher: AgentLauncher;
+  config: WorkerConfig;
+  settings: OrchestratorSettings | null | undefined;
+  logger: Logger;
+}
+
+/**
+ * The review-phase executor contract the phase loop depends on. Lets the loop
+ * accept either the real {@link ReviewExecutor} or the #1130
+ * `SeedAwareReviewExecutor` wrapper in the `deps.reviewExecutor` slot without a
+ * nominal-class coupling (private fields make the concrete classes
+ * non-interchangeable under structural typing).
+ */
+export interface ReviewExecutorLike {
+  execute(context: WorkerContext): Promise<PhaseResult>;
+}
+
+export class ReviewExecutor implements ReviewExecutorLike {
+  private readonly agentLauncher: AgentLauncher;
+  private readonly config: WorkerConfig;
+  private readonly settings: OrchestratorSettings | null | undefined;
+  private readonly logger: Logger;
+
+  constructor(deps: ReviewExecutorDeps) {
+    this.agentLauncher = deps.agentLauncher;
+    this.config = deps.config;
+    this.settings = deps.settings;
+    this.logger = deps.logger;
+  }
+
+  async execute(context: WorkerContext): Promise<PhaseResult> {
+    const startedAt = Date.now();
+    const { checkoutPath } = context;
+    const { owner, repo, issueNumber, workflowName } = context.item;
+    const workflowId = `${owner}/${repo}#${issueNumber}`;
+
+    // 1. Resolve review config (profile / blockingSeverity) for this workflow.
+    const { review } = resolveWorkflowOverrides(this.config, this.settings, workflowName);
+    const { profile, blockingSeverity } = review;
+
+    // 2. Determine the review round from any prior engine-written artifact.
+    //    Read BEFORE the reviewScope branch (#1164 FR-001) so scope usage can be
+    //    gated on whether THIS scope was already consumed.
+    const priorRound = await readReviewArtifact(checkoutPath, workflowId);
+    const round = (priorRound?.round ?? 0) + 1;
+
+    // #1131/#1164: resolution-scoped review, honored exactly once per scope. A
+    // merge-conflict re-arm supplies a fixed `reviewScope`; nothing clears it,
+    // so applying it on every round would pin each re-review to the original
+    // pre-remediation window (making the remediation commits invisible) and the
+    // same findings would re-report every round until the remediation cap.
+    //
+    // The #1164 gate was `!priorRound` — but on the real path conflicts surface
+    // at validate entry (`runPreValidateBaseMerge`), i.e. AFTER round 1 has
+    // persisted the sidecar, so the scoped review never ran and the re-review
+    // was a plain verification pass whose delta spanned the whole upstream
+    // base merge. Gate instead on "this scope not yet consumed": apply iff
+    // `reviewScope.headSha !== prior.consumedReviewScopeHeadSha`, then persist
+    // the headSha on the artifact (step 11) so round N+1 falls back to the
+    // standard #1126 delta (`lastReviewedCommitSha`..HEAD), which spans the
+    // remediation commits — preserving the #1164 cap-burn fix. With a prior
+    // artifact the scoped round is ALSO a verification pass (the still-open
+    // prior findings ride along in the charter, step 3).
+    //
+    // An empty scoped window with NO prior artifact short-circuits to a
+    // synthetic success (FR-011, SC-004) and lets the loop advance to
+    // `validate`. With a prior artifact it instead falls through to the normal
+    // verification pass (the scope is still recorded as consumed) — a
+    // short-circuit there would leave a `changes-required` prior untouched and
+    // re-trigger remediate every round. Absent scope ⇒ whole-PR review,
+    // byte-identical to pre-#1131 (FR-010).
+    const { reviewScope } = context;
+    const scopeAlreadyConsumed =
+      reviewScope !== undefined &&
+      priorRound?.consumedReviewScopeHeadSha === reviewScope.headSha;
+    let scopedReview = scopeAlreadyConsumed ? undefined : reviewScope;
+    if (scopeAlreadyConsumed) {
+      this.logger.info(
+        { headSha: reviewScope?.headSha, round, workflowId },
+        'Resolution-scoped review already consumed for this scope — falling back to the delta review',
+      );
+    }
+    if (scopedReview) {
+      const isEmpty = await this.isEmptyWindow(checkoutPath, scopedReview);
+      if (isEmpty && !priorRound) {
+        this.logger.info(
+          { baseSha: scopedReview.baseSha, headSha: scopedReview.headSha, workflowId },
+          'Resolution-scoped review window is empty — skipping review, advancing to validate',
+        );
+        return {
+          phase: 'review',
+          success: true,
+          exitCode: 0,
+          durationMs: Date.now() - startedAt,
+          output: [],
+        };
+      }
+      if (isEmpty) {
+        this.logger.info(
+          { baseSha: scopedReview.baseSha, headSha: scopedReview.headSha, round, workflowId },
+          'Resolution-scoped review window is empty with a prior artifact — running the delta verification pass instead',
+        );
+        scopedReview = undefined;
+      }
+    }
+
+    // 2b. Compute the delta window this re-review is scoped to (#1126/#1161,
+    //     FR-007). Round 1 (no prior) uses a round-0 stand-in so the delta falls
+    //     to the full-diff fallback; round >= 2 reads
+    //     `prior.lastReviewedCommitSha` (INV-C2). A supplied `reviewScope`
+    //     (#1131 merge-conflict re-arm) scopes the delta to the resolution range.
+    const priorForDelta: ReviewArtifact = priorRound ?? {
+      findings: [],
+      verdict: 'clean',
+      round: 0,
+      lastReviewedCommitSha: '',
+      remediationCount: 0,
+      markedReadyByEngine: false,
+    };
+    const prBaseRef = await this.resolvePrBaseRef(context);
+    const rawDelta = await computeReviewDelta({
+      github: context.github,
+      artifact: priorForDelta,
+      prBaseRef,
+      ...(scopedReview
+        ? {
+            pauseContext: {
+              resolutionBaseSha: scopedReview.baseSha,
+              resolutionHeadSha: scopedReview.headSha,
+            },
+          }
+        : {}),
+    });
+    // #1164 FR-003: when the scope carries a conflicted-path allowlist, the raw
+    // `baseSha..headSha` parent-1 diff also lists everything the merged-in base
+    // brought along. Restrict the delta to the allowlist so both the charter's
+    // file list and `advanceArtifact`'s evidence rule see only the files the
+    // agent was actually told to inspect.
+    const scopedAllowlist = scopedReview?.conflictedPaths;
+    const delta =
+      scopedAllowlist && scopedAllowlist.length > 0
+        ? { ...rawDelta, files: [...scopedAllowlist] }
+        : rawDelta;
+
+    // 3. Build the in-process charter naming the agent's sidecar write target.
+    //    #1155: the agent writes the *candidate* path; the engine reads it and
+    //    writes the authoritative artifact separately (INV-5).
+    //    Round >= 2 (a prior artifact exists) is delta-scoped and
+    //    verification-framed: `buildVerificationPrompt` output is fed into the
+    //    charter — NOT discarded (#1126/#1161, FR-005 / INV-C3). Round 1 keeps
+    //    the whole-PR profile (data-model "Round-1 special case").
+    //    A scoped round with a prior artifact passes BOTH `diffWindow` and
+    //    `verification` — the charter then names the resolution window AND the
+    //    still-open prior findings to confirm.
+    const sidecarRelPath = getReviewCandidateRelPath(workflowId);
+    const verification = priorRound
+      ? {
+          prompt: buildVerificationPrompt({
+            round: delta.round,
+            openFindings: composeVerificationInput(delta, priorRound).openFindings,
+            charter: 'verification' as const,
+          }),
+          deltaFiles: delta.files,
+        }
+      : undefined;
+    const charter = buildReviewCharter({
+      profile,
+      sidecarRelPath,
+      blockingSeverity,
+      round,
+      ...(scopedReview ? { diffWindow: scopedReview } : {}),
+      ...(verification ? { verification } : {}),
+    });
+
+    // 4. Resolve the agent for this review — prefer the `phases.review` tier and
+    //    fall back field-by-field to the `implement` agent so the same model that
+    //    wrote the code reviews it when unset (#1160 FR-005; mirrors pr-feedback #814).
+    const { provider, model, effort } = resolveReviewLikeAgent(
+      this.config,
+      workflowName,
+      'review',
+    );
+
+    warnIfEffortDropped(this.logger, {
+      provider,
+      effort,
+      context: { handler: 'review', workflowId, issueNumber },
+    });
+
+    const timeoutMs = resolvePhaseTimeoutMs(this.config, 'review');
+    this.logger.info(
+      { cwd: checkoutPath, timeoutMs, provider, model, effort, round, profile },
+      'Spawning Claude CLI for review phase',
+    );
+
+    // 5. Clear any stale candidate BEFORE spawning (#1155, INV D-3) so any
+    //    candidate present after the spawn was provably written this round — a
+    //    leftover from a crashed prior round can never be re-ingested.
+    await clearReviewCandidate(checkoutPath, workflowId);
+
+    // 5. Spawn via the launcher directly (NOT cli-spawner, which excludes review).
+    let child;
+    try {
+      const handle = await this.agentLauncher.launch({
+        intent: {
+          kind: 'review',
+          issueNumber,
+          prompt: charter,
+          ...(model !== undefined ? { model } : {}),
+          ...(effort !== undefined ? { effort } : {}),
+        } as ReviewIntent,
+        cwd: checkoutPath,
+        env: {},
+        credentials: buildLaunchCredentials(this.config.credentialRole),
+        provider,
+      });
+      child = handle.process;
+    } catch (error) {
+      this.logger.error(
+        { error: String(error), cwd: checkoutPath },
+        'Failed to spawn Claude CLI for review',
+      );
+      return {
+        phase: 'review',
+        success: false,
+        exitCode: -1,
+        durationMs: Date.now() - startedAt,
+        output: [],
+      };
+    }
+
+    // 6. Manage the child: capture output + SIGTERM→grace→SIGKILL timeout.
+    const outputCapture = new OutputCapture(workflowId, this.logger);
+
+    if (child.stdout) {
+      child.stdout.on('data', (data: Buffer | string) => {
+        outputCapture.processChunk(typeof data === 'string' ? data : data.toString('utf-8'));
+      });
+    }
+
+    let stderrBuffer = '';
+    if (child.stderr) {
+      child.stderr.on('data', (data: Buffer | string) => {
+        stderrBuffer += typeof data === 'string' ? data : data.toString('utf-8');
+      });
+    }
+
+    const timeoutTimer = setTimeout(() => {
+      this.logger.warn(
+        { pid: child.pid, timeoutMs },
+        'Review CLI timed out — sending SIGTERM',
+      );
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (child.pid) {
+          this.logger.warn(
+            { pid: child.pid, gracePeriodMs: this.config.shutdownGracePeriodMs },
+            'Grace period expired, sending SIGKILL',
+          );
+          child.kill('SIGKILL');
+        }
+      }, this.config.shutdownGracePeriodMs);
+    }, timeoutMs);
+
+    let exitCode: number | null;
+    try {
+      exitCode = await child.exitPromise;
+    } catch (error) {
+      clearTimeout(timeoutTimer);
+      outputCapture.flush();
+      this.logger.error(
+        { error: String(error) },
+        'Error waiting for review CLI process',
+      );
+      return {
+        phase: 'review',
+        success: false,
+        exitCode: -1,
+        durationMs: Date.now() - startedAt,
+        output: outputCapture.getOutput(),
+      };
+    }
+    clearTimeout(timeoutTimer);
+    outputCapture.flush();
+
+    if (stderrBuffer.trim()) {
+      this.logger.debug({ stderr: stderrBuffer.trim() }, 'Review CLI stderr output');
+    }
+
+    // 7. Read the agent-written candidate sidecar. `null` = no proof of review
+    //    (missing / unreadable / invalid) — a no-verdict round; `[]` = a genuine
+    //    "reviewed, zero findings" (#1155, FR-002).
+    const findings = await readCandidateFindings(checkoutPath, workflowId, round);
+
+    // 8. Post-exit gate (#1155, FR-001/FR-002). A non-zero exit is a phase
+    //    failure regardless of candidate; a missing/invalid candidate is a
+    //    no-verdict round even on exit 0 (Q1-A). In either case persist NOTHING
+    //    (Q3-A): any prior-round engine artifact — incl. `round` and
+    //    `remediationCount` — is left exactly as-is, so `round` does not advance
+    //    and repeated failures cannot burn the #1128 remediate cap.
+    if (exitCode !== 0 || findings === null) {
+      this.logger.warn(
+        { exitCode, round, hasCandidate: findings !== null, workflowId },
+        'Review phase failed — no fresh verdict; persisting nothing',
+      );
+      return {
+        phase: 'review',
+        success: false,
+        exitCode: exitCode ?? -1,
+        durationMs: Date.now() - startedAt,
+        output: outputCapture.getOutput(),
+      };
+    }
+
+    // 9. Success: exit 0 AND a fresh candidate this round (possibly `[]`).
+    //    Run the #1126 convergence merge (activated #1161, INV-C3/INV-C5). The
+    //    candidate carries `status: 'resolved'` for findings the agent confirms
+    //    the delta addressed and `status: 'open'` for still-open / new ones.
+    //    `advanceArtifact` transitions a prior open finding to `resolved` ONLY
+    //    when its file is in the delta AND the agent supplied a matching
+    //    resolution (evidence-based); an unaddressed prior finding is carried
+    //    forward unchanged (anti-vanish, SC-005), so a round-1 finding the
+    //    round-2 agent silently omits stays `open` and the verdict stays
+    //    `changes-required`. New findings are severity-filtered on round >= 2.
+    const reviewerAddressed = findings.filter((f) => f.status === 'resolved');
+    const reviewerNewFindings = findings.filter((f) => f.status === 'open');
+    const merged = advanceArtifact(
+      priorRound,
+      delta,
+      reviewerAddressed,
+      reviewerNewFindings,
+      blockingSeverity,
+    );
+
+    // 9b. Compute the verdict from the MERGED findings — ignore any agent claim
+    //     (FR-007). Single source (`computeVerdict`), single severity threshold.
+    const verdict = computeVerdict(merged, blockingSeverity);
+
+    // 10. Stamp the commit reviewed (INV-C2 — the next round's delta base).
+    //     On a scoped round HEAD is the resolution merge commit the re-arm
+    //     checked out (`reviewScope.headSha`), so the next round's delta starts
+    //     AFTER the upstream merge and never re-spans it.
+    const lastReviewedCommitSha = await context.github.getCurrentCommitSha();
+
+    // 11. Persist the engine-authoritative artifact atomically (round advances
+    //     only on a successful review — FR-006). Carry forward #1128's
+    //     `remediationCount` and #1156's `markedReadyByEngine` — the review
+    //     executor rewrites the artifact each round, and dropping either field
+    //     here would silently reset the review↔remediate cap / the cross-run
+    //     ready flag on every re-review pass.
+    await writeReviewArtifact(checkoutPath, workflowId, {
+      findings: merged,
+      verdict,
+      round,
+      lastReviewedCommitSha,
+      remediationCount: priorRound?.remediationCount ?? 0,
+      markedReadyByEngine: priorRound?.markedReadyByEngine ?? false,
+      // Mark the supplied scope consumed (whether it was applied this round or
+      // already recorded on the prior) so it is never re-applied; carry any
+      // prior marker forward when no scope was supplied.
+      ...(reviewScope !== undefined
+        ? { consumedReviewScopeHeadSha: reviewScope.headSha }
+        : priorRound?.consumedReviewScopeHeadSha !== undefined
+          ? { consumedReviewScopeHeadSha: priorRound.consumedReviewScopeHeadSha }
+          : {}),
+    });
+
+    // 12. Clear the candidate so it cannot be re-ingested on a later round.
+    await clearReviewCandidate(checkoutPath, workflowId);
+
+    this.logger.info(
+      {
+        verdict,
+        round,
+        candidateCount: findings.length,
+        mergedCount: merged.length,
+        exitCode,
+        lastReviewedCommitSha,
+      },
+      'Review phase complete — verdict computed by engine',
+    );
+
+    return {
+      phase: 'review',
+      success: true,
+      exitCode: 0,
+      durationMs: Date.now() - startedAt,
+      output: outputCapture.getOutput(),
+    };
+  }
+
+  /**
+   * #1131 (FR-011): true when the resolution diff window has no file changes.
+   * Runs `git diff --name-only <baseSha>..<headSha>` in the checkout. On any git
+   * failure we conservatively treat the window as non-empty (review runs) rather
+   * than silently skipping a review we couldn't prove was empty.
+   */
+  private async isEmptyWindow(
+    checkoutPath: string,
+    scope: { baseSha: string; headSha: string },
+  ): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['diff', '--name-only', `${scope.baseSha}..${scope.headSha}`],
+        { cwd: checkoutPath },
+      );
+      return stdout.trim() === '';
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), baseSha: scope.baseSha, headSha: scope.headSha },
+        'Could not compute resolution diff window — proceeding with review',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Resolve the `origin/<ref>` base for `computeReviewDelta`'s full-diff fallback
+   * (#1161). The executor — unlike the implement-phase guard — has no `PrManager`
+   * (`WorkerContext` carries only `github` + `prUrl`), so this reimplements
+   * `product-diff.ts::resolveBaseRef` github-only: if a PR number is parseable
+   * from `context.prUrl`, diff against that PR's base branch; otherwise fall back
+   * to the repository default branch. The fallback base is only consulted when
+   * neither the pause-context resolution SHAs nor a resolvable
+   * `lastReviewedCommitSha` apply, so a best-effort default-branch answer is safe.
+   */
+  private async resolvePrBaseRef(context: WorkerContext): Promise<string> {
+    const { owner, repo } = context.item;
+    const prNumber = parsePrNumber(context.prUrl);
+    if (prNumber !== undefined) {
+      try {
+        const pr = await context.github.getPullRequest(owner, repo, prNumber);
+        return `origin/${pr.base.ref}`;
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), prNumber, owner, repo },
+          'Could not resolve PR base ref — falling back to default branch',
+        );
+      }
+    }
+    const defaultBranch = await context.github.getDefaultBranch();
+    return `origin/${defaultBranch}`;
+  }
+}
+
+/**
+ * Parse the numeric PR id from a GitHub PR URL
+ * (`https://github.com/<owner>/<repo>/pull/<N>`). Returns `undefined` for a
+ * missing/malformed URL.
+ */
+function parsePrNumber(prUrl: string | undefined): number | undefined {
+  if (!prUrl) {
+    return undefined;
+  }
+  const match = /\/pull\/(\d+)(?:[/?#]|$)/.exec(prUrl);
+  const raw = match?.[1];
+  if (raw === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}

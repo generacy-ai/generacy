@@ -36,7 +36,7 @@ import type { WorkerConfig } from './config.js';
 import { resolveAgentForPhase } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
-import type { HandlerOutcome } from './handler-outcome.js';
+import type { HandlerOutcome, ReviewScope } from './handler-outcome.js';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PrLinker, type PrLinkInput } from './pr-linker.js';
@@ -54,15 +54,17 @@ const execFileAsync = promisify(execFile);
 const COMPLETED_MERGE_CONFLICTS_LABEL = 'completed:merge-conflicts';
 /** Label that must be present + removed on success. */
 const WAITING_FOR_MERGE_CONFLICTS_LABEL = 'waiting-for:merge-conflicts';
-/** Label removed on success alongside `waiting-for:merge-conflicts`. */
-const AGENT_PAUSED_LABEL = 'agent:paused';
-/**
- * Zombie-ownership label cleared on success (#902 FR-001). Left set by #898,
- * caused sniplink#6/#7/#8 dead-park.
- */
-const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
 /** Label added when the one autonomous attempt fails to resolve the conflict. */
 const BLOCKED_STUCK_MERGE_CONFLICTS_LABEL = 'blocked:stuck-merge-conflicts';
+/**
+ * Post-merge review/validate completion markers cleared on the success
+ * disposition (#1164 FR-007). The #1133 terminal short-circuit reads these
+ * fresh from the issue; if they survive a conflict resolution they were granted
+ * before the tree changed, so `validate` would be skipped on the post-merge
+ * tree. Removing them forces a fresh `validate` run on the merged tree.
+ */
+const COMPLETED_VALIDATE_LABEL = 'completed:validate';
+const COMPLETED_IMPLEMENTATION_REVIEW_LABEL = 'completed:implementation-review';
 
 /** Retry backoffs used by every 3× retry-classed operation. */
 const RETRY_BACKOFFS_MS = [250, 500, 1000];
@@ -229,7 +231,7 @@ export class MergeConflictHandler {
         { owner, repo, issueNumber, baseRef, branch: branchName },
         'MergeConflictHandler: no-op merge (branch already up to date) — clearing labels',
       );
-      return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath);
+      return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath, true);
     }
 
     // Step 7: git merge origin/<base>. Retry ONLY on env classes (index.lock,
@@ -385,9 +387,10 @@ export class MergeConflictHandler {
       return { outcome: 'failed', evidence };
     }
 
-    // Step 14: push the merge commit.
+    // Step 14: push the merge commit. Thread the live conflicted-path list so
+    // the scoped review is restricted to the resolution allowlist (#1164 FR-003).
     return this.pushAndSucceed(
-      github, checkoutPath, branchName, owner, repo, issueNumber, baseRef, metadata,
+      github, checkoutPath, branchName, owner, repo, issueNumber, baseRef, metadata, conflictedPaths,
     );
   }
 
@@ -567,6 +570,7 @@ export class MergeConflictHandler {
     issueNumber: number,
     baseRef: string,
     metadata: ResolveMergeConflictsMetadata | undefined,
+    conflictedPaths?: readonly string[],
   ): Promise<HandlerOutcome> {
     let pushed = false;
     let lastErr: unknown;
@@ -613,15 +617,19 @@ export class MergeConflictHandler {
       return { outcome: 'failed', evidence };
     }
 
-    return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath);
+    return this.finishSuccess(
+      github, owner, repo, issueNumber, metadata, baseRef, checkoutPath, false, conflictedPaths,
+    );
   }
 
   /**
    * Success-terminal branch (#902 FR-001, FR-004, FR-007).
    *
-   * - FR-001: consume `completed:merge-conflicts` and clear `agent:in-progress` /
-   *   `agent:paused` residue so the next natural conflict pause is not
-   *   insta-resumed by the generic pair path.
+   * - FR-001: consume `completed:merge-conflicts` (and #1164 FR-007 stale
+   *   post-merge completion markers) so the next natural conflict pause is not
+   *   insta-resumed by the generic pair path and `validate` is not skipped on
+   *   the post-merge tree. Ownership (`agent:*`) residue is cleared later by the
+   *   dispatcher `afterEnqueue` closure (#1164 FR-008).
    * - FR-004: fail-loud if `metadata.phase` is missing — never re-derive from
    *   labels. Applies `blocked:stuck-merge-conflicts`, returns `failed` with
    *   evidence citing the missing pause-context.
@@ -636,8 +644,12 @@ export class MergeConflictHandler {
     metadata: ResolveMergeConflictsMetadata | undefined,
     baseRef: string,
     checkoutPath: string,
+    isNoOp: boolean,
+    conflictedPaths?: readonly string[],
   ): Promise<HandlerOutcome> {
     // FR-004: fail-loud if pause-context is missing. Never re-derive from labels.
+    // `metadata.phase` stays required for this guard AND the flag-OFF fallback
+    // below (FR-010), even though the flag-ON path re-arms `review`.
     if (!metadata?.phase) {
       const evidence: BlockedStuckMergeConflictsEvidence = {
         unresolvedPaths: [],
@@ -656,17 +668,39 @@ export class MergeConflictHandler {
     }
 
     await this.applySuccessDisposition(github, owner, repo, issueNumber);
-    return { outcome: 're-armed', startPhase: metadata.phase };
+
+    // FR-009: gate the scoped-`review` re-arm on `reviewPhaseEnabled`. When the
+    // flag is OFF, `review` is filtered out of the effective sequence, so
+    // re-arming it would crash with `Unknown starting phase: review`. Fall back
+    // to today's `startPhase: metadata.phase` re-arm (byte-identical to pre-#1131).
+    if (!this.config.reviewPhaseEnabled) {
+      return { outcome: 're-armed', startPhase: metadata.phase };
+    }
+
+    // FR-001/FR-002/FR-010: re-arm into a resolution-scoped `review`. When the
+    // SHAs can't be determined, `getResolutionScope` returns `undefined` and we
+    // re-arm `review` anyway with the whole-branch fallback (reviewScope omitted).
+    const reviewScope = await this.getResolutionScope(checkoutPath, isNoOp, conflictedPaths);
+    return reviewScope
+      ? { outcome: 're-armed', startPhase: 'review', reviewScope }
+      : { outcome: 're-armed', startPhase: 'review' };
   }
 
   /**
-   * #902 FR-007: single combined `gh issue edit --remove-label …` for all four
-   * ownership-transition removes. No adds — re-arm is direct enqueue, not a
-   * resume-pair, so no `waiting-for:<gate>` / `completed:<gate>` labels are
-   * needed. The next `continue` item's normal in-progress labels are applied
-   * by `LabelManager.onResumeStart` when the phase loop enters.
+   * #902 FR-007 / #1164 FR-007+FR-008: single combined
+   * `gh issue edit --remove-label …` clearing the merge-conflict gate pair plus
+   * the stale post-merge completion markers (`completed:validate` /
+   * `completed:implementation-review`) so the #1133 terminal short-circuit
+   * cannot skip `validate` on the post-merge tree. No adds — re-arm is direct
+   * enqueue, not a resume-pair. The next `continue` item's normal in-progress
+   * labels are applied by `LabelManager.onResumeStart` when the phase loop enters.
    *
-   * `github.removeLabels` batches all four `--remove-label` flags into one
+   * The ownership (`agent:*`) labels are NOT cleared here (#1164 FR-008). They
+   * move to the dispatcher's `afterEnqueue` closure, run AFTER the re-arm item is
+   * enqueued, so a crash between disposition and enqueue can never strand the
+   * issue with no ownership label and no queued work.
+   *
+   * `github.removeLabels` batches all `--remove-label` flags into one
    * `gh issue edit` invocation — one HTTP round-trip, atomic at the label-set
    * level (per contracts/handler-outcome.md §"Label edit shape").
    */
@@ -680,8 +714,8 @@ export class MergeConflictHandler {
       await github.removeLabels(owner, repo, issueNumber, [
         COMPLETED_MERGE_CONFLICTS_LABEL,
         WAITING_FOR_MERGE_CONFLICTS_LABEL,
-        AGENT_IN_PROGRESS_LABEL,
-        AGENT_PAUSED_LABEL,
+        COMPLETED_VALIDATE_LABEL,
+        COMPLETED_IMPLEMENTATION_REVIEW_LABEL,
       ]);
     } catch (err) {
       this.logger.warn(
@@ -903,6 +937,52 @@ export class MergeConflictHandler {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Resolution scope for the scoped `review` re-arm (#1131 T005 / FR-002).
+   *
+   * Returns the `baseSha..headSha` window the scoped review must inspect:
+   *  - Normal `--no-ff` merge path: `{ baseSha: HEAD^1, headSha: HEAD }` — the
+   *    pre-merge branch tip (first parent) → the merge commit.
+   *  - No-op path (`isNoOp: true`, branch already up to date): `{ baseSha: HEAD,
+   *    headSha: HEAD }` — a deliberately empty window that short-circuits the
+   *    review executor to `validate` (FR-011).
+   *  - Either SHA undeterminable: `undefined` — the caller re-arms `review`
+   *    anyway with the whole-branch fallback (FR-010, do NOT fail loud).
+   *
+   * Short SHAs via `git rev-parse --short`, consistent with `getBranchTipSha`.
+   *
+   * #1164 FR-003: on the post-conflict-resolution path `conflictedPaths` (the
+   * live `git diff --name-only --diff-filter=U` list) is attached so the scoped
+   * review inspects ONLY the conflicted files instead of the whole `HEAD^1..HEAD`
+   * parent-1 diff (which would include everything merged in from the base
+   * branch). Left absent on the no-op path and when the list is empty (FR-009
+   * range fallback).
+   */
+  private async getResolutionScope(
+    checkoutPath: string,
+    isNoOp: boolean,
+    conflictedPaths?: readonly string[],
+  ): Promise<ReviewScope | undefined> {
+    const head = await this.getBranchTipSha(checkoutPath);
+    if (!head) return undefined;
+    if (isNoOp) return { baseSha: head, headSha: head };
+    let base = '';
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['rev-parse', '--short', 'HEAD^1'],
+        { cwd: checkoutPath },
+      );
+      base = stdout.trim();
+    } catch {
+      base = '';
+    }
+    if (!base) return undefined;
+    return conflictedPaths && conflictedPaths.length > 0
+      ? { baseSha: base, headSha: head, conflictedPaths }
+      : { baseSha: base, headSha: head };
   }
 
   private sleep(ms: number): Promise<void> {

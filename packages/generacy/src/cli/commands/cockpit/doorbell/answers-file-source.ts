@@ -44,7 +44,10 @@ export interface FsWatchEvent {
 export interface FsFacade {
   stat(path: string): Promise<FsStatResult>;
   open(path: string, flags: string): Promise<FsFileHandle>;
-  watch?(path: string, opts?: { recursive?: boolean }): AsyncIterable<FsWatchEvent>;
+  watch?(
+    path: string,
+    opts?: { recursive?: boolean; signal?: AbortSignal },
+  ): AsyncIterable<FsWatchEvent>;
 }
 
 export interface AnswersFileSourceLogger {
@@ -130,8 +133,9 @@ async function nodeOpen(p: string, flags: string): Promise<FsFileHandle> {
 
 function nodeWatch(
   p: string,
+  opts?: { recursive?: boolean; signal?: AbortSignal },
 ): AsyncIterable<FsWatchEvent> {
-  const iter = nodeFsPromises.watch(p) as unknown as AsyncIterable<FsWatchEvent>;
+  const iter = nodeFsPromises.watch(p, opts) as unknown as AsyncIterable<FsWatchEvent>;
   return iter;
 }
 
@@ -201,6 +205,7 @@ export class AnswersFileSource {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private fsWatchIterator: AsyncIterator<FsWatchEvent> | null = null;
   private fsWatchLoop: Promise<void> | null = null;
+  private fsWatchAbort: AbortController | null = null;
   private tickInFlight = false;
   private pendingTick = false;
 
@@ -381,14 +386,21 @@ export class AnswersFileSource {
 
   private startFsWatchLoop(): void {
     if (this.fs.watch == null) return;
+    // Wire an AbortSignal so teardown is deterministic: a Node
+    // `fsPromises.watch` async iterator never settles its pending `next()` (nor
+    // `return()`) without a filesystem event, so `stopFsWatch()` would hang
+    // forever unless the watcher is cancellable. Aborting the signal ends the
+    // iterator, which lets both awaits in `stopFsWatch()` resolve.
+    const controller = new AbortController();
     let iterable: AsyncIterable<FsWatchEvent>;
     try {
-      iterable = this.fs.watch(this.parentDir);
+      iterable = this.fs.watch(this.parentDir, { signal: controller.signal });
     } catch {
       return;
     }
     const iter = iterable[Symbol.asyncIterator]();
     this.fsWatchIterator = iter;
+    this.fsWatchAbort = controller;
     this.fsWatchLoop = (async (): Promise<void> => {
       try {
         while (this.running) {
@@ -407,6 +419,10 @@ export class AnswersFileSource {
     if (this.fsWatchIterator == null) return;
     const iter = this.fsWatchIterator;
     this.fsWatchIterator = null;
+    // Cancel the underlying watcher first so the pending `next()` in
+    // `fsWatchLoop` settles and `return()` can resolve.
+    this.fsWatchAbort?.abort();
+    this.fsWatchAbort = null;
     try {
       await iter.return?.(undefined);
     } catch {

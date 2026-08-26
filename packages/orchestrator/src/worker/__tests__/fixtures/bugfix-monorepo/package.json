@@ -1,0 +1,6 @@
+{
+  "name": "bugfix-monorepo-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Synthetic pnpm-workspace fixture for #1135 phase-4 integration harness. Dependency graph makes `changed=core -> affected={core,a,b}` a strict subset of the 5-package workspace (data-model §1)."
+}

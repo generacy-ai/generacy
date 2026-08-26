@@ -47,6 +47,7 @@ const mockGitHub = {
   postPrComment: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
+  stageFiles: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn(),
@@ -210,6 +211,7 @@ describe('PrFeedbackHandler body-flow (#1047)', () => {
       has_changes: true, staged: ['src/x.ts'], unstaged: [], untracked: [],
     });
     (mockGitHub.stageAll as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (mockGitHub.stageFiles as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (mockGitHub.commit as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (mockGitHub.push as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (mockGitHub.replyToPRComment as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 1 });

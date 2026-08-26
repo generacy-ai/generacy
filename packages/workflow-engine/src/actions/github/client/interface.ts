@@ -11,6 +11,9 @@ import type {
   ConflictInfo,
   Review,
   ReviewThread,
+  CreateReviewInput,
+  PullRequestFile,
+  CiRun,
 } from '../../../types/github.js';
 
 /**
@@ -234,6 +237,51 @@ export interface GitHubClient {
   listReviews(owner: string, repo: string, prNumber: number): Promise<Review[]>;
 
   /**
+   * Submit one PR review via
+   * `POST /repos/{owner}/{repo}/pulls/{prNumber}/reviews`.
+   *
+   * One atomic submission carrying the `event`, a top-level `body`, and
+   * optional inline `comments[]`. Every inline comment MUST anchor to a
+   * diffable line — a non-diffable `line` 422s the entire submission
+   * (the caller pre-checks diffability via `listPullRequestFiles`). No
+   * internal retry for a 422 (it is a caller payload bug, not transient).
+   *
+   * @throws Error with the upstream stderr on non-zero exit.
+   */
+  createReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    input: CreateReviewInput,
+  ): Promise<Review>;
+
+  /**
+   * Convert a ready PR back to draft via the GraphQL
+   * `convertPullRequestToDraft` mutation.
+   *
+   * Two steps: resolve the PR node id + `isDraft` (short-circuits when the
+   * PR is already a draft), then run the mutation. Mirrors
+   * `resolveReviewThread`'s retry/auth handling — 3× backoff, `GhAuthError`
+   * rethrown, GraphQL `errors[]` terminal.
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on terminal failure.
+   */
+  convertPullRequestToDraft(owner: string, repo: string, prNumber: number): Promise<void>;
+
+  /**
+   * List the files changed in a PR via
+   * `GET /repos/{owner}/{repo}/pulls/{prNumber}/files` (paginated).
+   *
+   * Each entry carries `filename`, `status`, and an optional `patch`
+   * (unified-diff hunks; absent for binary/too-large files). Used to
+   * compute the set of diffable lines for inline review anchoring.
+   *
+   * @throws Error with the upstream stderr on non-zero exit.
+   */
+  listPullRequestFiles(owner: string, repo: string, prNumber: number): Promise<PullRequestFile[]>;
+
+  /**
    * Reply to a PR comment
    */
   replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment>;
@@ -352,9 +400,17 @@ export interface GitHubClient {
   stageAll(): Promise<void>;
 
   /**
-   * Commit staged changes
+   * Commit changes.
+   *
+   * @param message Commit message.
+   * @param pathspec Optional path list. When provided, only these paths are
+   *   committed (`git commit -m <msg> -- <pathspec>`), bypassing any other
+   *   content staged in the index — so a caller can guarantee an unrelated
+   *   pre-staged path (e.g. an engine bookkeeping sidecar, #1162) is never
+   *   folded into the commit. When omitted, the whole index is committed
+   *   (unchanged legacy behavior).
    */
-  commit(message: string): Promise<CommitResult>;
+  commit(message: string, pathspec?: string[]): Promise<CommitResult>;
 
   /**
    * Push to remote
@@ -385,6 +441,17 @@ export interface GitHubClient {
    * Pop stashed changes
    */
   stashPop(): Promise<{ success: boolean; conflicts: boolean }>;
+
+  /**
+   * Discard all working-tree changes: hard-reset tracked files to HEAD and
+   * remove untracked files/directories. Used to guarantee "branch untouched"
+   * when abandoning a phase's partial work.
+   *
+   * @param excludePaths gitignore-style patterns forwarded to `git clean -e`
+   *   so caller-owned state (e.g. orchestrator sidecars under `.generacy/`)
+   *   survives the clean.
+   */
+  discardWorkingTreeChanges(excludePaths?: string[]): Promise<void>;
 
   /**
    * Get list of files with merge conflicts
@@ -462,6 +529,32 @@ export interface GitHubClient {
    * @throws Error on malformed response (non-40-hex).
    */
   getRefHeadSha(owner: string, repo: string, ref: string): Promise<string>;
+
+  /**
+   * Read the CI runs for a commit SHA, for merge-readiness aggregation (#1133).
+   *
+   * Primary path queries the check-runs API; on non-zero exit (the observed
+   * symptom of a token lacking `checks:read`) it falls back to the actions/runs
+   * API filtered to the head SHA. Both paths normalize to `CiRun[]` consumable
+   * by `aggregateCiVerdict` unchanged — the verdict for a given real CI state is
+   * identical across paths (SC-004).
+   *
+   * @param owner - Repository owner.
+   * @param repo - Repository name.
+   * @param headSha - The commit SHA to read CI runs for.
+   * @param branch - Branch name, used by the actions/runs fallback filter.
+   * @returns The normalized runs and which source produced them. Empty result
+   *   (no check-runs and no matching actions/runs) → `{ runs: [], source }`.
+   * @throws Error with stderr when BOTH paths exit non-zero (mirrors
+   *   `getRefHeadSha`). The caller's readiness wait treats a thrown readout as
+   *   transient and continues backoff.
+   */
+  getCiRunsForSha(
+    owner: string,
+    repo: string,
+    headSha: string,
+    branch: string,
+  ): Promise<{ runs: CiRun[]; source: 'check-runs' | 'actions-runs' }>;
 
   /**
    * List the file names touched by a pull request via `gh pr diff --name-only`.

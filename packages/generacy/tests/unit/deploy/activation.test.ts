@@ -79,7 +79,7 @@ describe('runActivation', () => {
     );
   });
 
-  it('calls openUrl with the verification_uri', async () => {
+  it('calls openUrl with the verification_uri (no projectId)', async () => {
     mockInitDeviceFlow.mockResolvedValue(deviceCodeResponse);
     mockPollForApproval.mockResolvedValue(approvedPollResponse);
 
@@ -87,6 +87,18 @@ describe('runActivation', () => {
 
     expect(mockOpenUrl).toHaveBeenCalledOnce();
     expect(mockOpenUrl).toHaveBeenCalledWith('https://generacy.ai/activate?code=ABCD-1234');
+  });
+
+  it('appends projectId to the activation URL when provided', async () => {
+    mockInitDeviceFlow.mockResolvedValue(deviceCodeResponse);
+    mockPollForApproval.mockResolvedValue(approvedPollResponse);
+
+    await runActivation({ cloudUrl: CLOUD_URL, logger: mockLogger, projectId: 'fixed-proj-id' });
+
+    expect(mockOpenUrl).toHaveBeenCalledOnce();
+    expect(mockOpenUrl).toHaveBeenCalledWith(
+      'https://generacy.ai/activate?code=ABCD-1234&projectId=fixed-proj-id',
+    );
   });
 
   it('retries up to maxCycles when device code expires', async () => {

@@ -4,6 +4,11 @@ import type { PrManager } from '../pr-manager.js';
 import {
   EXCLUDED_PATH_PREFIXES,
   EXCLUDED_EXACT_PATHS,
+  ENGINE_SIDECAR_PREFIXES,
+  ENGINE_STATE_DIR,
+  isEngineSidecar,
+  engineSidecarCleanExcludes,
+  isCollapsedEngineStateDir,
   isProductFile,
   resolveBaseRef,
   computeProductDiff,
@@ -11,8 +16,90 @@ import {
 } from '../product-diff.js';
 
 describe('EXCLUDED_PATH_PREFIXES', () => {
-  it('contains specs/', () => {
-    expect(EXCLUDED_PATH_PREFIXES).toEqual(['specs/']);
+  it('contains specs/ plus every engine-sidecar prefix (#1162)', () => {
+    expect(EXCLUDED_PATH_PREFIXES).toEqual([
+      'specs/',
+      '.generacy/review-findings-',
+      '.generacy/review-candidate-',
+      '.generacy/pause-context-',
+      '.generacy/external-feedback-',
+      '.generacy/workflow-state-',
+    ]);
+  });
+});
+
+// #1162 SC-002: the sidecar prefixes are a single source of truth shared by the
+// staging filter (FR-001) and the product-diff exclusion (FR-004).
+describe('ENGINE_SIDECAR_PREFIXES / isEngineSidecar', () => {
+  it('lists exactly the engine bookkeeping prefixes', () => {
+    expect(ENGINE_SIDECAR_PREFIXES).toEqual([
+      '.generacy/review-findings-',
+      '.generacy/review-candidate-',
+      '.generacy/pause-context-',
+      '.generacy/external-feedback-',
+      '.generacy/workflow-state-',
+    ]);
+  });
+
+  it('matches each sidecar prefix with its sanitized-id suffix', () => {
+    expect(isEngineSidecar('.generacy/review-findings-generacy-ai_generacy_1162.json')).toBe(true);
+    expect(isEngineSidecar('.generacy/review-candidate-generacy-ai_generacy_1162.json')).toBe(true);
+    expect(isEngineSidecar('.generacy/pause-context-generacy-ai_generacy_1162.json')).toBe(true);
+    expect(isEngineSidecar('.generacy/external-feedback-generacy-ai_generacy_1162.json')).toBe(true);
+    expect(isEngineSidecar('.generacy/workflow-state-generacy-ai_generacy_1162.json')).toBe(true);
+  });
+
+  it('does NOT match legitimately tracked .generacy product files (Q3)', () => {
+    expect(isEngineSidecar('.generacy/config.yaml')).toBe(false);
+    expect(isEngineSidecar('.generacy/epics/foo.md')).toBe(false);
+  });
+
+  it('does NOT match ordinary product paths', () => {
+    expect(isEngineSidecar('packages/orchestrator/src/worker/phase-loop.ts')).toBe(false);
+    expect(isEngineSidecar('README.md')).toBe(false);
+  });
+});
+
+// #1162 follow-up: the cross-run checkout reset must spare the same sidecars
+// the staging filter refuses to commit — derived from the same prefix list.
+describe('engineSidecarCleanExcludes', () => {
+  it('yields one `<prefix>*` git-clean exclude per sidecar prefix, in order', () => {
+    expect(engineSidecarCleanExcludes()).toEqual([
+      '.generacy/review-findings-*',
+      '.generacy/review-candidate-*',
+      '.generacy/pause-context-*',
+      '.generacy/external-feedback-*',
+      '.generacy/workflow-state-*',
+    ]);
+    expect(engineSidecarCleanExcludes()).toEqual(
+      ENGINE_SIDECAR_PREFIXES.map((p) => `${p}*`),
+    );
+  });
+
+  it('every prefix lives under ENGINE_STATE_DIR', () => {
+    for (const prefix of ENGINE_SIDECAR_PREFIXES) {
+      expect(prefix.startsWith(`${ENGINE_STATE_DIR}/`)).toBe(true);
+    }
+  });
+});
+
+describe('isCollapsedEngineStateDir', () => {
+  it('matches a bare .generacy directory entry with or without trailing slash', () => {
+    expect(isCollapsedEngineStateDir('.generacy/')).toBe(true);
+    expect(isCollapsedEngineStateDir('.generacy')).toBe(true);
+  });
+
+  it('does NOT match files under .generacy or look-alike paths', () => {
+    expect(isCollapsedEngineStateDir('.generacy/config.yaml')).toBe(false);
+    expect(isCollapsedEngineStateDir('.generacy/review-findings-x.json')).toBe(false);
+    expect(isCollapsedEngineStateDir('.generacyx')).toBe(false);
+    expect(isCollapsedEngineStateDir('foo/.generacy/')).toBe(false);
+    expect(isCollapsedEngineStateDir('README.md')).toBe(false);
+  });
+
+  it('is disjoint from isEngineSidecar (a collapsed dir is not itself a sidecar)', () => {
+    expect(isEngineSidecar('.generacy/')).toBe(false);
+    expect(isEngineSidecar('.generacy')).toBe(false);
   });
 });
 

@@ -168,6 +168,84 @@ export interface ReviewThread {
   comments: Comment[];
 }
 
+/**
+ * GitHub PR review event, as accepted by
+ * `POST /repos/{owner}/{repo}/pulls/{n}/reviews`. #1125 always submits
+ * `COMMENT` — `REQUEST_CHANGES` on the author's own PR is a 422.
+ */
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
+/**
+ * An inline review comment in a `createReview` submission. Every entry MUST
+ * anchor to a diffable line — a non-diffable `line` 422s the whole review.
+ */
+export interface CreateReviewComment {
+  path: string;
+  line: number;
+  side?: 'RIGHT' | 'LEFT'; // default RIGHT
+  body: string;
+}
+
+/**
+ * Body of a `createReview` call: one atomic review submission with an event,
+ * a top-level body, and optional inline comments.
+ */
+export interface CreateReviewInput {
+  event: ReviewEvent;
+  body: string;
+  comments?: CreateReviewComment[];
+}
+
+/**
+ * A file entry from `GET /repos/{owner}/{repo}/pulls/{n}/files`. `patch` is
+ * absent for binary/too-large files (those contribute no diffable lines).
+ */
+export interface PullRequestFile {
+  filename: string;
+  status: string; // added | modified | removed | renamed ...
+  patch?: string; // unified-diff hunks
+}
+
+// =============================================================================
+// CI merge-readiness (#1133)
+// =============================================================================
+
+/**
+ * A CI run conclusion, as reported by the check-runs / actions-runs APIs.
+ * `null` means the run is in-progress / not yet concluded. Values outside this
+ * union are passed through as-is and treated conservatively by the aggregator
+ * (not `success`, so not green).
+ */
+export type CiConclusion =
+  | 'success'
+  | 'failure'
+  | 'cancelled'
+  | 'timed_out'
+  | 'action_required'
+  | 'startup_failure'
+  | 'stale'
+  | 'skipped'
+  | 'neutral'
+  | null;
+
+/**
+ * Normalized CI run shape produced by both the check-runs and actions/runs
+ * readouts. Consumed by `aggregateCiVerdict`.
+ */
+export interface CiRun {
+  /** GitHub run/check status: 'queued' | 'in_progress' | 'completed'. */
+  status: string;
+  /** Conclusion once completed; null while in progress. */
+  conclusion: CiConclusion;
+}
+
+/**
+ * Three-state CI merge-readiness verdict. `skipped`/`neutral` runs are ignored
+ * (skipped≠passed); `green` requires ≥1 concrete success and no failures or
+ * in-progress runs.
+ */
+export type CiVerdict = 'green' | 'pending' | 'not-passed';
+
 // =============================================================================
 // Workflow Entities
 // =============================================================================
@@ -184,7 +262,9 @@ export type ReviewGate =
   | 'implementation-review'
   | 'manual-validation'
   | 'address-pr-feedback'
-  | 'children-complete';
+  | 'children-complete'
+  | 'remediation-limit'
+  | 'ci';
 
 /**
  * Core workflow phases
@@ -195,7 +275,9 @@ export type CorePhase =
   | 'plan'
   | 'tasks'
   | 'implement'
-  | 'validate';
+  | 'review'
+  | 'validate'
+  | 'remediate';
 
 /**
  * Workflow stages for stage comments

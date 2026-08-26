@@ -218,7 +218,7 @@ describe('LabelManager', () => {
   });
 
   describe('onResumeStart', () => {
-    it('removes waiting-for:*, corresponding completed:*, and agent:paused labels when present', async () => {
+    it('removes waiting-for:*, agent:paused, and the paired completed:clarification so follow-up questions can pause again', async () => {
       const lm = createLabelManager();
       mockGithub.getIssue.mockResolvedValue({
         labels: [
@@ -233,6 +233,11 @@ describe('LabelManager', () => {
       await lm.onResumeStart();
 
       expect(mockGithub.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
+      // `completed:clarification` is NOT in the resume retain set: a resumed
+      // `clarify` that asks follow-up questions must be able to pause again, so
+      // the paired completion is stripped alongside the stale pause labels.
+      // (The #1154 blanket human-gate exemption let it survive and the
+      // "already satisfied" check skipped the follow-up pause.)
       expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'waiting-for:clarification',
         'agent:paused',

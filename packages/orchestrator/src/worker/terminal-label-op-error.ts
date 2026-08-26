@@ -10,6 +10,7 @@ export type TerminalLabelOpSite =
   | 'gate-hit'
   | 'phase-start'
   | 'phase-complete'
+  | 'phase-executed-no-completion'
   | 'error'
   | 'error-repeated'
   | 'resume-start'

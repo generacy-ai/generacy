@@ -193,8 +193,8 @@ describe('#902 T013 end-to-end re-arm', () => {
       [
         'completed:merge-conflicts',
         'waiting-for:merge-conflicts',
-        'agent:in-progress',
-        'agent:paused',
+        'completed:validate',
+        'completed:implementation-review',
       ],
     ]);
     expect(mockGitHub.addLabels).not.toHaveBeenCalled();
@@ -272,5 +272,205 @@ describe('#902 T013 end-to-end re-arm', () => {
     expect(
       assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, { inFlight: false, pendingItems: [] }),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('#1131 scoped-review re-arm', () => {
+  const configReviewOn = { ...config, reviewPhaseEnabled: true } as WorkerConfig;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    execFileMock.mockReset();
+    fsExistsMock.mockReset().mockReturnValue(false);
+    fsReadFileMock.mockReset().mockReturnValue('');
+    switchBranchMock.mockClear();
+    (mockGitHub.addLabels as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+    (mockGitHub.removeLabels as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+    (mockGitHub.listOpenPullRequests as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([makePR()]);
+    (mockGitHub.getIssue as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+      labels: [{ name: 'agent:paused' }, { name: 'agent:in-progress' }],
+      assignees: [],
+    });
+  });
+
+  /**
+   * Wires a conflict → agent-resolve → push success flow. `revParse` controls
+   * what `git rev-parse --short <ref>` returns so scope-SHA assertions are exact;
+   * returning `null` makes the command throw (undeterminable-SHA fallback).
+   */
+  function wireResolvedConflict(revParse: (ref: string) => string | null): { launcher: AgentLauncher } {
+    let agentRan = false;
+    execFileMock.mockImplementation((command: string, args: string[]) => {
+      if (command === 'git' && args[0] === 'fetch') return { stdout: '', stderr: '' };
+      if (command === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        const err = new Error('not ancestor') as Error & { code?: number };
+        err.code = 1;
+        throw err;
+      }
+      if (command === 'git' && args[0] === 'merge' && args[1] !== '--abort') {
+        const err = new Error('conflict') as Error & { stderr?: string };
+        err.stderr = 'CONFLICT (content): Merge conflict in CLAUDE.md';
+        throw err;
+      }
+      if (command === 'git' && args[0] === 'diff' && args.includes('--diff-filter=U')) {
+        return { stdout: agentRan ? '' : 'CLAUDE.md\n', stderr: '' };
+      }
+      if (command === 'git' && args[0] === 'ls-files') return { stdout: 'CLAUDE.md\n', stderr: '' };
+      if (command === 'git' && args[0] === 'rev-parse') {
+        const ref = args[args.length - 1];
+        const sha = revParse(ref);
+        if (sha === null) {
+          throw new Error(`bad revision ${ref}`);
+        }
+        return { stdout: `${sha}\n`, stderr: '' };
+      }
+      if (command === 'git' && args[0] === 'push') return { stdout: '', stderr: '' };
+      if (command === 'gh') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const launcher = {
+      launch: vi.fn().mockImplementation(async () => {
+        agentRan = true;
+        return {
+          process: createMockProcess(0),
+          outputParser: { processChunk: () => {}, flush: () => {} },
+          metadata: { pluginId: 'test', intentKind: 'merge-conflict' },
+        };
+      }),
+    } as unknown as AgentLauncher;
+    return { launcher };
+  }
+
+  it('flag ON, resolved merge: re-arms `review` with reviewScope {HEAD^1..HEAD} + conflicted-path allowlist', async () => {
+    const { launcher } = wireResolvedConflict((ref) => (ref === 'HEAD^1' ? 'base123' : 'head456'));
+    const handler = new MergeConflictHandler(configReviewOn, mockLogger, launcher);
+
+    const outcome = await handler.handle(createItem('validate'), '/tmp/checkout');
+
+    // FR-003 (#1164): the resolution scope carries the conflicted-path allowlist
+    // enumerated from `git diff --name-only --diff-filter=U` on the post-resolution
+    // success path, not just the raw base..head range.
+    expect(outcome).toEqual({
+      outcome: 're-armed',
+      startPhase: 'review',
+      reviewScope: { baseSha: 'base123', headSha: 'head456', conflictedPaths: ['CLAUDE.md'] },
+    });
+  });
+
+  it('flag ON, undeterminable SHA: re-arms `review` with NO reviewScope (whole-branch fallback, FR-010)', async () => {
+    const { launcher } = wireResolvedConflict(() => null);
+    const handler = new MergeConflictHandler(configReviewOn, mockLogger, launcher);
+
+    const outcome = await handler.handle(createItem('validate'), '/tmp/checkout');
+
+    expect(outcome).toEqual({ outcome: 're-armed', startPhase: 'review' });
+    if (outcome.outcome === 're-armed') {
+      expect(outcome.reviewScope).toBeUndefined();
+    }
+  });
+
+  it('flag ON, no-op (base already ancestor): re-arms `review` with an empty window {HEAD..HEAD} (FR-011)', async () => {
+    execFileMock.mockImplementation((command: string, args: string[]) => {
+      if (command === 'git' && args[0] === 'fetch') return { stdout: '', stderr: '' };
+      // Base IS ancestor → no-op success path.
+      if (command === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git' && args[0] === 'rev-parse') return { stdout: 'head789\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const launcher = { launch: vi.fn() } as unknown as AgentLauncher;
+    const handler = new MergeConflictHandler(configReviewOn, mockLogger, launcher);
+
+    const outcome = await handler.handle(createItem('validate'), '/tmp/checkout');
+
+    expect(outcome).toEqual({
+      outcome: 're-armed',
+      startPhase: 'review',
+      reviewScope: { baseSha: 'head789', headSha: 'head789' },
+    });
+  });
+
+  it('flag OFF: re-arms the interrupted phase with NO reviewScope (byte-identical to pre-#1131, FR-009)', async () => {
+    const { launcher } = wireResolvedConflict((ref) => (ref === 'HEAD^1' ? 'base123' : 'head456'));
+    const handler = new MergeConflictHandler(config, mockLogger, launcher);
+
+    const outcome = await handler.handle(createItem('implement'), '/tmp/checkout');
+
+    expect(outcome).toEqual({ outcome: 're-armed', startPhase: 'implement' });
+    if (outcome.outcome === 're-armed') {
+      expect(outcome.reviewScope).toBeUndefined();
+    }
+  });
+
+  it('SC-003 (FR-007): resolution spawns only git/gh + the merge-conflict agent — no build/test process', async () => {
+    const { launcher } = wireResolvedConflict((ref) => (ref === 'HEAD^1' ? 'base123' : 'head456'));
+    const handler = new MergeConflictHandler(configReviewOn, mockLogger, launcher);
+
+    const outcome = await handler.handle(createItem('validate'), '/tmp/checkout');
+    expect(outcome.outcome).toBe('re-armed');
+
+    // Every child process spawned during the resolution attempt is git or gh.
+    // The predicate stays git-state-only: `config.validateCommand` ('echo
+    // validate') is never invoked, nor any build/test binary.
+    for (const [command] of execFileMock.mock.calls) {
+      expect(['git', 'gh']).toContain(command);
+    }
+
+    // The single agent launch is the merge-conflict intent — no review/validate
+    // CLI is spawned during resolution.
+    const launchCalls = (launcher.launch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(launchCalls).toHaveLength(1);
+    expect(launchCalls[0]![0].intent.kind).toBe('merge-conflict');
+  });
+
+  it('SC-005: agent fails to resolve → blocked path is byte-identical with the flag ON', async () => {
+    // `git diff --diff-filter=U` never clears (agent leaves the conflict) →
+    // verification fails → blocked disposition.
+    execFileMock.mockImplementation((command: string, args: string[]) => {
+      if (command === 'git' && args[0] === 'fetch') return { stdout: '', stderr: '' };
+      if (command === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        const err = new Error('not ancestor') as Error & { code?: number };
+        err.code = 1;
+        throw err;
+      }
+      if (command === 'git' && args[0] === 'merge' && args[1] !== '--abort') {
+        const err = new Error('conflict') as Error & { stderr?: string };
+        err.stderr = 'CONFLICT (content): Merge conflict in CLAUDE.md';
+        throw err;
+      }
+      if (command === 'git' && args[0] === 'diff' && args.includes('--diff-filter=U')) {
+        return { stdout: 'CLAUDE.md\n', stderr: '' };
+      }
+      if (command === 'git' && args[0] === 'ls-files') return { stdout: 'CLAUDE.md\n', stderr: '' };
+      if (command === 'git' && args[0] === 'rev-parse') return { stdout: 'abc1234\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const launcher = {
+      launch: vi.fn().mockResolvedValue({
+        process: createMockProcess(0),
+        outputParser: { processChunk: () => {}, flush: () => {} },
+        metadata: { pluginId: 'test', intentKind: 'merge-conflict' },
+      }),
+    } as unknown as AgentLauncher;
+    const handler = new MergeConflictHandler(configReviewOn, mockLogger, launcher);
+
+    const outcome = await handler.handle(createItem('validate'), '/tmp/checkout');
+
+    // Failed disposition — no re-arm, no reviewScope, regardless of the flag.
+    expect(outcome.outcome).toBe('failed');
+
+    // blocked:stuck-merge-conflicts applied.
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'owner', 'repo', 42,
+      ['blocked:stuck-merge-conflicts'],
+    );
+    // waiting-for:merge-conflicts preserved — the blocked path never removes it.
+    const removeCalls = (mockGitHub.removeLabels as ReturnType<typeof vi.fn>).mock.calls;
+    for (const [, , , labels] of removeCalls) {
+      expect(labels).not.toContain('waiting-for:merge-conflicts');
+    }
   });
 });

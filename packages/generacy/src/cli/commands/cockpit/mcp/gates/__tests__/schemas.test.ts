@@ -7,7 +7,12 @@
  * and omitted/undefined is accepted.
  */
 import { describe, it, expect } from 'vitest';
-import { GateOpenWireSchema, GateOutcomeWireSchema } from '../schemas.js';
+import {
+  GateOpenInputSchema,
+  GateOpenWireSchema,
+  GateOutcomeWireSchema,
+  GateTypeSchema,
+} from '../schemas.js';
 
 const GATE_ID = 'a1b2c3d4e5f6a7b8c9d0e1f2';
 
@@ -61,6 +66,38 @@ describe('GateOpenWireSchema — #1077 frameId field', () => {
     const parsed = GateOpenWireSchema.safeParse({ ...validOpen, frameId: '' });
     expect(parsed.success).toBe(false);
   });
+});
+
+describe('GateTypeSchema — #1163 remediation-limit + ci', () => {
+  it.each(['remediation-limit', 'ci'] as const)('accepts %s', (gateType) => {
+    expect(GateTypeSchema.safeParse(gateType).success).toBe(true);
+  });
+
+  it('still rejects an unknown gate type (enum stays closed)', () => {
+    expect(GateTypeSchema.safeParse('not-a-real-gate-type').success).toBe(false);
+  });
+
+  it.each(['remediation-limit', 'ci'] as const)(
+    'a %s record round-trips through GateOpenInputSchema and GateOpenWireSchema',
+    (gateType) => {
+      const input = GateOpenInputSchema.parse({
+        issueRef: 'generacy-ai/generacy#1163',
+        gateType,
+        generation: '1',
+        epicRef: 'generacy-ai/generacy#1000',
+        issueTitle: 'test',
+        issueUrl: 'https://github.com/generacy-ai/generacy/issues/1163',
+        title: 'test',
+        body: 'test',
+        sessionId: 'sess-1',
+      });
+      expect(input.gateType).toBe(gateType);
+
+      const wire = GateOpenWireSchema.safeParse({ ...validOpen, gateType });
+      expect(wire.success).toBe(true);
+      if (wire.success) expect(wire.data.gateType).toBe(gateType);
+    },
+  );
 });
 
 describe('GateOutcomeWireSchema — #1077 frameId field', () => {

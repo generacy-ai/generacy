@@ -32,6 +32,7 @@ const mockGitHub = {
   getPRReviewThreads: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
+  stageFiles: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn(),
@@ -189,6 +190,7 @@ describe('PrFeedbackHandler', () => {
     mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
     mockGitHub.getStatus = vi.fn().mockResolvedValue({ has_changes: false, staged: [], unstaged: [], untracked: [] });
     mockGitHub.stageAll = vi.fn().mockResolvedValue(undefined);
+    mockGitHub.stageFiles = vi.fn().mockResolvedValue(undefined);
     mockGitHub.commit = vi.fn().mockResolvedValue(undefined);
     mockGitHub.push = vi.fn().mockResolvedValue(undefined);
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
@@ -247,6 +249,62 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
+  describe('engine sidecar filtering on the legacy commit path (#1162)', () => {
+    it('stages and commits only non-sidecar paths, with an explicit pathspec', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false, 'src/index.ts', 15),
+      ]);
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+      // Sidecars now survive the cross-run `git clean` (repo-checkout.ts), so
+      // they show up as untracked alongside the real fix.
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true,
+        staged: ['src/index.ts'],
+        unstaged: ['src/util.ts'],
+        untracked: [
+          '.generacy/review-findings-test-owner-test-repo-42.json',
+          '.generacy/pause-context-42.json',
+          '.generacy/',
+        ],
+      });
+
+      await handler.handle(item, checkoutPath);
+
+      expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).toHaveBeenCalledWith(['src/index.ts', 'src/util.ts']);
+      expect(mockGitHub.commit).toHaveBeenCalledWith(
+        expect.stringContaining('Address PR #100 review feedback'),
+        ['src/index.ts', 'src/util.ts'],
+      );
+    });
+
+    it('skips the commit entirely when only engine sidecars changed', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false, 'src/index.ts', 15),
+      ]);
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true,
+        staged: [],
+        unstaged: [],
+        untracked: ['.generacy/review-findings-test-owner-test-repo-42.json'],
+      });
+
+      await handler.handle(item, checkoutPath);
+
+      expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).not.toHaveBeenCalled();
+      expect(mockGitHub.commit).not.toHaveBeenCalled();
+      expect(mockGitHub.push).not.toHaveBeenCalled();
+    });
+  });
+
   describe('handle - successful flow', () => {
     it('processes unresolved comments, commits changes, posts replies, and removes label', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1, 2] });
@@ -293,9 +351,9 @@ describe('PrFeedbackHandler', () => {
       );
 
       // Should stage, commit, and push
-      expect(mockGitHub.stageAll).toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).toHaveBeenCalled();
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('Address PR #100 review feedback'),
+        expect.stringContaining('Address PR #100 review feedback'), expect.any(Array),
       );
       expect(mockGitHub.push).toHaveBeenCalledWith('origin', 'feature-branch');
 
@@ -358,7 +416,7 @@ describe('PrFeedbackHandler', () => {
       await handler.handle(item, checkoutPath);
 
       // Should not stage, commit, or push
-      expect(mockGitHub.stageAll).not.toHaveBeenCalled();
+      expect(mockGitHub.stageFiles).not.toHaveBeenCalled();
       expect(mockGitHub.commit).not.toHaveBeenCalled();
       expect(mockGitHub.push).not.toHaveBeenCalled();
 
@@ -381,7 +439,9 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #883: blocked:stuck-feedback-loop is added
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+      // stop — blocked:stuck-feedback-loop is added so the monitor pauses
+      // re-enqueue until an operator clears it.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
@@ -723,7 +783,7 @@ describe('PrFeedbackHandler', () => {
       });
     });
 
-    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → blocked:stuck-feedback-loop (preserved)', () => {
+    describe('B1/B2/B3: !timedOut && (!success || !hasChanges) → blocked:stuck-feedback-loop (legacy-path stop)', () => {
       it('B1 (success && !hasChanges): no-diff clean exit → blocked:stuck-feedback-loop', async () => {
         const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
         const checkoutPath = '/tmp/workspace/test-owner/test-repo';
@@ -741,6 +801,8 @@ describe('PrFeedbackHandler', () => {
 
         await handler.handle(item, checkoutPath);
 
+        // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+        // stop — blocked:stuck-feedback-loop is applied on the no-diff cycle.
         expect(mockGitHub.addLabels).toHaveBeenCalledWith(
           'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
         );
@@ -778,6 +840,7 @@ describe('PrFeedbackHandler', () => {
 
         await handler.handle(item, checkoutPath);
 
+        // #1130 (PR #1145 review): legacy-path bounded stop applied.
         expect(mockGitHub.addLabels).toHaveBeenCalledWith(
           'test-owner', 'test-repo', 42, ['blocked:stuck-feedback-loop'],
         );
@@ -920,7 +983,7 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // #883: blocked:stuck-feedback-loop is added
+      // #1130 (PR #1145 review): legacy-path bounded stop applied.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
@@ -1110,7 +1173,7 @@ describe('PrFeedbackHandler', () => {
         ['agent:in-progress'],
       );
 
-      // Should add blocked label
+      // #1130 (PR #1145 review): legacy-path bounded stop applied.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
@@ -1223,13 +1286,13 @@ describe('PrFeedbackHandler', () => {
       await handler.handle(item, checkoutPath);
 
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('Address PR #100 review feedback'),
+        expect.stringContaining('Address PR #100 review feedback'), expect.any(Array),
       );
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('issue #42'),
+        expect.stringContaining('issue #42'), expect.any(Array),
       );
       expect(mockGitHub.commit).toHaveBeenCalledWith(
-        expect.stringContaining('Co-Authored-By: Claude Sonnet 4.5'),
+        expect.stringContaining('Co-Authored-By: Claude Sonnet 4.5'), expect.any(Array),
       );
     });
   });
@@ -1671,7 +1734,9 @@ describe('PrFeedbackHandler', () => {
       const removed = collectRemovedLabels();
       expect(removed).not.toContain('waiting-for:address-pr-feedback');
       expect(removed).toContain('agent:in-progress');
-      // `blocked:stuck-feedback-loop` was added, not removed — assert the add.
+      // #1130 (PR #1145 review): the legacy (flag-OFF) path keeps its bounded
+      // stop — waiting-for is retained (trigger persists) AND
+      // blocked:stuck-feedback-loop is applied.
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',

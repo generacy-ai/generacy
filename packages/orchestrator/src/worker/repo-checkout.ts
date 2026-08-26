@@ -3,8 +3,23 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, dirname } from 'node:path';
 import type { Logger } from './types.js';
+import { engineSidecarCleanExcludes } from './product-diff.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * `git clean` argv that discards leftover untracked files from a previous run
+ * while sparing the engine's bookkeeping sidecars under `.generacy/` (#1162).
+ *
+ * The review artifact, pause context, external-feedback seed and workflow state
+ * are deliberately untracked (never committed to the PR branch), so a bare
+ * `git clean -fd` on cross-run re-entry deleted them — resetting the review
+ * round to 1, dropping `markedReadyByEngine` and losing open findings. Both
+ * reset sites (`switchBranch`, `updateRepo`) MUST use this helper.
+ */
+export function sidecarPreservingCleanArgs(): string[] {
+  return ['clean', '-fd', ...engineSidecarCleanExcludes().flatMap((pattern) => ['-e', pattern])];
+}
 
 /**
  * Default `git.remoteBranchExists` helper for the pre-push guard's production
@@ -127,9 +142,10 @@ export class RepoCheckout {
   async switchBranch(checkoutPath: string, branch: string): Promise<void> {
     this.logger.info({ checkoutPath, branch }, 'Switching to branch');
 
-    // Discard any leftover dirty state from previous worker runs
+    // Discard any leftover dirty state from previous worker runs — but keep the
+    // engine sidecars (#1162; see `sidecarPreservingCleanArgs`).
     await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: checkoutPath });
-    await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
+    await execFileAsync('git', sidecarPreservingCleanArgs(), { cwd: checkoutPath });
 
     // #1051 FR-001: `--prune` removes stale local tracking refs for branches
     // that were deleted upstream (e.g. after a merged PR with --delete-branch).
@@ -244,10 +260,11 @@ export class RepoCheckout {
       'Updating existing checkout',
     );
 
-    // Discard any leftover dirty state from previous worker runs
+    // Discard any leftover dirty state from previous worker runs — but keep the
+    // engine sidecars (#1162; see `sidecarPreservingCleanArgs`).
     this.logger.debug({ checkoutPath }, 'Discarding dirty state before branch switch');
     await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: checkoutPath });
-    await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
+    await execFileAsync('git', sidecarPreservingCleanArgs(), { cwd: checkoutPath });
 
     this.logger.debug({ checkoutPath }, 'Fetching from origin');
     // #1051 FR-001: `--prune` removes stale local tracking refs for branches

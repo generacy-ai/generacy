@@ -24,7 +24,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'phase:plan', color: '0052CC', description: 'Planning phase' },
   { name: 'phase:tasks', color: '0052CC', description: 'Task generation phase' },
   { name: 'phase:implement', color: '0052CC', description: 'Implementation phase' },
+  { name: 'phase:review', color: '0052CC', description: 'Review phase' },
   { name: 'phase:validate', color: '0052CC', description: 'Validation phase' },
+  { name: 'phase:remediate', color: '0052CC', description: 'Remediation phase' },
 
   // Waiting-for labels (review gates)
   { name: 'waiting-for:spec-review', color: 'FBCA04', description: 'Waiting for spec review' },
@@ -41,6 +43,8 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:epic-approval', color: 'FBCA04', description: 'Epic rollup PR awaiting approval' },
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
   { name: 'waiting-for:merge-conflicts', color: 'FBCA04', description: 'Base-merge conflict. See stage comment for the manual remedy.' },
+  { name: 'waiting-for:remediation-limit', color: 'FBCA04', description: 'Review↔remediate cap reached; awaiting operator' },
+  { name: 'waiting-for:ci', color: 'FBCA04', description: 'Waiting for CI to go green on the ready PR (#1133)' },
 
   // Completed labels
   { name: 'completed:spec-review', color: '0E8A16', description: 'Spec review completed' },
@@ -57,7 +61,11 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:plan', color: '0E8A16', description: 'Planning phase completed' },
   { name: 'completed:tasks', color: '0E8A16', description: 'Task generation completed' },
   { name: 'completed:implement', color: '0E8A16', description: 'Implementation completed' },
+  { name: 'completed:review', color: '0E8A16', description: 'Review phase completed' },
   { name: 'completed:validate', color: '0E8A16', description: 'Validation completed' },
+  { name: 'completed:remediate', color: '0E8A16', description: 'Remediation phase completed' },
+  { name: 'completed:remediation-limit', color: '0E8A16', description: 'Remediation-limit gate satisfied by operator' },
+  { name: 'completed:ci', color: '0E8A16', description: 'CI merge-readiness gate satisfied (#1133)' },
   { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
 
@@ -67,7 +75,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'failed:plan', color: 'D73A4A', description: 'Phase plan failed' },
   { name: 'failed:tasks', color: 'D73A4A', description: 'Phase tasks failed' },
   { name: 'failed:implement', color: 'D73A4A', description: 'Phase implement failed' },
+  { name: 'failed:review', color: 'D73A4A', description: 'Phase review failed' },
   { name: 'failed:validate', color: 'D73A4A', description: 'Phase validate failed' },
+  { name: 'failed:remediate', color: 'D73A4A', description: 'Phase remediate failed' },
 
   // #942: Repeat-identical failure escalation labels — applied by
   // LabelManager.onRepeatedError when the same fingerprint fires ≥2×.
@@ -76,7 +86,9 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'failed:plan-repeated', color: 'B60205', description: 'Phase plan failed with the same defect ≥2×' },
   { name: 'failed:tasks-repeated', color: 'B60205', description: 'Phase tasks failed with the same defect ≥2×' },
   { name: 'failed:implement-repeated', color: 'B60205', description: 'Phase implement failed with the same defect ≥2×' },
+  { name: 'failed:review-repeated', color: 'B60205', description: 'Phase review failed with the same defect ≥2×' },
   { name: 'failed:validate-repeated', color: 'B60205', description: 'Phase validate failed with the same defect ≥2×' },
+  { name: 'failed:remediate-repeated', color: 'B60205', description: 'Phase remediate failed with the same defect ≥2×' },
 
   // Issue type labels
   { name: 'type:feature', color: '1D76DB', description: 'Feature request' },
@@ -141,5 +153,10 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
     name: 'blocked:stuck-merge-conflicts',
     color: 'D73A4A',
     description: 'Merge-conflict resolver (#898) exhausted its one autonomous attempt. Remove to retry.',
+  },
+  {
+    name: 'blocked:ambiguous-linked-prs',
+    color: 'D73A4A',
+    description: 'Address-pr-feedback found >1 open PR for this issue (#1159). Resolve, then remove to retry.',
   },
 ];

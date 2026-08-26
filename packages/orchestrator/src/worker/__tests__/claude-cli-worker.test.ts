@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
+// #1159 T010: imported (from the mocked module) purely to assert the
+// fresh-request createFeature path is NOT taken on the head-ref checkout path.
+import { createFeature } from '@generacy-ai/workflow-engine';
 import { ClaudeCliWorker } from '../claude-cli-worker.js';
 import type { WorkerConfig } from '../config.js';
 import type {
@@ -45,6 +48,10 @@ const mockGithub = {
   getFilesChangedByOwnCommits: vi.fn().mockResolvedValue(['packages/foo/src/bar.ts']),
   // PR operations for PrFeedbackHandler
   getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
+  // #1159 T005/T010: address-pr-feedback head-ref rule counts linked open PRs
+  // on `<N>-*` branches. Default to none so non-head-ref tests fall through to
+  // the fresh-request createFeature path.
+  listOpenPullRequests: vi.fn().mockResolvedValue([]),
   getPRReviewThreads: vi.fn().mockResolvedValue([]),
   replyToPRComment: vi.fn().mockResolvedValue(undefined),
   // #889: LabelManager.ensureRepoLabelsExist boundary net. Default to the repo
@@ -76,14 +83,39 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   // #889: LabelManager imports WORKFLOW_LABELS to drive the ensure-pass.
   // Provide it here so the mock module surface matches the real one.
   WORKFLOW_LABELS: [],
+  // #1165: the flag-OFF validate-fix fallback fences the failing validate
+  // output through wrapUntrustedData before synthesizing the
+  // `changes-required` artifact. Provide a faithful passthrough so the mock
+  // module surface matches the real one — otherwise the fallback throws.
+  wrapUntrustedData: vi.fn(
+    (content: string, sourceLabel: string) =>
+      `<untrusted-data source="${sourceLabel}">\n${content}\n</untrusted-data>`,
+  ),
 }));
+
+// #1159 T010: hoist a shared switchBranch spy so the head-ref resolution test
+// can assert the PR head ref was checked out (the RepoCheckout instance is
+// constructed inside the worker, so its methods must be shared to be
+// observable).
+const mockSwitchBranch = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('../repo-checkout.js', () => ({
   RepoCheckout: vi.fn().mockImplementation(() => ({
     ensureCheckout: vi.fn().mockResolvedValue('/tmp/test-checkout'),
     getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-    switchBranch: vi.fn().mockResolvedValue(undefined),
+    switchBranch: mockSwitchBranch,
   })),
+}));
+
+// #1159 T010: mock the external-feedback parser so the flag-ON
+// address-pr-feedback head-ref test exits cleanly (0 findings) right after the
+// branch is resolved — keeping the test focused on the head-ref checkout rule
+// rather than the full review→remediate loop (covered by
+// address-pr-feedback-route.budget-persistence.test.ts).
+const mockParseExternalFeedback = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+
+vi.mock('../pr-feedback-parser.js', () => ({
+  parseExternalFeedback: mockParseExternalFeedback,
 }));
 
 // Mock base-merge so the pre-phase base-merge hook (#864) does not exercise
@@ -109,6 +141,27 @@ const mockEpicPostTasksInstance = {
 
 vi.mock('../epic-post-tasks.js', () => ({
   EpicPostTasks: vi.fn().mockImplementation(() => mockEpicPostTasksInstance),
+}));
+
+// #1165: the worker now constructs a RemediateExecutor unconditionally, and the
+// flag-OFF validate-fix fallback dispatches exactly one bounded remediate attempt
+// on a failing `validate` (default reviewPhaseEnabled OFF). Stub it here so the
+// integration harness controls that attempt's outcome without spawning the real
+// remediate CLI or touching the review sidecar. The fallback's own contract
+// (one-shot budget, escalation on repeat failure) is pinned by
+// phase-loop.flag-off-validate-fix.test.ts.
+const mockRemediateExecute = vi.fn().mockResolvedValue({
+  phase: 'remediate',
+  success: true,
+  exitCode: 0,
+  durationMs: 1,
+  output: [],
+});
+
+vi.mock('../remediate-executor.js', () => ({
+  RemediateExecutor: vi.fn().mockImplementation(() => ({
+    execute: mockRemediateExecute,
+  })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -236,6 +289,8 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.listBranches.mockResolvedValue([]);
     mockGithub.branchExists.mockResolvedValue(true);
     mockGithub.getCommitsBetween.mockResolvedValue([]);
+    mockGithub.listOpenPullRequests.mockResolvedValue([]);
+    mockGithub.getPullRequest.mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' });
 
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
@@ -244,6 +299,16 @@ describe('ClaudeCliWorker (integration)', () => {
     // Reset EpicPostTasks mock
     mockEpicPostTasksInstance.execute.mockReset();
     mockEpicPostTasksInstance.execute.mockResolvedValue({ childIssues: [101, 102, 103], success: true });
+
+    // #1165: reset the flag-OFF remediate stub to a clean success each test.
+    mockRemediateExecute.mockReset();
+    mockRemediateExecute.mockResolvedValue({
+      phase: 'remediate',
+      success: true,
+      exitCode: 0,
+      durationMs: 1,
+      output: [],
+    });
 
     // Reset logger child to return the mock logger
     (mockLogger.child as ReturnType<typeof vi.fn>).mockReturnValue(mockLogger);
@@ -439,9 +504,13 @@ describe('ClaudeCliWorker (integration)', () => {
       });
       mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop']);
 
-      // implement succeeds, validate fails
+      // implement succeeds, validate fails. #1165: the flag-OFF validate-fix
+      // fallback then runs one bounded remediate attempt (stubbed above) and
+      // re-runs validate, which fails again → escalation. So validate spawns
+      // twice (the remediate attempt itself is stubbed, not spawned here).
       spawnFn
         .mockReturnValueOnce(createMockProcess(0, 5).handle)
+        .mockReturnValueOnce(createMockProcess(1, 5).handle)
         .mockReturnValueOnce(createMockProcess(1, 5).handle);
 
       const config = createConfig({ gates: {} });
@@ -451,6 +520,9 @@ describe('ClaudeCliWorker (integration)', () => {
       });
 
       await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // #1165: exactly one bounded remediate attempt ran before escalation.
+      expect(mockRemediateExecute).toHaveBeenCalledTimes(1);
 
       // agent:error should be added for validate failure (batched with failed:<phase>)
       expect(mockGithub.addLabels).toHaveBeenCalledWith(
@@ -1467,7 +1539,7 @@ describe('ClaudeCliWorker (integration)', () => {
 
       // Child logger should log the routing decision
       expect(childLogger.info).toHaveBeenCalledWith(
-        'Routing to PrFeedbackHandler for PR feedback addressing',
+        'Routing to PrFeedbackHandler for PR feedback addressing (review phase disabled)',
       );
 
       // Child logger should log completion
@@ -1494,6 +1566,113 @@ describe('ClaudeCliWorker (integration)', () => {
       // Phase loop should execute normally
       expect(mockGithub.getIssue).toHaveBeenCalled();
       expect(spawnFn).toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // #1159 T010 (SC-004): address-pr-feedback head-ref resolution + dup-PR guard
+  //
+  // On the flag-ON (`reviewPhaseEnabled: true`) address-pr-feedback re-entry the
+  // working branch MUST be resolved from the PR head ref via the zero/one/many
+  // linked-open-PR rule (FR-006/FR-007, Q4→C) — never from the issue-derived
+  // createFeature slug, which diverges under #1043 slug drift and opens a
+  // duplicate PR. These drive the real head-ref block in claude-cli-worker.ts
+  // (only reachable via worker.handle with the flag on).
+  // ---------------------------------------------------------------------------
+  describe('#1159 T010: address-pr-feedback head-ref resolution (SC-004)', () => {
+    beforeEach(() => {
+      // getIssue is mock-reset in the outer beforeEach — give it a default so
+      // the description-resolution step (claude-cli-worker.ts:444) succeeds.
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [],
+        body: 'issue body',
+        title: 'issue title',
+      });
+    });
+
+    it('checks out the PR head ref (not the issue-derived slug) when exactly one linked open PR exists', async () => {
+      // The issue is #42; createFeature would derive `042-test-feature` (the
+      // module-mock default) — a slug that DIVERGES from the real PR head ref.
+      // The head ref is ZERO-PADDED (`042-…`) as the default `{paddedNumber}`
+      // pattern (numberPadding: 3) produces — the count must still match #42.
+      const headRef = '042-real-slug-from-first-run';
+      mockGithub.listOpenPullRequests.mockResolvedValue([
+        { number: 100, head: { ref: headRef }, base: { ref: 'main' }, state: 'open' },
+        // An unrelated open PR that must be excluded by the numeric-prefix filter.
+        { number: 200, head: { ref: '99-unrelated' }, base: { ref: 'main' }, state: 'open' },
+      ]);
+      mockGithub.getPullRequest.mockResolvedValue({
+        number: 100,
+        head: { ref: headRef },
+        base: { ref: 'main' },
+        state: 'open',
+      });
+      // parseExternalFeedback returns [] (hoisted default) → the flow exits at
+      // the 0-findings branch right after the branch is resolved.
+
+      const config = createConfig({ reviewPhaseEnabled: true });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: { prNumber: 100, reviewThreadIds: [1] },
+      });
+
+      const result = await worker.handle(item);
+
+      expect(result).toEqual({ status: 'completed' });
+
+      // The PR head ref — NOT the issue-derived slug — is checked out.
+      expect(mockSwitchBranch).toHaveBeenCalledWith('/tmp/test-checkout', headRef);
+
+      // createFeature (the fresh-request slug path) is NEVER taken, so the
+      // remediation lands on the PR head branch and no duplicate PR is opened
+      // under #1043 slug drift.
+      expect(createFeature).not.toHaveBeenCalled();
+      // No PR is created on this path — the existing PR (#100) is the sole PR.
+      expect(mockGithub.createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it('parks without mutation (but applies blocked:ambiguous-linked-prs) when more than one linked open PR exists', async () => {
+      // Mixed padding — a zero-padded (`042-…`) and an unpadded (`42-…`) branch
+      // both count for issue #42, so the ambiguity is detected regardless of
+      // the branch pattern's numberPadding.
+      mockGithub.listOpenPullRequests.mockResolvedValue([
+        { number: 100, head: { ref: '042-slug-a' }, base: { ref: 'main' }, state: 'open' },
+        { number: 101, head: { ref: '42-slug-b' }, base: { ref: 'main' }, state: 'open' },
+      ]);
+
+      const config = createConfig({ reviewPhaseEnabled: true });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: { prNumber: 100, reviewThreadIds: [1] },
+      });
+
+      const result = await worker.handle(item);
+
+      // Parks the poll for operator attention — completes with no branch/PR
+      // mutation, but applies a blocked:* label so the monitor's blocked:*
+      // skip suppresses re-enqueue churn and the ambiguity surfaces once.
+      expect(result).toEqual({ status: 'completed' });
+      expect(mockSwitchBranch).not.toHaveBeenCalled();
+      expect(createFeature).not.toHaveBeenCalled();
+      expect(mockGithub.createPullRequest).not.toHaveBeenCalled();
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        item.owner,
+        item.repo,
+        item.issueNumber,
+        ['blocked:ambiguous-linked-prs'],
+      );
+      // Never spawns a CLI / enters the review loop.
+      expect(spawnFn).not.toHaveBeenCalled();
+      // Never even reaches the external-feedback parse (return is before it).
+      expect(mockParseExternalFeedback).not.toHaveBeenCalled();
     });
   });
 

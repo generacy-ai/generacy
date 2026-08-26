@@ -2,11 +2,12 @@ import type { QueueItem } from '../types/index.js';
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import type { Effort } from '@generacy-ai/config';
 import type { PushGuardDecision } from './push-guard.js';
+import type { ReviewScope } from './handler-outcome.js';
 
 /**
  * Workflow phases in execution order
  */
-export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'validate';
+export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'review' | 'validate' | 'remediate';
 
 /**
  * Event types captured in the conversation JSONL log.
@@ -45,10 +46,18 @@ export interface JournalEntry {
 }
 
 /**
- * Ordered sequence of all workflow phases (default for feature/bugfix workflows)
+ * Ordered sequence of all workflow phases — the canonical *superset* for
+ * feature/bugfix workflows.
+ *
+ * `review` is present here for vocabulary/exhaustiveness (label registration,
+ * the phase-vocabulary audit, gate-index ordering), but it is a flag-gated
+ * phase. The *effective runtime* sequence is derived by
+ * `getPhaseSequence(workflow, reviewPhaseEnabled)`, which drops `review` when
+ * the flag is off so a flag-OFF run is byte-identical to pre-change (#1121).
+ * Consumers that iterate the loop must use the derived sequence, not this const.
  */
 export const PHASE_SEQUENCE: WorkflowPhase[] = [
-  'specify', 'clarify', 'plan', 'tasks', 'implement', 'validate',
+  'specify', 'clarify', 'plan', 'tasks', 'implement', 'review', 'validate',
 ];
 
 /**
@@ -62,11 +71,32 @@ export const WORKFLOW_PHASE_SEQUENCES: Record<string, WorkflowPhase[]> = {
 };
 
 /**
- * Get the phase sequence for a given workflow name.
- * Falls back to PHASE_SEQUENCE for unknown workflows.
+ * Get the effective phase sequence for a given workflow name.
+ *
+ * `review` is included only when `reviewPhaseEnabled` is true. When the flag is
+ * off (the default) `review` is dropped entirely from the returned sequence —
+ * not merely skipped downstream — so it never leaks into `buildPhaseProgress`
+ * (a spurious stage-comment row) or the phase resolver (a shifted startIndex).
+ * This preserves the byte-identical guarantee for a flag-OFF run
+ * (#1121 / Q1=A / SC-004 / FR-009).
+ *
+ * Unknown workflows fall back to PHASE_SEQUENCE but **always** drop `review`,
+ * regardless of `reviewPhaseEnabled`: an unknown workflow has no gate map
+ * (`gate-checker` returns `[]`), so an `on-remediation-limit` gate can never be
+ * applied and a review→remediate loop would be uncapped. Excluding `review`
+ * from the fallback removes that precondition entirely (#1165 / Corner 4 /
+ * FR-007). `remediate` is off-sequence in `PHASE_SEQUENCE`, so no extra filter
+ * is needed to exclude it.
  */
-export function getPhaseSequence(workflowName: string): WorkflowPhase[] {
-  return WORKFLOW_PHASE_SEQUENCES[workflowName] ?? PHASE_SEQUENCE;
+export function getPhaseSequence(
+  workflowName: string,
+  reviewPhaseEnabled = false,
+): WorkflowPhase[] {
+  const known = WORKFLOW_PHASE_SEQUENCES[workflowName];
+  if (known === undefined) {
+    return PHASE_SEQUENCE.filter((phase) => phase !== 'review');
+  }
+  return reviewPhaseEnabled ? known : known.filter((phase) => phase !== 'review');
 }
 
 /**
@@ -83,7 +113,9 @@ export const PHASE_TO_STAGE: Record<WorkflowPhase, StageType> = {
   plan: 'planning',
   tasks: 'planning',
   implement: 'implementation',
+  review: 'implementation',
   validate: 'implementation',
+  remediate: 'implementation',
 };
 
 /**
@@ -136,7 +168,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review' | 'on-merge-conflict';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review' | 'on-merge-conflict' | 'on-remediation-limit' | 'on-ci-green';
 }
 
 /**
@@ -199,6 +231,14 @@ export interface PhaseResult {
   };
   /** Partial implement result parsed from sentinel output (implement phase only) */
   implementResult?: ImplementPartialResult;
+  /**
+   * True when the phase process was killed by the executor's timeout
+   * (SIGTERM→grace→SIGKILL), as opposed to exiting on its own with a non-zero
+   * code. Lets the remediate seam preserve partial work on a timeout-kill
+   * (commit/push) while skipping commit/push on a clean-run non-zero exit
+   * (#1158 FR-007 / Q3=B). Undefined ⇒ not timed out.
+   */
+  timedOut?: boolean;
 }
 
 /**
@@ -475,13 +515,25 @@ export interface WorkerContext {
   /** PRs opened in sibling repos during cross-repo fan-out (from WorkflowState) */
   linkedPRs?: LinkedPR[];
   /**
-   * Why the worker was resumed (#892). Set by the resume path when the
-   * base-advance monitor enqueued the re-run. Gates ValidateFixHandler
-   * invocation in PhaseLoop's validate `catch` block (D7 ordering invariant).
+   * Why the worker was resumed. Set by the resume path.
+   * - `'base-advance'` (#892): the base-advance monitor enqueued the re-run.
+   *   Gates ValidateFixHandler invocation in PhaseLoop's validate `catch` block
+   *   (D7 ordering invariant).
+   * - `'merge-conflict-resolved'` (#1131): a successful merge-conflict
+   *   resolution re-armed a resolution-scoped `review`. Gates the explicit
+   *   start-phase override in the context-build seam.
    */
-  resumeReason?: 'base-advance';
+  resumeReason?: 'base-advance' | 'merge-conflict-resolved';
   /** Base branch SHA that triggered the resume (#892). Surfaces in logs. */
   baseSha?: string;
+  /**
+   * Resolution-scoped review window (#1131). Set only on the
+   * `merge-conflict-resolved` resume path when the re-arm carried a scope.
+   * `undefined` ⇒ whole-PR review (FR-010 whole-branch fallback); a
+   * defined-but-empty window ⇒ the executor short-circuits to `validate`
+   * (FR-011).
+   */
+  reviewScope?: ReviewScope;
 }
 
 /**

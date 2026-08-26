@@ -4,6 +4,8 @@ import type { WorkflowPhase, Logger, CommitResult } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
+import { isEngineSidecar, isCollapsedEngineStateDir } from './product-diff.js';
+import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js';
 
 /**
  * Internal discriminated union returned by `commitAndPush`. Loosely mirrors
@@ -31,6 +33,15 @@ export class PrManager {
   private prUrl: string | undefined;
   private prNumber: number | undefined;
 
+  /**
+   * #1125 FR-006: true iff the engine currently holds this PR ready-for-review
+   * (set by `markReadyForReview`, cleared by `convertToDraftIfEngineMarkedReady`
+   * on a successful convert). Gates the draft conversion so the engine never
+   * demotes a PR a human marked ready. In-memory — a worker restart resets it to
+   * false, which is safe over-conservatism (we simply won't convert to draft).
+   */
+  private markedReadyByEngine = false;
+
   constructor(
     private readonly github: GitHubClient,
     private readonly owner: string,
@@ -43,6 +54,12 @@ export class PrManager {
      * path) keep passing — the default helper falls back to the process cwd.
      */
     private readonly checkoutPath?: string,
+    /**
+     * #1156 FR-006: workflowId for the review sidecar so `markedReadyByEngine`
+     * can be persisted / reconstructed across runs. Optional — best-effort
+     * persistence is skipped when either this or `checkoutPath` is absent.
+     */
+    private readonly workflowId?: string,
   ) {}
 
   /**
@@ -113,15 +130,36 @@ export class PrManager {
     try {
       let committed = false;
 
-      // Check if there are any uncommitted changes to commit
+      // #1162 FR-001: stage only genuine product paths, never engine sidecars.
+      // Replaces the unscoped `git add -A` that committed `.generacy/review-*`
+      // and `pause-context-*` bookkeeping into product PR diffs. A phase whose
+      // only pending change is a sidecar leaves `toStage` empty and produces no
+      // commit (no empty commits).
+      //
+      // `status.staged` is included so an index-only product change (staged with
+      // no further working-tree diff — e.g. an implement agent that ran
+      // `git add`, or a prior interrupted commitAndPush) is not stranded. The
+      // commit is then made with an explicit pathspec of exactly `toStage`, so a
+      // sidecar that some other actor pre-staged into the index is never folded
+      // into the commit by the whole-index `git commit` — the "never committed"
+      // guarantee (FR-001/SC-001) holds even against a dirty index.
+      //
+      // A collapsed `.generacy/` directory entry (a status backend that does not
+      // expand untracked directories) is skipped too: its contents are opaque to
+      // the sidecar filter, and staging it would commit every sidecar at once.
       const status = await this.github.getStatus();
-      if (status.has_changes) {
-        // Stage all changes
-        await this.github.stageAll();
+      const { staged = [], unstaged = [], untracked = [] } = status;
+      const toStage = [...new Set([...staged, ...unstaged, ...untracked])].filter(
+        (p) => !isEngineSidecar(p) && !isCollapsedEngineStateDir(p),
+      );
+      if (toStage.length > 0) {
+        // Stage first so untracked members of `toStage` are known to git before
+        // the pathspec commit (a bare `git commit -- <untracked>` would fail).
+        await this.github.stageFiles(toStage);
 
-        // Commit with a phase-specific message
+        // Commit with a phase-specific message, scoped to the filtered pathspec.
         const message = customMessage ?? `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
-        const commitResult = await this.github.commit(message);
+        const commitResult = await this.github.commit(message, toStage);
         this.logger.info(
           { phase, sha: commitResult.sha, files: commitResult.files_committed.length },
           'Committed phase changes',
@@ -429,6 +467,16 @@ export class PrManager {
 
     try {
       await this.github.markPRReady(this.owner, this.repo, this.prNumber);
+      // #1125 FR-006: record that the engine holds this PR ready so a later
+      // remediate entry can convert it back to draft (and never touch a PR a
+      // human marked ready).
+      this.markedReadyByEngine = true;
+      // #1156 FR-006: also persist to the sidecar so a re-entry in a NEW run
+      // (fresh process → in-memory flag reset) can still reconstruct it.
+      // Best-effort — skipped when either path component is absent.
+      if (this.checkoutPath && this.workflowId) {
+        await setMarkedReadyByEngine(this.checkoutPath, this.workflowId, true);
+      }
       this.logger.info(
         { prNumber: this.prNumber, prUrl: this.prUrl },
         'Marked PR as ready for review',
@@ -443,6 +491,79 @@ export class PrManager {
 
     // Flip sibling PRs to ready-for-review (idempotent, best-effort)
     await this.markSiblingsReadyForReview(linkedPRs);
+  }
+
+  /**
+   * #1125 FR-006: convert the PR (and each linked sibling) back to draft when
+   * the engine is entering a remediate round — but ONLY if the engine itself
+   * marked it ready. A no-op when `markedReadyByEngine` is false, so a PR a
+   * human marked ready is never demoted.
+   *
+   * Best-effort per PR: `convertPullRequestToDraft` is idempotent (short-circuits
+   * when already draft) and every failure warns without throwing. Clears the
+   * flag on a successful primary convert so a subsequent remediate entry is a
+   * no-op until the engine marks ready again (FR-008).
+   */
+  async convertToDraftIfEngineMarkedReady(linkedPRs?: LinkedPR[]): Promise<void> {
+    // #1156 FR-006: when the in-memory flag is false (e.g. a fresh process on a
+    // cross-run re-entry) reconstruct it from the sidecar. Only the engine's own
+    // `markReadyForReview` ever writes the flag `true`, so this can never demote
+    // a PR a human marked ready (FR-007).
+    let engineMarkedReady = this.markedReadyByEngine;
+    if (!engineMarkedReady && this.checkoutPath && this.workflowId) {
+      const artifact = await readReviewArtifact(this.checkoutPath, this.workflowId);
+      engineMarkedReady = artifact?.markedReadyByEngine ?? false;
+    }
+
+    if (!engineMarkedReady) {
+      this.logger.debug('Engine did not mark this PR ready — skipping convert-to-draft');
+      return;
+    }
+    if (!this.prNumber) {
+      this.logger.debug('No PR number available — skipping convert-to-draft');
+      return;
+    }
+
+    try {
+      await this.github.convertPullRequestToDraft(this.owner, this.repo, this.prNumber);
+      this.markedReadyByEngine = false;
+      // #1156 FR-006: clear the persisted flag too so a later remediate entry is
+      // a no-op until the engine marks ready again.
+      if (this.checkoutPath && this.workflowId) {
+        await setMarkedReadyByEngine(this.checkoutPath, this.workflowId, false);
+      }
+      this.logger.info(
+        { prNumber: this.prNumber, prUrl: this.prUrl },
+        'Converted PR back to draft for remediation',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { prNumber: this.prNumber, error: String(error) },
+        'Failed to convert PR to draft (non-fatal)',
+      );
+    }
+
+    // Convert linked siblings too (idempotent, best-effort).
+    if (!linkedPRs || linkedPRs.length === 0) return;
+    for (const pr of linkedPRs) {
+      const parsed = parsePRUrl(pr.url);
+      if (!parsed) {
+        this.logger.warn({ url: pr.url }, 'Could not parse linked PR URL — skipping convert-to-draft');
+        continue;
+      }
+      try {
+        await this.github.convertPullRequestToDraft(parsed.owner, parsed.repo, parsed.number);
+        this.logger.info(
+          { repo: `${parsed.owner}/${parsed.repo}`, number: parsed.number },
+          'Converted sibling PR back to draft for remediation',
+        );
+      } catch (error) {
+        this.logger.warn(
+          { repo: `${parsed.owner}/${parsed.repo}`, number: parsed.number, error: String(error) },
+          'Failed to convert sibling PR to draft (non-fatal)',
+        );
+      }
+    }
   }
 
   /**

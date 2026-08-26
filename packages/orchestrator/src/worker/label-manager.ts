@@ -86,6 +86,45 @@ export function isHumanGateCompletion(label: string): boolean {
 }
 
 /**
+ * Options for `LabelManager.onResumeStart()`.
+ */
+export interface ResumeStartOptions {
+  /**
+   * Gate suffixes (the "X" in `completed:X`) whose completion label must
+   * SURVIVE the resume strip because the resumed phase consumes it itself.
+   * Every other `completed:<X>` paired with a `waiting-for:<X>` is stripped.
+   * Defaults to `DEFAULT_RESUME_RETAIN_SUFFIXES`.
+   */
+  retainCompletedSuffixes?: readonly string[];
+}
+
+/**
+ * Gate completions that always survive the resume strip: the
+ * `on-remediation-limit` gate's "already satisfied" branch in the phase loop
+ * consumes `completed:remediation-limit` (resets the counter AND removes the
+ * label itself), so stripping it here would discard the operator's answer.
+ */
+export const DEFAULT_RESUME_RETAIN_SUFFIXES: readonly string[] = ['remediation-limit'];
+
+/**
+ * Compute the resume-strip retain set from worker config. Rule:
+ *   - `remediation-limit` — always (consumed + removed by the reset branch).
+ *   - `implementation-review` — ONLY when `ciMergeGateEnabled`: the relocated
+ *     post-validate gate's terminal no-op resume reads
+ *     `completed:validate` + `completed:implementation-review` and would
+ *     re-run `validate` if the answer were stripped.
+ * Everything else (`ci`, `clarification`, `sibling-review`, the artifact
+ * review gates, …) is stripped so the resumed phase can pause again cleanly.
+ */
+export function resolveResumeRetainSuffixes(
+  config: { ciMergeGateEnabled?: boolean },
+): string[] {
+  const retain = [...DEFAULT_RESUME_RETAIN_SUFFIXES];
+  if (config.ciMergeGateEnabled) retain.push('implementation-review');
+  return retain;
+}
+
+/**
  * Callback invoked from `onGateHit` after a pause label pair
  * (`waiting-for:<gate>` + `agent:paused`) has been successfully applied.
  * Used by callers wired to `PhaseTrackerService` to invalidate the paired
@@ -205,6 +244,37 @@ export class LabelManager {
       await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
       await this.applyLabels([completedLabel]);
     }, { site: 'phase-complete', labelOp: `addLabels([${completedLabel}])` });
+  }
+
+  /**
+   * Called when a phase executed successfully but must NOT be marked complete —
+   * i.e. it will loop rather than advance. Removes the `phase:<current>`
+   * in-progress label WITHOUT granting `completed:<current>`.
+   *
+   * The `review` phase uses this when its verdict is `changes-required`: the
+   * phase ran (so `phase:review` must go), but review has not reached a clean
+   * verdict, so `completed:review` must not be granted. Granting it would both
+   * misreport progress (cockpit `STAGE_COMPLETE_PIPELINE_ORDER` treats
+   * `completed:review` as a stage-complete marker) and let a label-derived
+   * resume resolve straight past the open review into `validate`
+   * (claude-cli-worker's merge-conflict path documents exactly this trap). The
+   * `completed:review` grant instead happens on the converging clean pass via
+   * `onPhaseComplete`. The cap/remediate/verdict logic is sidecar-based
+   * (`verdict` / `remediationCount` / `round`) and never keys on this label, so
+   * withholding it is safe.
+   */
+  async onPhaseExecutedWithoutCompletion(phase: WorkflowPhase): Promise<void> {
+    const phaseLabel = `phase:${phase}`;
+    await this.retryWithBackoff(async () => {
+      await this.ensureRepoLabelsExist();
+
+      this.logger.info(
+        { phase, issue: this.issueNumber },
+        `Phase executed without completion: removing ${phaseLabel} (no completed:${phase} — verdict not clean)`,
+      );
+
+      await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
+    }, { site: 'phase-executed-no-completion', labelOp: `removeLabels([${phaseLabel}])` });
   }
 
   /**
@@ -333,8 +403,22 @@ export class LabelManager {
    * Removes stale `waiting-for:*` and `agent:paused` labels that were set
    * when the workflow paused at a gate, and adds `agent:in-progress` to
    * reflect the active workflow state.
+   *
+   * Also strips the paired `completed:<X>` for every `waiting-for:<X>` present
+   * so re-entering the phase can re-activate the gate if needed (e.g. a
+   * resumed `clarify` that asks follow-up questions must pause again; a
+   * re-run `validate` that re-pauses on `waiting-for:ci` must not leave a
+   * stale `completed:ci` for the monitor to pair forever).
+   *
+   * `retainCompletedSuffixes` is the explicit, caller-supplied exception set:
+   * `completed:<X>` for X in that set survives the strip because the resumed
+   * phase consumes it itself (see `resolveResumeRetainSuffixes`). Defaults to
+   * `DEFAULT_RESUME_RETAIN_SUFFIXES` (`remediation-limit` only).
    */
-  async onResumeStart(): Promise<void> {
+  async onResumeStart(options: ResumeStartOptions = {}): Promise<void> {
+    const retain = new Set<string>(
+      options.retainCompletedSuffixes ?? DEFAULT_RESUME_RETAIN_SUFFIXES,
+    );
     await this.retryWithBackoff(async () => {
       await this.ensureRepoLabelsExist();
       const issue = await this.github.getIssue(this.owner, this.repo, this.issueNumber);
@@ -346,17 +430,32 @@ export class LabelManager {
         (l) => l.startsWith('waiting-for:') || l === 'agent:paused',
       );
 
-      // Also remove completed: labels for gates being resumed, so re-entering
-      // the phase can re-activate the gate if needed (e.g., follow-up
-      // clarification questions require another pause cycle).
+      // Strip the paired completed:<X> for each waiting-for:<X> unless the
+      // caller asked to retain it. Only gates whose completion is consumed AT
+      // the resumed phase (and removed there) belong in the retain set — a
+      // blanket "every human gate survives" exemption let `completed:
+      // clarification` skip the follow-up pause and left `completed:ci` live
+      // across re-pauses (see the #1154 post-merge review).
       const gateSuffixes = currentLabels
         .filter((l) => l.startsWith('waiting-for:'))
         .map((l) => l.slice('waiting-for:'.length));
+      const retained: string[] = [];
       for (const suffix of gateSuffixes) {
         const completedLabel = `completed:${suffix}`;
-        if (currentLabels.includes(completedLabel) && !labelsToRemove.includes(completedLabel)) {
+        if (!currentLabels.includes(completedLabel)) continue;
+        if (retain.has(suffix)) {
+          retained.push(completedLabel);
+          continue;
+        }
+        if (!labelsToRemove.includes(completedLabel)) {
           labelsToRemove.push(completedLabel);
         }
+      }
+      if (retained.length > 0) {
+        this.logger.info(
+          { labels: retained, issue: this.issueNumber },
+          'Resume: retaining completed gate labels consumed by the resumed phase',
+        );
       }
 
       if (labelsToRemove.length > 0) {

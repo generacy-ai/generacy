@@ -230,7 +230,7 @@ include?
 **Question**: What content shape should the shortened descriptions take?
 **Options**:
 - A: **Terse cause only, keep issue ref**. Examples:
-  - \`blocked:stuck-feedback-loop\`: \`PR-feedback loop paused.\`
+  - \`blocked:resolve-failed\`: \`PR-feedback resolve failed.\`
   - \`blocked:stuck-validate-fix\`: \`Validate-fix paused (#892).\`
 - B: **Cause only, no directive**. Slightly terser.
 - C: **Cause + issue ref only**. Very short.
@@ -2093,6 +2093,57 @@ describe('negative regressions (#949, T015-T017)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1189: em-dash question headings must trip the FR-004 discriminator
+// ---------------------------------------------------------------------------
+describe('#1189: question-heading discriminator is separator-agnostic', () => {
+  const logger = createMockLogger();
+
+  it('an em-dash question comment (`### Q1 - Topic`) sets sourceHadQuestionHeadings', () => {
+    // Verbatim shape of the comment that caused #1189 on generacy#1187: the
+    // agent composed its own question batch with em-dash headings instead of
+    // the engine's `### Q<n>: <topic>`. The pre-#1189 colon-only discriminator
+    // did not fire, so each question's TOPIC was captured as its ANSWER and the
+    // `on-questions` gate was silently skipped.
+    const body = [
+      '## Clarification questions (speckit `/clarify`)',
+      '',
+      '### Q1 \u2014 Sentinel authority vs tasks.md',
+      '**Context**: FR-001 gates the fallback on `implementResult === undefined`.',
+      '**Question**: Trust the sentinel, or re-enter implement?',
+    ].join('\n');
+
+    const answers = parseAnswersFromComments([{ id: 601, body }], [1], logger);
+
+    // The block still parses (the opener grammar is unchanged) — what matters
+    // is that it is FLAGGED, so `integrateGitHubAnswers` takes the FR-004
+    // fail-closed branch rather than writing the topic in as an answer.
+    expect(answers.get(1)?.sourceHadQuestionHeadings).toBe(true);
+  });
+
+  it('a bare cockpit answer delimiter (`### Q1` + answer on the next line) does NOT set it', () => {
+    // Guards the no-false-positive property the required colon used to
+    // provide: widening the discriminator must not make every legitimate
+    // cockpit integration look like a question comment.
+    const body = ['### Q1', '**Answer:** B', '', '### Q2  ', '**Answer:** A'].join('\n');
+
+    const answers = parseAnswersFromComments([{ id: 602, body }], [1, 2], logger);
+
+    expect(answers.get(1)?.sourceHadQuestionHeadings).toBe(false);
+    // Trailing whitespace after `### Q2` must not read as trailing content.
+    expect(answers.get(2)?.sourceHadQuestionHeadings).toBe(false);
+    expect(answers.get(1)?.answer).toBe('B');
+    expect(answers.get(2)?.answer).toBe('A');
+  });
+
+  it("the engine's own colon shape (`### Q1: Topic`) keeps setting it", () => {
+    const body = ['### Q1: Fix approach', '**Context**: whichever.'].join('\n');
+    const answers = parseAnswersFromComments([{ id: 603, body }], [1], logger);
+    expect(answers.get(1)?.sourceHadQuestionHeadings).toBe(true);
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // T018: FR-013 — cockpit-format answer from untrusted author produces explainer

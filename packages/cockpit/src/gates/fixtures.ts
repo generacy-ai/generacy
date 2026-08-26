@@ -56,6 +56,9 @@ const GENERATIONS: Record<GateType, string> = {
   'phase-queue': derivePhaseQueueGeneration({ phaseNumber: 3 }),
   filing: deriveFilingGeneration({ draftHash: 'feedbeef1234' }),
   'scope-drained': deriveScopeDrainedGeneration({ trackingIssueRef: TRACKING_REF, counter: 1 }),
+  // #1120 / #1133 — plain-string generations (no per-type derive helper; Out of Scope).
+  'remediation-limit': '1', // cap-round counter
+  ci: 'abc1234', // head SHA
 };
 
 // phase-queue is the sole per-issue exception: its wire `issueRef` slot carries
@@ -96,6 +99,8 @@ export const VALID_FIXTURES: Record<GateType, GateOpen> = {
   'phase-queue': buildRecord('phase-queue'),
   filing: buildRecord('filing'),
   'scope-drained': buildRecord('scope-drained'),
+  'remediation-limit': buildRecord('remediation-limit'),
+  ci: buildRecord('ci'),
 };
 
 // Assert every valid fixture parses at module load — fixture drift fails the build,
@@ -120,6 +125,8 @@ const ANSWER_SPECS: Record<GateType, AnswerSpec> = {
   'phase-queue': { optionId: null, freeText: 'proceed with next phase' },
   filing: { optionId: 'opt-a', freeText: null },
   'scope-drained': { optionId: null, freeText: 'confirmed scope drained' },
+  'remediation-limit': { optionId: 'opt-a', freeText: null }, // resume
+  ci: { optionId: null, freeText: 'redirect: re-run CI' },
 };
 
 function buildAnswer(gateType: GateType): GateAnswer {
@@ -146,6 +153,8 @@ export const VALID_ANSWER_FIXTURES: Record<GateType, GateAnswer> = {
   'phase-queue': buildAnswer('phase-queue'),
   filing: buildAnswer('filing'),
   'scope-drained': buildAnswer('scope-drained'),
+  'remediation-limit': buildAnswer('remediation-limit'),
+  ci: buildAnswer('ci'),
 };
 
 for (const gateType of Object.keys(VALID_ANSWER_FIXTURES) as GateType[]) {

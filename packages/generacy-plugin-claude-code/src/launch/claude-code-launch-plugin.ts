@@ -3,8 +3,9 @@ import type {
   ClaudeCodeIntent,
   PhaseIntent,
   PrFeedbackIntent,
-  ValidateFixIntent,
   MergeConflictIntent,
+  ReviewIntent,
+  RemediateIntent,
   ConversationTurnIntent,
   InvokeIntent,
 } from './types.js';
@@ -51,7 +52,7 @@ let effortMechanismCache: boolean | undefined = undefined;
 export class ClaudeCodeLaunchPlugin {
   readonly pluginId = 'claude-code';
   readonly provider = 'claude-code';
-  readonly supportedKinds = ['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'conversation-turn', 'invoke'] as const;
+  readonly supportedKinds = ['phase', 'pr-feedback', 'merge-conflict', 'review', 'remediate', 'conversation-turn', 'invoke'] as const;
 
   /**
    * Whether the installed CLI supports a delivery mechanism for reasoning effort.
@@ -102,10 +103,12 @@ export class ClaudeCodeLaunchPlugin {
         return this.buildPhaseLaunch(intent);
       case 'pr-feedback':
         return this.buildPrFeedbackLaunch(intent);
-      case 'validate-fix':
-        return this.buildValidateFixLaunch(intent);
       case 'merge-conflict':
         return this.buildMergeConflictLaunch(intent);
+      case 'review':
+        return this.buildReviewLaunch(intent);
+      case 'remediate':
+        return this.buildRemediateLaunch(intent);
       case 'conversation-turn':
         return this.buildConversationTurnLaunch(intent);
       case 'invoke':
@@ -183,10 +186,10 @@ export class ClaudeCodeLaunchPlugin {
     };
   }
 
-  private buildValidateFixLaunch(intent: ValidateFixIntent): LaunchSpec {
-    // Same shape as pr-feedback — one bounded agent turn with a prepared prompt.
-    // The `evidenceHash` on the intent is metadata for launcher observability,
-    // not CLI input. See specs/892-found-during-cockpit-v1/contracts/validate-fix-handler.md.
+  private buildMergeConflictLaunch(intent: MergeConflictIntent): LaunchSpec {
+    // Same shape as pr-feedback — one bounded agent turn with
+    // a prepared prompt. See specs/898-found-during-cockpit-v1/contracts/
+    // handler-contract.md §"Sibling-owned path constraint".
     const args = [
       '-p',
       '--output-format', 'stream-json',
@@ -211,10 +214,41 @@ export class ClaudeCodeLaunchPlugin {
     };
   }
 
-  private buildMergeConflictLaunch(intent: MergeConflictIntent): LaunchSpec {
-    // Same shape as pr-feedback / validate-fix — one bounded agent turn with
-    // a prepared prompt. See specs/898-found-during-cockpit-v1/contracts/
-    // handler-contract.md §"Sibling-owned path constraint".
+  private buildReviewLaunch(intent: ReviewIntent): LaunchSpec {
+    // Same shape as pr-feedback / merge-conflict — one bounded
+    // agent turn with an engine-built charter prompt (#1124). The charter is
+    // constructed in-process by the ReviewExecutor (Q4→B — no /speckit:review
+    // slash command). See specs/1124-context-new-review-phase/contracts/
+    // review-executor.md.
+    const args = [
+      '-p',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
+    ];
+
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
+    if (intent.effort) {
+      args.push('--effort', intent.effort);
+    }
+
+    args.push(intent.prompt);
+
+    return {
+      command: 'claude',
+      args,
+      stdioProfile: 'default',
+    };
+  }
+
+  private buildRemediateLaunch(intent: RemediateIntent): LaunchSpec {
+    // Byte-identical to buildReviewLaunch — one bounded agent turn with an
+    // engine-built remediation charter prompt (#1128). The charter is
+    // constructed in-process by the RemediateExecutor via buildRemediateCharter.
+    // See specs/1128-context-remediate-single-code/contracts/remediate-executor.md.
     const args = [
       '-p',
       '--output-format', 'stream-json',

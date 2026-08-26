@@ -1,0 +1,86 @@
+import type { ReviewArtifact, ReviewFinding, Severity } from '../review-artifact.js';
+import { SEVERITY_RANK } from '../review-artifact.js';
+import type { ReviewDelta } from './review-delta.js';
+
+/**
+ * FR-005 / Q3: engine-side advisory filter, authoritative over the prompt.
+ * - `round === 1` ⇒ keep all (advisory allowed on the first full review).
+ * - `round >= 2` ⇒ drop any finding below `blockingSeverity` (Decision 5).
+ */
+export function filterNewFindings(
+  candidates: ReviewFinding[],
+  round: number,
+  blockingSeverity: Severity,
+): ReviewFinding[] {
+  if (round === 1) {
+    return [...candidates];
+  }
+  const threshold = SEVERITY_RANK[blockingSeverity];
+  return candidates.filter((f) => SEVERITY_RANK[f.severity] >= threshold);
+}
+
+/**
+ * FR-006: monotonic status machine over the findings artifact. Returns the merged
+ * `ReviewFinding[]`; the executor computes the verdict (via the single
+ * `computeVerdict`) and writes the canonical artifact.
+ *
+ * 1. `open` finding whose file is in `delta.changedFiles` and whose id matches a
+ *    `reviewerAddressed` finding ⇒ `resolved`.
+ * 1b. `open` finding carrying a `synthetic` kind (validate-failure synthesis /
+ *    body-only external feedback) whose id matches a `reviewerAddressed`
+ *    finding ⇒ `resolved` REGARDLESS of delta membership. Its `file` is a
+ *    command string or placeholder that can never be a changed path, so the
+ *    delta rule would carry it open forever and ride every validate failure to
+ *    the remediation cap; the reviewer's explicit re-emission is the evidence.
+ * 2. `open` findings not in the delta ⇒ unchanged (Q2 — evidence-based;
+ *    anti-vanish carry-forward, SC-005).
+ * 3. `resolved` findings ⇒ never touched (Q1 — terminal).
+ * 4. New findings ⇒ `filterNewFindings` first; survivors de-duped by id against
+ *    carried-forward priors (a re-emitted unaddressed finding shares its prior's
+ *    deterministic id) before being appended with `round = delta.round`.
+ */
+export function advanceArtifact(
+  prior: ReviewArtifact | null,
+  delta: ReviewDelta,
+  reviewerAddressed: ReviewFinding[],
+  reviewerNewFindings: ReviewFinding[],
+  blockingSeverity: Severity,
+): ReviewFinding[] {
+  const deltaFiles = new Set(delta.files);
+  const addressed = new Set(reviewerAddressed.map((f) => f.id));
+
+  const priorFindings = prior?.findings ?? [];
+  const transitioned: ReviewFinding[] = priorFindings.map((f) => {
+    if (
+      f.status === 'open' &&
+      addressed.has(f.id) &&
+      (f.synthetic !== undefined || deltaFiles.has(f.file))
+    ) {
+      return { ...f, status: 'resolved' as const };
+    }
+    // resolved stays resolved (Q1); open-outside-delta stays open (Q2).
+    return f;
+  });
+
+  const kept = filterNewFindings(reviewerNewFindings, delta.round, blockingSeverity);
+
+  // De-dupe re-emitted findings by id against carried-forward priors (and against
+  // each other). The verification charter tells the agent to re-emit an
+  // unaddressed finding as `open` "when in doubt"; that re-emission shares the
+  // deterministic id (`sha256(file, title)`) of the prior copy already carried
+  // forward in `transitioned`. Appending both would put two findings with the
+  // same id in the artifact, breaking the id-uniqueness invariant ReviewPoster's
+  // inline thread marker relies on — it would re-post duplicate comments each
+  // round. Prefer the carried-forward instance; drop the re-emitted duplicate.
+  const seenIds = new Set(transitioned.map((f) => f.id));
+  const appended: ReviewFinding[] = [];
+  for (const f of kept) {
+    if (seenIds.has(f.id)) {
+      continue;
+    }
+    seenIds.add(f.id);
+    appended.push({ ...f, round: delta.round });
+  }
+
+  return [...transitioned, ...appended];
+}

@@ -59,31 +59,6 @@ export interface PrFeedbackIntent {
 }
 
 /**
- * Intent for a bounded validate-fix agent attempt (#892). Routes through the
- * same launcher plumbing as `pr-feedback`. The `evidenceHash` surfaces in
- * launcher observability + PhaseTracker dedupe key.
- */
-export interface ValidateFixIntent {
-  kind: 'validate-fix';
-  /** PR number for logging/tracing */
-  prNumber: number;
-  /** Full prompt text (pre-built by ValidateFixHandler with stdout evidence) */
-  prompt: string;
-  /** 64-hex SHA-256 identity of the failing evidence — surfaces in logs. */
-  evidenceHash: string;
-  /**
-   * Resolved provider from `resolveAgentForPhase(..., 'implement')`. Threaded via
-   * `LaunchRequest.provider` (this field is a defensive breadcrumb; the plugin
-   * dispatch reads `LaunchRequest.provider` — see `pr-feedback-handler.ts:879`).
-   */
-  provider?: string;
-  /** Resolved model override, provider-interpreted. */
-  model?: string;
-  /** Resolved reasoning-effort override, provider-interpreted. */
-  effort?: Effort;
-}
-
-/**
  * Intent for a bounded merge-conflict resolution agent attempt (#898).
  * Routes through the same launcher plumbing as `pr-feedback`.
  */
@@ -95,8 +70,47 @@ export interface MergeConflictIntent {
   prompt: string;
   /**
    * Resolved provider from `resolveAgentForPhase(..., 'implement')`. Threaded via
-   * `LaunchRequest.provider` (defensive breadcrumb — see ValidateFixIntent note).
+   * `LaunchRequest.provider` (defensive breadcrumb — the plugin dispatch reads
+   * `LaunchRequest.provider`).
    */
+  provider?: string;
+  /** Resolved model override, provider-interpreted. */
+  model?: string;
+  /** Resolved reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
+}
+
+/**
+ * Intent for an engine-driven review pass (#1124). The engine builds the review
+ * charter in-process and passes it as the prompt; routes through the same
+ * launcher plumbing as `merge-conflict` (Q4→B — no `/speckit:review` command).
+ */
+export interface ReviewIntent {
+  kind: 'review';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full charter prompt (built by ReviewExecutor via buildReviewCharter) */
+  prompt: string;
+  /** Resolved provider from `resolveAgentForPhase(..., 'implement')`. */
+  provider?: string;
+  /** Resolved model override, provider-interpreted. */
+  model?: string;
+  /** Resolved reasoning-effort override, provider-interpreted. */
+  effort?: Effort;
+}
+
+/**
+ * Intent for an engine-driven remediation pass (#1128). Mirrors `ReviewIntent`:
+ * the engine builds the remediation charter in-process and passes it as the
+ * prompt, routing through the same launcher plumbing as `review`.
+ */
+export interface RemediateIntent {
+  kind: 'remediate';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full charter prompt (built by RemediateExecutor via buildRemediateCharter) */
+  prompt: string;
+  /** Resolved provider from `resolveAgentForPhase(..., 'implement')`. */
   provider?: string;
   /** Resolved model override, provider-interpreted. */
   model?: string;
@@ -140,8 +154,9 @@ export type LaunchIntent =
   | ShellIntent
   | PhaseIntent
   | PrFeedbackIntent
-  | ValidateFixIntent
   | MergeConflictIntent
+  | ReviewIntent
+  | RemediateIntent
   | ConversationTurnIntent
   | InvokeIntent;
 
