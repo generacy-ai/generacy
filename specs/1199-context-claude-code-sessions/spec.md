@@ -41,6 +41,26 @@ served each phase.
 Part of epic generacy-ai/generacy#1197 (LLM gateway model routing). Full design:
 `docs/llm-gateway-model-routing-plan.md` in generacy-ai/tetrad-development.
 
+## Clarifications
+
+### Session 2026-08-26 (Batch 1 — answers accepted from issue comments)
+
+- Q1 → A: Route values are opaque canonical strings. generacy#1198 pins the
+  contract as `resolveRoute(model?: string): 'subscription' | 'gateway'` — a
+  two-member string union. The orchestrator compares with strict `===` and logs
+  the string verbatim.
+- Q2 → A: On a simultaneous provider + route change, emit BOTH the existing
+  provider-switch line AND `agent.route.transition`; the session is dropped once.
+- Q3 → A: `undefined → <route>` on the first CLI phase is NOT a transition — no
+  `agent.route.transition` line, no session drop; trackers just initialize
+  (mirrors the model-transition rule at `phase-loop.ts:788-798`, preserves SC-003).
+- Q4 → A: Hard-block — this issue pauses/requeues until generacy#1198 (owner of
+  the `resolveRoute` export) merges to develop; no code lands beforehand. P1
+  serializes as #1198 → (#1199, #1200) → #1201.
+- Q5 → A: FR-006's route appears in a log line at the CLI spawn site (adjacent to
+  the spawn at `:807`), after provider/model/route resolution. The `:453`
+  'Starting phase' line is unchanged.
+
 ## User Stories
 
 ### US1: Session survives valid resumes, drops on route change
@@ -52,8 +72,9 @@ Part of epic generacy-ai/generacy#1197 (LLM gateway model routing). Full design:
 route's backend cannot see, and phases silently start fresh instead of failing.
 
 **Acceptance Criteria**:
-- [ ] Same provider, model `claude-opus-4-8` → route change to `openrouter/a/b`
-      drops `currentSessionId` and logs `agent.route.transition`.
+- [ ] Same provider, model `claude-opus-4-8` → `openrouter/a/b` (route flips
+      `subscription` → `gateway`) drops `currentSessionId` and logs
+      `agent.route.transition`.
 - [ ] Same provider, `claude-opus-4-8` → `claude-sonnet-5` on the **same** route
       keeps the session and logs `agent.model.transition` (existing behavior).
 - [ ] When every phase resolves to the subscription route, there is no behavior
@@ -76,12 +97,12 @@ served a given phase without reconstructing routing from config.
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Extend the cross-phase invalidation check in `phase-loop.ts` from `provider` to the tuple `(provider, route)`; track `currentRoute` alongside `currentProvider`/`currentModel`. | P1 | Update trackers post-spawn like `currentProvider`/`currentModel`. |
-| FR-002 | Drop `currentSessionId` when the route changes between phases, regardless of provider. | P1 | Same semantics as the existing provider-switch drop. |
-| FR-003 | Emit `agent.route.transition` with `{phase, prevRoute, nextRoute, prevModel, nextModel}` on a route change. | P1 | |
+| FR-001 | Extend the cross-phase invalidation check in `phase-loop.ts` from `provider` to the tuple `(provider, route)`; track `currentRoute` alongside `currentProvider`/`currentModel`. | P1 | Route values are canonical strings (`'subscription' \| 'gateway'` per #1198); compare with strict `===` (Q1→A). Update trackers post-spawn like `currentProvider`/`currentModel`. `undefined → X` initializes, no drop (Q3→A). |
+| FR-002 | Drop `currentSessionId` when the route changes between phases, regardless of provider. | P1 | Same semantics as the existing provider-switch drop. On simultaneous provider + route change, the session is dropped once (Q2→A). |
+| FR-003 | Emit `agent.route.transition` with `{phase, prevRoute, nextRoute, prevModel, nextModel}` on a route change. | P1 | Fires on ANY route change, including cross-provider hops — both the provider-switch line and this line appear (Q2→A). Not emitted for `undefined → X` (Q3→A). Route strings logged verbatim (Q1→A). |
 | FR-004 | Preserve the existing `agent.model.transition` line for same-route, same-provider model changes. | P1 | No regression to `:793-803`. |
 | FR-005 | Resolve the route via `resolveRoute` imported from `@generacy-ai/generacy-plugin-claude-code`'s public export; do not duplicate the rule in the orchestrator. | P1 | Plugin must not import orchestrator types. |
-| FR-006 | Include the resolved route in the phase-start log for CLI phases. | P2 | |
+| FR-006 | Include the resolved route in a log line at the CLI spawn site for CLI phases. | P2 | Q5→A: extend or add a line adjacent to the spawn at `:807`, after provider/model/route resolution; the `:453` 'Starting phase' line is unchanged. |
 | FR-007 | Add the resolved route to the launch log lines of the four direct `agentLauncher.launch` callers; do not change their session behavior. | P2 | They already start fresh sessions. |
 | FR-008 | No behavior change when every phase resolves to the subscription (default) route. | P1 | Backward-compatibility guarantee. |
 
@@ -98,8 +119,9 @@ served a given phase without reconstructing routing from config.
 
 - `resolveRoute` is available as a stable public export of
   `@generacy-ai/generacy-plugin-claude-code` before this issue lands (delivered by
-  the sibling plugin issue in epic #1197). If it lands after, this issue is
-  dependency-blocked on it.
+  generacy#1198 in epic #1197). Q4→A: this issue is HARD-BLOCKED until #1198
+  merges to develop — no code lands beforehand (verified 2026-08-26: the export
+  is still absent). P1 serializes as #1198 → (#1199, #1200) → #1201.
 - The subscription route is the default/no-op route; a run with no gateway
   configuration resolves every phase to it.
 - "Route" is derivable from the same inputs already available at the phase-loop
