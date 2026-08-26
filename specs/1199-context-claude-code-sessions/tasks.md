@@ -16,7 +16,7 @@
 
 ## Phase 1: Prerequisite gate (blocking)
 
-- [ ] T001 [US1] Rebase `1199-context-claude-code-sessions` on `develop` and verify
+- [X] T001 [US1] Rebase `1199-context-claude-code-sessions` on `develop` and verify
       generacy#1198 has landed: confirm `resolveRoute` is a public export of
       `@generacy-ai/generacy-plugin-claude-code` (`packages/generacy-plugin-claude-code/src/index.ts`)
       with signature `resolveRoute(model?: string): 'subscription' | 'gateway'`.
@@ -28,12 +28,12 @@
 
 <!-- All of Phase 2 depends on T001 (the resolveRoute export). -->
 
-- [ ] T002 [US1] In `packages/orchestrator/src/worker/phase-loop.ts`, import `resolveRoute`
+- [X] T002 [US1] In `packages/orchestrator/src/worker/phase-loop.ts`, import `resolveRoute`
       from `@generacy-ai/generacy-plugin-claude-code` and declare a new local tracker
       `let currentRoute: ReturnType<typeof resolveRoute> | undefined;` next to
       `currentProvider`/`currentModel` (`:331-336`). (FR-001, FR-005)
 
-- [ ] T003 [US1] In `phase-loop.ts`, after `resolveAgentForPhase` (`:771-775`), compute
+- [X] T003 [US1] In `phase-loop.ts`, after `resolveAgentForPhase` (`:771-775`), compute
       `const nextRoute = resolveRoute(nextModel);`. Insert a route-change block AFTER the
       existing provider-switch block (`:780-786`, unchanged) and BEFORE the
       model-transition block (`:788-803`, unchanged): when
@@ -42,21 +42,21 @@
       and set `currentSessionId = undefined`. `undefined → X` must initialize only (no
       line, no drop). (FR-002, FR-003; Q2→A both lines co-fire; Q3→A first-phase no-op)
 
-- [ ] T004 [US1] In `phase-loop.ts`, update the post-spawn tracker block (`:826-827`) to
+- [X] T004 [US1] In `phase-loop.ts`, update the post-spawn tracker block (`:826-827`) to
       also set `currentRoute = nextRoute;` alongside `currentProvider`/`currentModel`, so
       spawn failures don't strand state. Verify the existing `agent.model.transition`
       line (`:793-803`) is unchanged (FR-004). (FR-001)
 
-- [ ] T005 [US2] In `packages/orchestrator/src/worker/types.ts`, add optional
+- [X] T005 [US2] In `packages/orchestrator/src/worker/types.ts`, add optional
       `route?: string` to `CliSpawnOptions` (typed `string`, not the union — the spawner
       logs it verbatim and never branches, keeping `types.ts` free of a plugin import).
       (FR-006, data-model.md §CliSpawnOptions extension)
 
-- [ ] T006 [US2] In `phase-loop.ts`, pass `route: nextRoute` in the `spawnPhase` options
+- [X] T006 [US2] In `phase-loop.ts`, pass `route: nextRoute` in the `spawnPhase` options
       object (`:807-823`). Depends on T003 (`nextRoute`) and T005 (`CliSpawnOptions.route`).
       (FR-006)
 
-- [ ] T007 [US2] In `packages/orchestrator/src/worker/cli-spawner.ts`, add
+- [X] T007 [US2] In `packages/orchestrator/src/worker/cli-spawner.ts`, add
       `route: options.route` to the payload of the existing "Spawning/Resuming Claude CLI
       session for phase" log (`:53-63`). No new event name; the `:453` 'Starting phase'
       line in phase-loop is untouched. Depends on T005. (FR-006, Q5→A)
@@ -66,19 +66,19 @@
 <!-- Independent of each other; all depend on T001. Each computes route = resolveRoute(model)
      from its already-resolved model and adds it to the launch log. No session changes. -->
 
-- [ ] T008 [P] [US2] In `packages/orchestrator/src/worker/pr-feedback-handler.ts`
+- [X] T008 [P] [US2] In `packages/orchestrator/src/worker/pr-feedback-handler.ts`
       (`:895-898`), compute `const route = resolveRoute(model)` and add `route` to the
       'Spawning Claude CLI for PR feedback' log payload. No launch-option change. (FR-007)
 
-- [ ] T009 [P] [US2] In `packages/orchestrator/src/worker/review-executor.ts`
+- [X] T009 [P] [US2] In `packages/orchestrator/src/worker/review-executor.ts`
       (`:241-244`), compute `const route = resolveRoute(model)` and add `route` to the
       'Spawning Claude CLI for review phase' log payload. No launch-option change. (FR-007)
 
-- [ ] T010 [P] [US2] In `packages/orchestrator/src/worker/remediate-executor.ts`
+- [X] T010 [P] [US2] In `packages/orchestrator/src/worker/remediate-executor.ts`
       (`:108-120`), compute `const route = resolveRoute(model)` and add `route` to the
       'Spawning Claude CLI for remediate phase' log payload. No launch-option change. (FR-007)
 
-- [ ] T011 [P] [US2] In `packages/orchestrator/src/worker/merge-conflict-handler.ts`
+- [X] T011 [P] [US2] In `packages/orchestrator/src/worker/merge-conflict-handler.ts`
       `spawnAgentForConflict` (`:766-810` — **no pre-launch info line today**), compute
       `const route = resolveRoute(model)` and add a NEW
       `logger.info({ cwd, provider, model, effort, route }, 'MergeConflictHandler: spawning agent CLI for conflict resolution')`
@@ -89,7 +89,7 @@
 <!-- Depends on Phases 2-3. New suite uses the D-4 test seam: partial vi.mock of
      the plugin with a stubbed resolveRoute (default 'subscription'). -->
 
-- [ ] T012 [US1] Create `packages/orchestrator/src/worker/__tests__/phase-loop.route-transition.test.ts`.
+- [X] T012 [US1] Create `packages/orchestrator/src/worker/__tests__/phase-loop.route-transition.test.ts`.
       Partial-mock `@generacy-ai/generacy-plugin-claude-code` (real module + stubbed
       `resolveRoute`) and steer route per model. Cover:
       - **SC-001**: same provider, `claude-opus-4-8` → `openrouter/a/b`, route

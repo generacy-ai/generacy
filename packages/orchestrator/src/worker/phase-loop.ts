@@ -6,6 +6,7 @@ import { defaultRemoteBranchExists } from './repo-checkout.js';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs, resolveAgentForPhase, resolveWorkflowOverrides, DEFAULT_VALIDATE_COMMAND } from './config.js';
+import { resolveRoute, type Route } from '@generacy-ai/generacy-plugin-claude-code';
 import type { ReviewExecutorLike } from './review-executor.js';
 import type { RemediateExecutor } from './remediate-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, deriveFindingId, computeVerdict, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
@@ -334,6 +335,10 @@ export class PhaseLoop {
     // feeds the `agent.model.transition` log line on same-provider model change.
     let currentProvider: string | undefined;
     let currentModel: string | undefined;
+    // #1199: tracks the resolved route (subscription | gateway) for the last
+    // CLI phase; a route change crosses the CLI config-dir boundary and drops
+    // the resumable session even when the provider name is unchanged.
+    let currentRoute: Route | undefined;
     let implementRetryCount = 0;
 
     // #1129/#1158: block-local one-shot flag for a validate-origin remediation.
@@ -774,6 +779,11 @@ export class PhaseLoop {
             cliPhase,
           );
 
+          // #1199: derive the launch route from the resolved model. Route crosses
+          // the CLI config-dir boundary; a change drops the session even when the
+          // provider name is unchanged.
+          const nextRoute = resolveRoute(nextModel);
+
           // Drop session on provider switch (FR-011). Sessions are provider-scoped;
           // reusing one across providers would try to resume against a session ID
           // the new provider doesn't know.
@@ -781,6 +791,25 @@ export class PhaseLoop {
             this.logger.info(
               { phase: cliPhase, prevProvider: currentProvider, nextProvider },
               'Provider switch detected — dropping session for fresh start',
+            );
+            currentSessionId = undefined;
+          }
+
+          // #1199: drop session on route change (FR-002/FR-003). A route flip
+          // crosses the CLI config-dir boundary, so a resume against the old
+          // session would fail. Co-fires with the provider-switch line above on a
+          // simultaneous provider+route change (session dropped once, idempotent);
+          // undefined→X on the first CLI phase initializes only (Q3→A no-op).
+          if (currentRoute !== undefined && currentRoute !== nextRoute) {
+            this.logger.info(
+              {
+                phase: cliPhase,
+                prevRoute: currentRoute,
+                nextRoute,
+                prevModel: currentModel,
+                nextModel,
+              },
+              'agent.route.transition',
             );
             currentSessionId = undefined;
           }
@@ -815,6 +844,7 @@ export class PhaseLoop {
               resumeSessionId: currentSessionId,
               siblingWorkdirs: context.siblingWorkdirs,
               provider: nextProvider,
+              route: nextRoute,
               ...(nextModel !== undefined ? { model: nextModel } : {}),
               ...(nextEffort !== undefined ? { effort: nextEffort } : {}),
               ...(previousModel !== undefined ? { previousModel } : {}),
@@ -825,6 +855,7 @@ export class PhaseLoop {
           // Update trackers post-spawn so failures don't strand state.
           currentProvider = nextProvider;
           currentModel = nextModel;
+          currentRoute = nextRoute;
         }
       } catch (error) {
         // Unexpected error during spawning

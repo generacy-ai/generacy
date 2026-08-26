@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { ReviewIntent } from '@generacy-ai/generacy-plugin-claude-code';
+import { resolveRoute } from '@generacy-ai/generacy-plugin-claude-code';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { WorkerConfig } from './config.js';
 import {
@@ -238,8 +239,9 @@ export class ReviewExecutor implements ReviewExecutorLike {
     });
 
     const timeoutMs = resolvePhaseTimeoutMs(this.config, 'review');
+    const route = resolveRoute(model);
     this.logger.info(
-      { cwd: checkoutPath, timeoutMs, provider, model, effort, round, profile },
+      { cwd: checkoutPath, timeoutMs, provider, model, effort, round, profile, route },
       'Spawning Claude CLI for review phase',
     );
 

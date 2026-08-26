@@ -20,6 +20,7 @@
  */
 import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { RemediateIntent } from '@generacy-ai/generacy-plugin-claude-code';
+import { resolveRoute } from '@generacy-ai/generacy-plugin-claude-code';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { WorkerConfig } from './config.js';
 import {
@@ -105,6 +106,7 @@ export class RemediateExecutor {
     });
 
     const timeoutMs = resolvePhaseTimeoutMs(this.config, 'remediate');
+    const route = resolveRoute(model);
     this.logger.info(
       {
         cwd: checkoutPath,
@@ -115,6 +117,7 @@ export class RemediateExecutor {
         round,
         remediationCount,
         findingCount: openBlocking.length,
+        route,
       },
       'Spawning Claude CLI for remediate phase',
     );

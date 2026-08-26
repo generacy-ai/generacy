@@ -23,6 +23,7 @@ import {
   type GitHubClient,
 } from '@generacy-ai/workflow-engine';
 import type { MergeConflictIntent } from '@generacy-ai/generacy-plugin-claude-code';
+import { resolveRoute } from '@generacy-ai/generacy-plugin-claude-code';
 
 /**
  * Local `PullRequest` alias derived from `GitHubClient.listOpenPullRequests`.
@@ -785,6 +786,15 @@ export class MergeConflictHandler {
       effort,
       context: { handler: 'merge-conflict', workflowId, issueNumber },
     });
+
+    // #1199 FR-007: surface the resolved route in the pre-launch log. This
+    // handler always starts a fresh session, so route resolution is
+    // observability-only — no session invalidation here.
+    const route = resolveRoute(model);
+    this.logger.info(
+      { cwd: checkoutPath, provider, model, effort, route },
+      'MergeConflictHandler: spawning agent CLI for conflict resolution',
+    );
 
     let child;
     try {
