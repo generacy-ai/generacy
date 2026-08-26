@@ -10,7 +10,7 @@
 
 ## Phase 0: Hard Dependency Gate (BLOCKING)
 
-- [ ] T001 Verify the `resolveRoute` export exists in `@generacy-ai/generacy-plugin-claude-code`
+- [X] T001 Verify the `resolveRoute` export exists in `@generacy-ai/generacy-plugin-claude-code`
   before doing any implementation work. Run:
   `grep -rn "export.*resolveRoute" packages/generacy-plugin-claude-code/src/`
   (scoped to the plugin package — an unrelated `resolveRoute` lives in
@@ -22,14 +22,14 @@
 
 ## Phase 1: Setup
 
-- [ ] T002 Add `"@generacy-ai/generacy-plugin-claude-code": "workspace:*"` to
+- [X] T002 Add `"@generacy-ai/generacy-plugin-claude-code": "workspace:*"` to
   `dependencies` in `packages/generacy/package.json` (currently absent — only
   `@generacy-ai/cockpit` and `@generacy-ai/config` are present). Run `pnpm install`
   to update the lockfile so the FR-011 import resolves. (Depends on T001.)
 
 ## Phase 2: Config schema (foundational — unblocks the cockpit walk)
 
-- [ ] T003 [US1] Add `cockpit: z.unknown().optional()` to `GeneracyConfigSchema` in
+- [X] T003 [US1] Add `cockpit: z.unknown().optional()` to `GeneracyConfigSchema` in
   `packages/generacy/src/config/schema.ts` (D-3). Today it is a plain `z.object` that
   strips unknown keys, so a `cockpit:` block never reaches the warning walk. This
   lenient passthrough keeps the bytes without asserting shape. No other schema change.
@@ -37,7 +37,7 @@
 ## Phase 3: Validate warning (US1)
 <!-- Phase boundary: Complete Phase 2 (schema) before starting — the cockpit walk depends on the passthrough key. -->
 
-- [ ] T004 [US1] Implement `collectGatewayWarnings(config, env = process.env): string[]`
+- [X] T004 [US1] Implement `collectGatewayWarnings(config, env = process.env): string[]`
   in `packages/generacy/src/config/loader.ts`, mirroring the tier-walk of
   `collectEffortWarnings` (`loader.ts:346-411`). Import `resolveRoute` from
   `@generacy-ai/generacy-plugin-claude-code`. Warn only for entries that **explicitly
@@ -48,7 +48,7 @@
   `` `${path}.model — set to '<model>' which resolves to the gateway route, but GENERACY_LLM_GATEWAY_URL is not set in this environment. The model will not route anywhere at spawn time.` ``
   (FR-004). Never throws.
 
-- [ ] T005 [US1] Extend `collectGatewayWarnings` with the tolerant cockpit duck-walk
+- [X] T005 [US1] Extend `collectGatewayWarnings` with the tolerant cockpit duck-walk
   (D-3) in `packages/generacy/src/config/loader.ts`: narrow into
   `cockpit.auto.agents.{default,clarifier,reviewer,validator,fixer,diagnoser}` with a
   `typeof x === 'object' && x !== null` guard at every level; read `model` only when
@@ -56,7 +56,7 @@
   `cockpit.auto.agents.<role>` (data-model "Walked paths"). Absent/malformed cockpit
   block → no warnings, no crash. (Same file as T004 — sequential.)
 
-- [ ] T006 [US1] Wire gateway warnings into `loadConfigWithWarnings` in
+- [X] T006 [US1] Wire gateway warnings into `loadConfigWithWarnings` in
   `packages/generacy/src/config/loader.ts` as
   `[...collectEffortWarnings(config), ...collectGatewayWarnings(config)]` (FR-001).
   Confirm the warnings channel keeps exit code 0 — no new error path (FR-005).
@@ -65,7 +65,7 @@
 ## Phase 4: Doctor check (US2)
 <!-- Phase boundary: independent of Phase 3; may start after Phase 1 (T002). Kept as its own phase for clarity. -->
 
-- [ ] T007 [US2] Create the `llm-gateway` check at
+- [X] T007 [US2] Create the `llm-gateway` check at
   `packages/generacy/src/cli/commands/doctor/checks/llm-gateway.ts`, mirroring the
   shape of `checks/anthropic-key.ts`. Identity (D-6): `id: 'llm-gateway'`,
   `label: 'LLM Gateway'`, `category: 'services'`, `priority: 'P1'`,
@@ -75,7 +75,7 @@
   `skip` (FR-007); URL set + token missing/empty → `fail` with token suggestion
   **without fetching** (FR-012, Q4=A); then the probe (T008).
 
-- [ ] T008 [US2] Implement the probe logic inside `llm-gateway.ts` (FR-008/FR-009/FR-010,
+- [X] T008 [US2] Implement the probe logic inside `llm-gateway.ts` (FR-008/FR-009/FR-010,
   D-5): primary `GET <url>/v1/models` with `Authorization: Bearer <token>` and
   `AbortSignal.timeout(2_000)`. 200 → `pass`, best-effort parse `data[].id` into detail
   (FR-009); 401 → `fail` (token suggestion); 404/405 → fall back to
@@ -88,13 +88,13 @@
   either request → `fail` with reachability suggestion + `error.message` in detail.
   (Same file as T007 — sequential.)
 
-- [ ] T009 [US2] Register `llmGatewayCheck` in `createDefaultRegistry()` in
+- [X] T009 [US2] Register `llmGatewayCheck` in `createDefaultRegistry()` in
   `packages/generacy/src/cli/commands/doctor.ts`, placed after `agencyMcpCheck` to keep
   the Service-category grouping (FR-006, D-6).
 
 ## Phase 5: Tests
 
-- [ ] T010 [P] [US1] Add the warning-matrix tests at
+- [X] T010 [P] [US1] Add the warning-matrix tests at
   `packages/generacy/src/config/__tests__/gateway-warnings.test.ts` (SC-001/SC-004).
   `vi.mock` the `@generacy-ai/generacy-plugin-claude-code` package's `resolveRoute`;
   inject env via the second `collectGatewayWarnings` param (never mutate `process.env`).
@@ -103,7 +103,7 @@
   covered incl. `cockpit.auto.agents.*`; malformed/absent cockpit block → no crash, no
   warning. Assert exact path fidelity (SC-004).
 
-- [ ] T011 [P] [US2] Add the doctor-check tests at
+- [X] T011 [P] [US2] Add the doctor-check tests at
   `packages/generacy/src/cli/commands/doctor/checks/__tests__/llm-gateway.test.ts`
   (SC-002) using `vi.stubGlobal('fetch', ...)`. Cases: URL unset → `skip`; URL set +
   token missing → `fail` **and assert `fetch` was NOT called**; 200 → `pass` (+ model
@@ -113,12 +113,12 @@
 
 ## Phase 6: Changeset & Verification
 
-- [ ] T012 Add the changeset `.changeset/1200-llm-gateway-doctor-validate.md` bumping
+- [X] T012 Add the changeset `.changeset/1200-llm-gateway-doctor-validate.md` bumping
   `@generacy-ai/generacy` **minor** (new doctor check + new validate warning =
   user-visible capability; D-8, CLAUDE.md changeset gate). Must be a newly added file
   in the PR diff.
 
-- [ ] T013 Run `pnpm -r build` and the `@generacy-ai/generacy` package tests; confirm
+- [X] T013 Run `pnpm -r build` and the `@generacy-ai/generacy` package tests; confirm
   green (SC-003). Fix any type/lint fallout from the new workspace dependency and the
   `cockpit: z.unknown()` schema change.
 
