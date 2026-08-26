@@ -350,6 +350,16 @@ describe('PrFeedbackHandler', () => {
         }),
       );
 
+      // #1199 FR-007: the launch log carries the resolved route (subscription
+      // for a slash-free default model), and the CLI spawn options are
+      // unchanged — route is a log field only, never a launch option.
+      const spawnLog = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => c[1] === 'Spawning Claude CLI for PR feedback',
+      );
+      expect(spawnLog).toBeDefined();
+      expect(spawnLog![0]).toMatchObject({ route: 'subscription' });
+      expect(spawnFn.mock.calls[0]![2]).not.toHaveProperty('route');
+
       // Should stage, commit, and push
       expect(mockGitHub.stageFiles).toHaveBeenCalled();
       expect(mockGitHub.commit).toHaveBeenCalledWith(

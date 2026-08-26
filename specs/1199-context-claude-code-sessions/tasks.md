@@ -102,24 +102,24 @@
       - **Q3→A**: first CLI phase (`currentRoute` undefined): no transition line, no drop.
       - **FR-006**: spawn-site log/options payload includes `route`.
 
-- [ ] T013 [P] [US2] Update the four direct-caller test suites (pr-feedback-handler,
+- [X] T013 [P] [US2] Update the four direct-caller test suites (pr-feedback-handler,
       review-executor, remediate-executor, merge-conflict-handler) to assert `route` is
       present in each launch log payload (and that the new merge-conflict line exists),
       and that launch options are unchanged. (FR-007)
 
-- [ ] T014 [US1] Verify SC-003 regression: run the existing phase-loop suites under the
+- [X] T014 [US1] Verify SC-003 regression: run the existing phase-loop suites under the
       default subscription-only `resolveRoute` mock; they must stay green with no extra
       transition lines. Adjust only spawn-log assertions that need the additive `route`
       field. (SC-003, FR-008)
 
 ## Phase 5: Changeset & Verification
 
-- [ ] T015 [US1] Add `.changeset/1199-route-aware-session-invalidation.md`:
+- [X] T015 [US1] Add `.changeset/1199-route-aware-session-invalidation.md`:
       `@generacy-ai/orchestrator` **patch** — internal session-invalidation wiring + log
       fields; no new public exports, no new label vocabulary; the plugin is not modified
       (no bump there). Single file. (CLAUDE.md changeset gate)
 
-- [ ] T016 [US1] Run `pnpm -r build` and the full orchestrator test suite
+- [X] T016 [US1] Run `pnpm -r build` and the full orchestrator test suite
       (`pnpm --filter @generacy-ai/orchestrator test`); both must be green. (SC-004)
 
 ## Dependencies & Execution Order
