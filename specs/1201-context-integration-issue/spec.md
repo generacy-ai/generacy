@@ -92,12 +92,12 @@ subscription⇄gateway boundary,
 | FR-001 | A launcher-level test in `packages/orchestrator/src/launcher/__tests__/` (alongside `multi-provider.test.ts`) drives `AgentLauncher.launch` through the credentials interceptor. | P1 | Uses the real interceptor path, not a mock of it. |
 | FR-002 | The launcher test asserts the spawned env contains `CLAUDE_CONFIG_DIR` for gateway-route intents and does not contain it for subscription-route intents. | P1 | |
 | FR-003 | The launcher test asserts the `sh -c '. "$GENERACY_SESSION_DIR/env" && exec "$@"'` wrapper preserves `CLAUDE_CONFIG_DIR` through to `exec`. | P1 | Wrapper must not strip inherited env. |
-| FR-004 | A golden test captures a pre-P1 baseline of `{command, args, env}` for every spawn kind (phase, pr-feedback, merge-conflict, review, remediate, conversation-turn) in a fixture. | P1 | Baseline is checked into the repo as a fixture. |
-| FR-005 | With no gateway configured and a fully Anthropic config, each spawn kind is byte-identical to the captured baseline. | P1 | This is the epic's flag-free guarantee. |
+| FR-004 | A golden test captures a pre-P1 baseline of `{command, args, env}` for every spawn kind (phase, pr-feedback, merge-conflict, review, remediate, conversation-turn) in a fixture. | P1 | Baseline is checked into the repo as a fixture. Per Q1 (C): captured once from the pre-P1 merge-base commit (before #1198/#1199/#1200) to prove true parity in the initial PR, then treated as a forward-stability pin with a documented regeneration procedure for legitimate future spawn changes. |
+| FR-005 | With no gateway configured and a fully Anthropic config, each spawn kind is byte-identical to the captured baseline. | P1 | This is the epic's flag-free guarantee. Per Q2 (A): determinism via fully controlled input env — the test injects a fixed base env (empty or minimal allowlist) and fixed session/config paths, so the complete `{command, args, env}` triple is compared byte-for-byte. |
 | FR-006 | A phase-loop test runs subscription → gateway → subscription and asserts two session drops. | P1 | |
 | FR-007 | The phase-loop test asserts the expected `agent.route.transition` log lines. | P1 | Matches #1199's log contract. |
-| FR-008 | `docs/docs/getting-started/configuration.md` gains a "Model routing" note (gateway-shaped names, gateway source, link to P2), marked "requires a gateway-enabled cluster." | P1 | |
-| FR-009 | No `--settings` usage is introduced anywhere in the change. | P1 | Guarded, e.g. via existing `source-grep.test.ts` style check if applicable. |
+| FR-008 | `docs/docs/getting-started/configuration.md` gains a "Model routing" note (gateway-shaped names, gateway source, link to P2), marked "requires a gateway-enabled cluster." | P1 | Per Q5 (A): the "link to P2" target is the epic (generacy-ai/generacy#1197) and/or the P2 issue (generacy#1203) — accurate today, to be replaced with a docs link when P2 ships. No docs-page link (would break `onBrokenLinks: 'throw'`). |
+| FR-009 | No `--settings` usage is introduced anywhere in the change. | P1 | Per Q4 (A): guarded by a committed source-grep test scanning `packages/orchestrator/src/launcher/**` and `packages/generacy-plugin-claude-code/src/launch/**` for zero `--settings` occurrences — a permanent regression guard, following the existing `source-grep.test.ts` precedent. |
 | FR-010 | No changes to `AgentEntrySchema`. | P1 | `model` is already free-form. |
 | FR-011 | A changeset is present in the PR. | P1 | generacy PRs require one (CI gate). |
 
@@ -116,13 +116,17 @@ subscription⇄gateway boundary,
 
 - Siblings #1198, #1199, and #1200 are merged (or co-present on the branch base) before this
   issue's tests can be green — this issue asserts their shipped contracts, it does not
-  re-implement them.
+  re-implement them. Per Q3 (A): if any sibling is not yet merged when implement starts,
+  the implement phase dependency-blocks — skip and requeue until all three are merged to
+  develop and this branch is rebased on them (matches the #1127 precedent for phase-N
+  integration issues).
 - The gateway config dir default is `/home/node/.claude-gateway` (env override
   `GENERACY_CLAUDE_GATEWAY_CONFIG_DIR`), per #1198.
 - Route resolution is `gateway` iff the resolved model contains `/`; `undefined` and all
   `claude-*`/alias forms resolve to `subscription`, per #1198's `resolveRoute`.
-- The pre-P1 golden baseline can be captured deterministically (fixed session dir, credentials
-  env, etc.) so byte-comparison is stable across runs.
+- The pre-P1 golden baseline can be captured deterministically so byte-comparison is stable
+  across runs — achieved per Q2 (A) by injecting a fully controlled input env (fixed base env,
+  fixed session/config paths) rather than normalizing or delta-comparing ambient env.
 - `resolveRoute` is consumed from the plugin's public export; the orchestrator does not
   duplicate the routing rule (dependency direction: orchestrator → plugin).
 
