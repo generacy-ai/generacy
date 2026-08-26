@@ -10,7 +10,7 @@
 
 ## Phase 1: Route primitive (core module)
 
-- [ ] T001 [US1] Create `packages/generacy-plugin-claude-code/src/launch/route.ts` with:
+- [X] T001 [US1] Create `packages/generacy-plugin-claude-code/src/launch/route.ts` with:
   - `type Route = 'subscription' | 'gateway'`.
   - `resolveRoute(model?: string): Route` — pure, returns `'gateway'` iff `model` contains `/`, else `'subscription'` (including `undefined` and `''`). No I/O, no env reads, no cache (contract: `contracts/launch-route.md`, FR-001).
   - `DEFAULT_GATEWAY_CONFIG_DIR = '/home/node/.claude-gateway'`.
@@ -23,20 +23,20 @@
 
 ## Phase 2: Plugin wiring
 
-- [ ] T002 [US1] Modify `packages/generacy-plugin-claude-code/src/launch/claude-code-launch-plugin.ts`:
+- [X] T002 [US1] Modify `packages/generacy-plugin-claude-code/src/launch/claude-code-launch-plugin.ts`:
   - Add `route?: 'gateway'` to the plugin-local `LaunchSpec` interface (type excludes `'subscription'` by design so it cannot be stamped on subscription launches; FR-007, data-model invariants).
   - Add exported `interface ClaudeCodeLaunchPluginOptions { gatewayConfigDir?: string }`.
   - Add `constructor(options?: ClaudeCodeLaunchPluginOptions)` storing `this.gatewayConfigDir = resolveGatewayConfigDir(options?.gatewayConfigDir)` (optional so ~15 existing `new ClaudeCodeLaunchPlugin()` call sites compile unchanged; Decision 6).
   - Add private `applyRoute(spec: LaunchSpec, model?: string): LaunchSpec` — subscription route returns `spec` **as-is** (no spread); gateway route calls `assertGatewayProvisioned(model!, this.gatewayConfigDir)` then returns `{ ...spec, env: { CLAUDE_CONFIG_DIR: this.gatewayConfigDir }, route: 'gateway' }`.
   - Import `resolveRoute`, `resolveGatewayConfigDir`, `assertGatewayProvisioned` from `./route.js`.
 
-- [ ] T003 [US1] In the same file (`claude-code-launch-plugin.ts`), wrap the return of each of the **six** model-bearing builders in `this.applyRoute(...)`, passing `intent.model`:
+- [X] T003 [US1] In the same file (`claude-code-launch-plugin.ts`), wrap the return of each of the **six** model-bearing builders in `this.applyRoute(...)`, passing `intent.model`:
   - `buildPhaseLaunch`, `buildPrFeedbackLaunch`, `buildMergeConflictLaunch`, `buildReviewLaunch`, `buildRemediateLaunch`, `buildConversationTurnLaunch`.
   - Each `return { command, args, stdioProfile }` becomes `return this.applyRoute({ command, args, stdioProfile }, intent.model)`.
   - Do NOT touch `buildInvokeLaunch` (carries no model; never gains `route`/`env`) and do NOT change arg construction (FR-009, Q4=A — `--model`/`--effort` verbatim).
   - Depends on T002 (`applyRoute` must exist).
 
-- [ ] T004 [US1] Add public exports to `packages/generacy-plugin-claude-code/src/index.ts`:
+- [X] T004 [US1] Add public exports to `packages/generacy-plugin-claude-code/src/index.ts`:
   - `export { resolveRoute, GatewayRouteUnavailableError, DEFAULT_GATEWAY_CONFIG_DIR, _resetGatewayProvisionCacheForTests } from './launch/route.js';`
   - `export type { Route } from './launch/route.js';`
   - `export type { ClaudeCodeLaunchPluginOptions } from './launch/claude-code-launch-plugin.js';`
@@ -44,14 +44,14 @@
 
 ## Phase 3: Tests
 
-- [ ] T005 [P] [US1] [US2] [US3] Create `packages/generacy-plugin-claude-code/tests/unit/route.test.ts`:
+- [X] T005 [P] [US1] [US2] [US3] Create `packages/generacy-plugin-claude-code/tests/unit/route.test.ts`:
   - SC-001 table for `resolveRoute`: `claude-opus-4-7`, `opus`, `sonnet`, `claude-sonnet-4-5[1m]`, `''`, `undefined` → `'subscription'`; `openai/gpt-5.5`, `openrouter/qwen/qwen3.5-coder` → `'gateway'`.
   - `resolveGatewayConfigDir` precedence: explicit option > `GENERACY_CLAUDE_GATEWAY_CONFIG_DIR` (stub via `vi.stubEnv`) > default; empty-string explicit still wins over env (nullish).
   - Cache semantics (Q3=A) against a real `mkdtemp` dir: missing `settings.json` → throws; create it → next call passes (negative never cached); delete after a positive → still passes (positive cached); distinct dirs keyed independently.
   - `GatewayRouteUnavailableError`: `instanceof Error` + `instanceof GatewayRouteUnavailableError`, `name`, `.model`/`.gatewayConfigDir` populated, message contains model + dir + `GENERACY_LLM_GATEWAY_URL` (SC-003).
   - Call `_resetGatewayProvisionCacheForTests()` in `beforeEach`.
 
-- [ ] T006 [US1] [US2] [US3] Extend `packages/generacy-plugin-claude-code/tests/unit/claude-code-launch-plugin.test.ts` (per-builder matrix over all six model-bearing builders; reset provision cache in `beforeEach`):
+- [X] T006 [US1] [US2] [US3] Extend `packages/generacy-plugin-claude-code/tests/unit/claude-code-launch-plugin.test.ts` (per-builder matrix over all six model-bearing builders; reset provision cache in `beforeEach`):
   - Gateway model (dir provisioned via temp dir passed as explicit ctor option) → `env.CLAUDE_CONFIG_DIR === dir` and `route === 'gateway'`; args identical to the subscription spec modulo the model string (SC-002, FR-009).
   - Subscription model AND `undefined` model → `expect(spec).toEqual(preChangeSpec)` strictly, plus `expect(spec).not.toHaveProperty('env')` and `not.toHaveProperty('route')` (SC-002/SC-004, US2 byte-identity).
   - Gateway model + unprovisioned dir → `toThrow(GatewayRouteUnavailableError)` (US3, SC-003).
@@ -60,9 +60,9 @@
 
 ## Phase 4: Changeset & verification
 
-- [ ] T007 [P] [US1] Create `.changeset/1198-gateway-route-resolution.md` — `@generacy-ai/generacy-plugin-claude-code` **minor** bump (new public capability: `resolveRoute`, `GatewayRouteUnavailableError`, `ClaudeCodeLaunchPluginOptions`, gateway env injection). MUST be a newly-added file in the PR diff (CI gate, CLAUDE.md).
+- [X] T007 [P] [US1] Create `.changeset/1198-gateway-route-resolution.md` — `@generacy-ai/generacy-plugin-claude-code` **minor** bump (new public capability: `resolveRoute`, `GatewayRouteUnavailableError`, `ClaudeCodeLaunchPluginOptions`, gateway env injection). MUST be a newly-added file in the PR diff (CI gate, CLAUDE.md).
 
-- [ ] T008 [US1] [US2] Run `pnpm -r build` then the full test suite (SC-005). Confirm the new `route.ts`/plugin changes build, `route.test.ts` + `claude-code-launch-plugin.test.ts` pass, and existing orchestrator tests that construct `new ClaudeCodeLaunchPlugin()` (incl. `claude-code-launch-plugin-integration.test.ts` at the registration seam) compile and pass unchanged. Depends on T001–T007.
+- [X] T008 [US1] [US2] Run `pnpm -r build` then the full test suite (SC-005). Confirm the new `route.ts`/plugin changes build, `route.test.ts` + `claude-code-launch-plugin.test.ts` pass, and existing orchestrator tests that construct `new ClaudeCodeLaunchPlugin()` (incl. `claude-code-launch-plugin-integration.test.ts` at the registration seam) compile and pass unchanged. Depends on T001–T007.
 
 ## Dependencies & Execution Order
 

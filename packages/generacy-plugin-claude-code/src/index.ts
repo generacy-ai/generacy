@@ -91,7 +91,17 @@ export {
 
 // Launch plugin (Phase 2 — AgentLauncher integration)
 export { ClaudeCodeLaunchPlugin } from './launch/claude-code-launch-plugin.js';
+export type { ClaudeCodeLaunchPluginOptions } from './launch/claude-code-launch-plugin.js';
 export { PTY_WRAPPER } from './launch/constants.js';
+
+// Launch route resolution (#1198 — gateway model routing)
+export {
+  resolveRoute,
+  GatewayRouteUnavailableError,
+  DEFAULT_GATEWAY_CONFIG_DIR,
+  _resetGatewayProvisionCacheForTests,
+} from './launch/route.js';
+export type { Route } from './launch/route.js';
 export type {
   PhaseIntent,
   PrFeedbackIntent,
