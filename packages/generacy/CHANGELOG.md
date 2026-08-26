@@ -1,5 +1,86 @@
 # @generacy-ai/generacy
 
+## 0.10.3
+
+### Patch Changes
+
+- 8c925b4: Add `review` and `remediate` to the workflow phase machinery (#1121).
+
+  Widens the canonical `WorkflowPhase` vocabulary with two new phases and threads them through every hand-maintained duplication site so the packages compile and existing runs stay byte-identical. This ships type/config/label plumbing plus inert stub execution only — real executors, prompts, verdict/finding logic, and concrete `remediate` triggers land in later epic issues.
+
+  `@generacy-ai/workflow-engine` (minor) adds the `phase:`/`completed:`/`failed:`/`failed:*-repeated` label families for both `review` and `remediate` to `WORKFLOW_LABELS` (no `waiting-for:` gate labels) and widens the `CorePhase` union.
+
+  `@generacy-ai/config` (minor) widens the public `template-schema` `phases` keys to accept optional `review` / `remediate` agent entries.
+
+  `@generacy-ai/orchestrator` (patch) inserts `review` into `PHASE_SEQUENCE` between `implement` and `validate` (feature/bugfix inherit it; `speckit-epic` unchanged), maps both new phases to the `implementation` stage, adds a `reviewPhaseEnabled` flag (default `false`) that skips `review` before any label side effect fires, adds an inert stub executor for both phases, and adds an off-sequence `remediate` seam gated on an injectable `remediateTrigger` (undefined in production → dead by default).
+
+  `@generacy-ai/generacy` (patch) adds `review` / `remediate` to the cockpit `resume` `KNOWN_PHASES` list.
+
+- d6d53d7: Add `remediation-limit` (#1120) and `ci` (#1133) to the cockpit gate-type wire
+  enum (`GateTypeSchema`) in both in-repo mirrors — the canonical
+  `@generacy-ai/cockpit` enum (`packages/cockpit/src/gates/schema.ts`) and the
+  MCP-boundary mirror (`packages/generacy/src/cli/commands/cockpit/mcp/gates/schemas.ts`).
+  Both engine-raisable operator gates were previously `.strict()`-rejected as
+  `invalid-args` under `/cockpit:auto --gates=ui`. The two members are appended
+  after `scope-drained`; the existing 8 values are neither reordered nor renamed.
+  The four exhaustive `Record<GateType, …>` fixture maps in
+  `packages/cockpit/src/gates/fixtures.ts` gain plain-string generations for the
+  new types (no new derivation helper). Cluster-side only; the cloud
+  `cockpitGateTypeEnum` mirror is coordinated separately.
+- 4e0ad87: Add an engine-side `tasks.md` safety net for the implement→continue increment (#1187, `workflow:speckit-bugfix`).
+
+  The implement→continue increment previously fired only when the agent emitted a `SPECKIT_IMPLEMENT_PARTIAL` sentinel. When the agent stopped mid-tasklist without emitting it, `result.implementResult` was `undefined`, the re-loop was skipped, `completed:implement` was granted, and a substantially-unfinished tree advanced into review→remediate (which caps and stalls).
+
+  The fix adds an engine-side fallback: after a `success` implement phase with **no** sentinel, the engine reads the workflow's `tasks.md`, counts unchecked `- [ ]` tasks, and — when work remains — synthesizes a `result.implementResult` so the existing increment block (WIP commit/push, fresh session, no-progress guard, `i--; continue`) drives re-entry unchanged. The sentinel stays the fast path; `tasks.md` becomes the fallback source of truth. All changes are orchestrator-internal (`worker/` surface, not re-exported at the package public boundary); no new public exports and no new label vocabulary. A fully-checked or task-less `tasks.md` advances exactly as today, and an unreadable/ambiguous fallback source logs and advances (fail-open).
+
+  Also fixes a latent teardown hang in `@generacy-ai/generacy`'s cockpit doorbell `AnswersFileSource`: the `fs.watch` async iterator was awaited on `stop()` without an `AbortSignal`, so a pending `next()`/`return()` never settled once the watch loop was active (parent dir present), hanging teardown until the test timeout. An `AbortController` is now wired through the watcher and aborted before `stop()` awaits the iterator's `return()`.
+
+- c77ecaa: Make deploy `runActivation` pure w.r.t. `GENERACY_PROJECT_ID` (#1190).
+
+  `runActivation` no longer reads `process.env['GENERACY_PROJECT_ID']` directly;
+  it accepts an optional `projectId` on `ActivateOptions` and the single ambient
+  read now lives at the `deploy` command composition root (`index.ts`). This
+  makes the activation-URL branch deterministically testable independent of the
+  ambient environment. The generated URL is byte-identical to before (projectId
+  is appended only when truthy). No public export change.
+
+- Updated dependencies [8c925b4]
+- Updated dependencies [cf38f6b]
+- Updated dependencies [c1154f5]
+- Updated dependencies [6920dc0]
+- Updated dependencies [1ec9980]
+- Updated dependencies [428f8c6]
+- Updated dependencies [1484e11]
+- Updated dependencies [9fe10bf]
+- Updated dependencies [81f873b]
+- Updated dependencies [d4c7f66]
+- Updated dependencies [a7658b4]
+- Updated dependencies [9f309be]
+- Updated dependencies [109f5df]
+- Updated dependencies [77e8334]
+- Updated dependencies [8a5375a]
+- Updated dependencies [c78d07a]
+- Updated dependencies [6a5b1c3]
+- Updated dependencies [c78736b]
+- Updated dependencies [a1099e3]
+- Updated dependencies [ea0b243]
+- Updated dependencies [975156e]
+- Updated dependencies [d6d53d7]
+- Updated dependencies [5dfedcb]
+- Updated dependencies [2ff9839]
+- Updated dependencies [a56f79e]
+- Updated dependencies [1adc973]
+- Updated dependencies [4e0ad87]
+- Updated dependencies [b7b6151]
+- Updated dependencies [7be3119]
+- Updated dependencies [a625c4c]
+- Updated dependencies [06c6b3e]
+- Updated dependencies [79672be]
+  - @generacy-ai/workflow-engine@0.7.0
+  - @generacy-ai/config@0.6.0
+  - @generacy-ai/orchestrator@0.13.2
+  - @generacy-ai/cockpit@0.9.0
+
 ## 0.10.2
 
 ### Patch Changes
