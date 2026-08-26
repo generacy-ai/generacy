@@ -1,5 +1,38 @@
 # @generacy-ai/config
 
+## 0.6.0
+
+### Minor Changes
+
+- 8c925b4: Add `review` and `remediate` to the workflow phase machinery (#1121).
+
+  Widens the canonical `WorkflowPhase` vocabulary with two new phases and threads them through every hand-maintained duplication site so the packages compile and existing runs stay byte-identical. This ships type/config/label plumbing plus inert stub execution only — real executors, prompts, verdict/finding logic, and concrete `remediate` triggers land in later epic issues.
+
+  `@generacy-ai/workflow-engine` (minor) adds the `phase:`/`completed:`/`failed:`/`failed:*-repeated` label families for both `review` and `remediate` to `WORKFLOW_LABELS` (no `waiting-for:` gate labels) and widens the `CorePhase` union.
+
+  `@generacy-ai/config` (minor) widens the public `template-schema` `phases` keys to accept optional `review` / `remediate` agent entries.
+
+  `@generacy-ai/orchestrator` (patch) inserts `review` into `PHASE_SEQUENCE` between `implement` and `validate` (feature/bugfix inherit it; `speckit-epic` unchanged), maps both new phases to the `implementation` stage, adds a `reviewPhaseEnabled` flag (default `false`) that skips `review` before any label side effect fires, adds an inert stub executor for both phases, and adds an off-sequence `remediate` seam gated on an injectable `remediateTrigger` (undefined in production → dead by default).
+
+  `@generacy-ai/generacy` (patch) adds `review` / `remediate` to the cockpit `resume` `KNOWN_PHASES` list.
+
+- cf38f6b: Add per-workflow orchestrator overrides to `.generacy/config.yaml` (#1122).
+
+  `@generacy-ai/config` gains a new `orchestrator.workflows.<name>` map so a target repo can vary `validateCommand`, `preValidateCommand`, `maxRemediations`, and a `review` block per workflow (e.g. `speckit-feature` vs `speckit-bugfix`). New public schema/type exports: `WorkflowReviewSchema`, `WorkflowOverrideSchema`, `WorkflowReview`, `WorkflowOverride`. Value schemas are `.strict()` so unknown keys fail loudly.
+
+  `@generacy-ai/orchestrator` gains an internal `resolveWorkflowOverrides` resolver (plus `DEFAULT_REVIEW` and `ResolvedWorkflowConfig`) that walks each field independently with `??` — precedence workflow-level > repo-level > cluster default for validate commands, and workflow-level > built-in default for `maxRemediations`/`review` (no repo tier). No consumer wiring yet; the review/remediate phases consume it under epic #1120.
+
+- a1099e3: Wire four silently-dropped per-workflow/agent config keys so they take effect at runtime (#1160).
+
+  Four config keys shipped by the engine-native review/remediate epic parsed cleanly (or were documented) but were ignored at their runtime call sites:
+
+  - `validateCommand` — the non-bugfix validate seed now resolves through `resolveWorkflowOverrides` so a per-workflow `workflows.<name>.validateCommand` reaches the validate spawn. `speckit-bugfix` keeps its targeted-validate narrowing composed over the resolved base.
+  - `preValidateCommand` — the pre-validate install step now reads the resolved value; an explicit `""` at the workflow tier skips the install, while an unset tier falls through to the repo/cluster default.
+  - `phases.review` / `phases.remediate` agent selection — the review and remediate executors now resolve the agent via a new field-by-field `resolveReviewLikeAgent`, preferring the phase tier and falling back to the full `implement` resolution per field. Remediate never inherits the `review` tier.
+  - `ciWaitTimeoutMs` — added as an optional per-workflow override on the public `WorkflowOverride` schema (bounded `>= 30_000`, mirroring the cluster floor) and wired into the CI-readiness wait.
+
+  `@generacy-ai/config` bumps **minor** (additive optional `ciWaitTimeoutMs` on the public `WorkflowOverride` type — new user-facing config surface). `@generacy-ai/orchestrator` bumps **patch** (internal call-site wiring plus the new non-exported `resolveReviewLikeAgent`; no public export change).
+
 ## 0.5.0
 
 ### Minor Changes

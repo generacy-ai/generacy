@@ -1,5 +1,374 @@
 # Changelog
 
+## 0.13.2
+
+### Patch Changes
+
+- 8c925b4: Add `review` and `remediate` to the workflow phase machinery (#1121).
+
+  Widens the canonical `WorkflowPhase` vocabulary with two new phases and threads them through every hand-maintained duplication site so the packages compile and existing runs stay byte-identical. This ships type/config/label plumbing plus inert stub execution only — real executors, prompts, verdict/finding logic, and concrete `remediate` triggers land in later epic issues.
+
+  `@generacy-ai/workflow-engine` (minor) adds the `phase:`/`completed:`/`failed:`/`failed:*-repeated` label families for both `review` and `remediate` to `WORKFLOW_LABELS` (no `waiting-for:` gate labels) and widens the `CorePhase` union.
+
+  `@generacy-ai/config` (minor) widens the public `template-schema` `phases` keys to accept optional `review` / `remediate` agent entries.
+
+  `@generacy-ai/orchestrator` (patch) inserts `review` into `PHASE_SEQUENCE` between `implement` and `validate` (feature/bugfix inherit it; `speckit-epic` unchanged), maps both new phases to the `implementation` stage, adds a `reviewPhaseEnabled` flag (default `false`) that skips `review` before any label side effect fires, adds an inert stub executor for both phases, and adds an off-sequence `remediate` seam gated on an injectable `remediateTrigger` (undefined in production → dead by default).
+
+  `@generacy-ai/generacy` (patch) adds `review` / `remediate` to the cockpit `resume` `KNOWN_PHASES` list.
+
+- cf38f6b: Add per-workflow orchestrator overrides to `.generacy/config.yaml` (#1122).
+
+  `@generacy-ai/config` gains a new `orchestrator.workflows.<name>` map so a target repo can vary `validateCommand`, `preValidateCommand`, `maxRemediations`, and a `review` block per workflow (e.g. `speckit-feature` vs `speckit-bugfix`). New public schema/type exports: `WorkflowReviewSchema`, `WorkflowOverrideSchema`, `WorkflowReview`, `WorkflowOverride`. Value schemas are `.strict()` so unknown keys fail loudly.
+
+  `@generacy-ai/orchestrator` gains an internal `resolveWorkflowOverrides` resolver (plus `DEFAULT_REVIEW` and `ResolvedWorkflowConfig`) that walks each field independently with `??` — precedence workflow-level > repo-level > cluster default for validate commands, and workflow-level > built-in default for `maxRemediations`/`review` (no repo tier). No consumer wiring yet; the review/remediate phases consume it under epic #1120.
+
+- c1154f5: Review phase executor — structured findings artifact + engine-internal verdict (#1124).
+
+  Replaces the inert `runStubPhase('review')` (from #1121) with a real executor. The engine builds an in-process charter prompt (selected by `review.profile`), spawns the CLI via a new `review` launch intent, the agent writes a structured findings sidecar, and the engine Zod-validates the findings and **recomputes** the verdict (`clean` | `changes-required`) — the agent-claimed verdict is ignored and GitHub review state is never used (the cluster account 422s on `REQUEST_CHANGES` against its own PR). The next-phase decision is driven through the synchronous `remediateTrigger` seam, bounded by `maxRemediations` with a `waiting-for:remediation-limit` gate pause. Remains byte-identical when `reviewPhaseEnabled=false`.
+
+  `@generacy-ai/workflow-engine` (minor) adds the `waiting-for:remediation-limit` label vocabulary.
+
+  `@generacy-ai/generacy-plugin-claude-code` (minor) adds the `review` launch intent kind.
+
+  `@generacy-ai/orchestrator` (patch) adds the review-artifact sidecar module, the review charter builder, the `ReviewExecutor`, the `on-remediation-limit` gate condition, and the phase-loop/worker wiring — internal plumbing with no new public exports.
+
+- 6920dc0: Wire the review phase's findings artifact to the PR — one COMMENT-event review per round plus draft/ready lifecycle (#1125).
+
+  `@generacy-ai/workflow-engine` gains three public `GitHubClient` methods: `createReview(owner, repo, prNumber, input)` (REST `POST /pulls/{n}/reviews`, one atomic COMMENT/APPROVE/REQUEST_CHANGES submission with inline `comments[]`), `convertPullRequestToDraft(owner, repo, prNumber)` (GraphQL node-ID resolve + idempotent `convertPullRequestToDraft` mutation, mirroring `resolveReviewThread`'s retry/auth handling), and `listPullRequestFiles(owner, repo, prNumber)` (REST `GET /pulls/{n}/files`, returns `{ filename, status, patch? }[]` for diffability checks). New wire types `ReviewEvent`, `CreateReviewComment`, `CreateReviewInput`, `PullRequestFile`.
+
+  `@generacy-ai/orchestrator` adds an internal `ReviewPoster` service that posts exactly one COMMENT review per review round (inline threads where diffable, a greppable engine marker + round number in the body, no finding dropped), dedupes re-posts by grepping existing reviews, and resolves threads for findings the artifact marks resolved on re-review rounds. `PrManager` gains an in-memory `markedReadyByEngine` flag and `convertToDraftIfEngineMarkedReady`, and the phase loop wires review-side effects (post + mark-ready-on-clean) after the review stub and draft-conversion on remediate entry. All GitHub transitions are best-effort and idempotent. The posting path is production-inert until #1124 lands the review executor — it is invoked only through the injectable `PhaseLoopDeps.readFindingsArtifact` seam, which defaults to `undefined`.
+
+- 1ec9980: Add delta-scoped verification-pass convergence logic for the engine-native `review`
+  phase (#1126). A re-review (round ≥ 2) is now scoped to the change set since the
+  last-reviewed SHA — or, for a merge-conflict re-arm, the resolution base/head SHAs
+  carried on the pause-context sidecar — unioned with still-open findings, so
+  review⇄remediate loops converge instead of inventing fresh nitpicks each round.
+
+  New internal module `packages/orchestrator/src/worker/review/`: `determineReviewMode`
+  (full-review round 1 vs. verification round n+1), `computeReviewDelta` (resolution →
+  last-reviewed → full-diff base selection, widening safely on an unresolvable SHA
+  without resetting to round 1), `composeVerificationInput`, `buildVerificationPrompt`,
+  and a monotonic status machine (`advanceArtifact` / `filterNewFindings` /
+  `computeVerdict`) that resolves addressed delta-located findings, keeps `resolved`
+  terminal, drops sub-blocking advisory findings after round 1, and advances the
+  last-reviewed SHA. The findings-artifact interface is a placeholder seam for #1124.
+  `PauseContextSchema` gains read-side optional `resolutionBaseSha`/`resolutionHeadSha`
+  (written by #1131). No new public package exports.
+
+- 428f8c6: Add a standalone deterministic engine-authored review marker-match helper
+  (`matchEngineAuthoredReviewMarker` / `commentCarriesEngineAuthoredReviewMarker` /
+  `ENGINE_AUTHORED_REVIEW_MARKERS`) co-located in the review-poster marker module
+  (#1127 D-3 fallback). Line-anchored at column 0, case-sensitive ASCII; `> `-quoted
+  markers do not match. Internal surface consumed by #1130's monitor routing; not
+  re-exported from the package's public entrypoint.
+- 1484e11: Remediate phase executor — remediation counter + remediation-limit gate (#1128).
+
+  Replaces the inert `runStubPhase('remediate')` (from #1121) with a real `RemediateExecutor` that runs a single code-change pass over the open blocking findings recorded in the review sidecar, then backtracks to `review` for verification. The loop is bounded by an explicit, resettable `remediationCount` (distinct from the monotonic `round`) that is incremented by exactly one on every executor return path — normal exit, timeout kill, and spawn failure — so a perpetually-timing-out attempt still consumes budget. At the cap the `on-remediation-limit` gate pauses with `waiting-for:remediation-limit` + `agent:paused` and posts a gate-body comment; an operator adds `completed:remediation-limit` to reset the counter and re-arm the gate. No terminal `blocked:*` label is ever applied, and the executor never resolves review threads, marks the PR ready, writes GitHub review state, or touches `round`/`verdict`. Remains byte-identical when `reviewPhaseEnabled=false`.
+
+  `@generacy-ai/workflow-engine` (minor) adds the `completed:remediation-limit` label vocabulary.
+
+  `@generacy-ai/generacy-plugin-claude-code` (minor) adds the `remediate` launch intent kind.
+
+  `@generacy-ai/orchestrator` (patch) adds the remediate charter builder, the `RemediateExecutor`, the `remediationCount` sidecar field and bump/reset helpers, and the phase-loop/worker wiring — internal plumbing with no new public exports.
+
+- 9fe10bf: Route a failing `validate` phase into the engine-native review → remediate →
+  validate loop instead of the legacy one-shot `validate-fix-handler` side path
+  (`workflow:speckit-bugfix`). On a validate red with `reviewPhaseEnabled`, the
+  phase loop checks the failure-fingerprint backstop first (escalating with
+  `failed:validate-repeated` at the repeat threshold), otherwise synthesizes a
+  `changes-required` review artifact and backtracks into `review`, dispatching the
+  thin remediate adapter at exactly one site — the remediate seam. `failed:validate`
+  is no longer applied on the routed path (the loop owns escalation), and the
+  `resumeReason === 'base-advance'` precondition is removed. With
+  `reviewPhaseEnabled = false` behavior is byte-identical to before. No new public
+  exports and no new label vocabulary.
+- 81f873b: PR-feedback monitor: exclude engine review threads, route external feedback into the remediate loop
+
+  - `PrFeedbackMonitorService` now excludes engine-authored review threads from the trigger, so the engine's own review comments no longer re-enqueue the fixer.
+  - When the review phase is enabled, trusted external PR feedback (inline threads + review bodies) is seeded into the shared `review`/`remediate` phase loop instead of the legacy fixer, and converges through the `on-remediation-limit` gate (`waiting-for:remediation-limit`).
+  - The legacy (review-phase-disabled, default) fixer keeps its own bounded stop: a no-diff / push-failed cycle still applies `blocked:stuck-feedback-loop` so the monitor pauses re-enqueue until an operator clears it. Each path has a distinct bounded stop — the flag-ON path uses the `remediation-limit` gate, the flag-OFF path uses `blocked:stuck-feedback-loop`.
+
+- d4c7f66: Merge-conflict re-arm targets a resolution-scoped review, not the interrupted phase (#1131).
+
+  After `MergeConflictHandler` successfully resolves a merge conflict, the worker now re-arms into a `review` phase scoped to just the resolution diff (`baseSha..headSha` — the pre-merge branch tip → the `--no-ff` merge commit) instead of blindly resuming the interrupted phase. This closes a semantic-conflict safety gap: a git-clean-but-semantically-broken merge previously sailed straight back into the phase it interrupted with no correctness review of the resolution.
+
+  The re-arm is gated on `reviewPhaseEnabled`: when the flag is OFF, behavior is byte-identical to before (`startPhase: metadata.phase`). When the scope SHAs can't be determined, it re-arms `review` with a whole-branch fallback (scope omitted). An empty resolution window short-circuits the review executor straight to `validate`. `reviewScope`/`diffWindow` are orchestrator-internal and not re-exported.
+
+- a7658b4: CI-aware merge readiness — skipped≠passed + post-validate approval gate (#1133).
+
+  The worker previously treated a PR as merge-ready the moment the `validate`
+  phase succeeded. Repo `ci.yml`s skip draft PRs, and a `skipped`/`neutral` run
+  reads as SUCCESS in naive rollups, so a PR whose CI never executed could sail
+  through the final gate.
+
+  Fix (behind the new independent `ciMergeGateEnabled` flag, default off →
+  byte-identical to today when disabled):
+
+  - `@generacy-ai/workflow-engine`: new public `GitHubClient.getCiRunsForSha`
+    client method (primary `commits/{sha}/check-runs` readout, `actions/runs`
+    fallback filtered to the head SHA, both normalized to `CiRun`), a pure
+    `aggregateCiVerdict(runs)` three-state verdict (`green` | `pending` |
+    `not-passed`) that drops `skipped`/`neutral` and requires ≥1 concrete
+    `success` with no failures to be green, and the new `waiting-for:ci` /
+    `completed:ci` label vocabulary.
+  - `@generacy-ai/orchestrator`: folds a bounded exponential-backoff CI wait
+    into `validate` completion (never busy-loops, pauses with `waiting-for:ci` +
+    `agent:paused` on timeout), relocates the `implementation-review` gate to
+    fire on `validate` via the new `on-ci-green` condition once CI is confirmed
+    green, and threads `ciMergeGateEnabled` / `ciWaitTimeoutMs` from env through
+    config, resolver, and phase-loop.
+
+- 9f309be: Bugfix profiles: verification review charter, targeted validate with
+  diff-classification guards, and an opt-in fail-then-pass regression proof.
+
+  The `verification` review profile now interrogates four bugfix questions (root
+  cause vs symptom, regression test present, scope creep, regression risk). For
+  `speckit-bugfix` runs the validate phase classifies the diff and rewrites the
+  built-in default validate command to the pnpm `...[origin/<base>]` filter form
+  (with docs-only, test-only, single-package, and full-fallback safety guards),
+  logging the decision; custom validate commands run verbatim. An opt-in
+  `failThenPass` check proves changed test files fail on the base ref and pass on
+  the branch, using an isolated git worktree. Internal worker behavior only — no
+  new public API and no workflow-engine label vocabulary.
+
+- 109f5df: Resume label-strip no longer discards human-gate answers (#1154).
+
+  `LabelManager.onResumeStart()` runs before the phase loop on every `continue`
+  and stripped `completed:<X>` for every co-present `waiting-for:<X>` gate.
+  Pre-epic gates survived because their resume phase is past the gate, but the
+  two new epic gates (`remediation-limit` and the on-ci-green
+  `implementation-review`) re-evaluate at the resumed phase and depend on the
+  surviving `completed:<X>` label — so the operator's answer was silently
+  discarded and the workflow re-parked, making the gates un-answerable.
+
+  Fix (internal bug fix across `label-manager.ts`, `phase-resolver.ts`, and
+  `phase-loop.ts`; no new public exports, no new label vocabulary — `waiting-for:ci`
+  / `completed:ci` already ship from #1133):
+
+  - Guard the completed-strip loop in `onResumeStart()` with
+    `!isHumanGateCompletion(...)` so every `completed:<X>` for a human-gate
+    suffix survives the resume strip; stale `waiting-for:*` and `agent:paused`
+    removals are unchanged.
+  - Add `'ci': { phase: 'validate', resumeFrom: 'validate' }` to `GATE_MAPPING`,
+    which auto-includes `ci` in the derived `HUMAN_GATE_SUFFIXES` and gives
+    `completed:ci` a defined resume phase.
+  - Marker-dedupe the "Remediation limit reached" gate-body comment on the
+    `<!-- generacy-remediation-limit -->` marker so a re-parked cap does not
+    re-post it every resume cycle.
+  - Best-effort defensive clear of a lingering `completed:remediation-limit` on
+    any clean pass through `review`.
+
+  Both fixes sit behind the epic's existing feature flags
+  (`reviewPhaseEnabled` / `WORKER_REVIEW_PHASE_ENABLED`; `ciMergeGateEnabled` /
+  `WORKER_CI_MERGE_GATE_ENABLED`) — a flag-off cluster is unaffected.
+
+- 77e8334: Review executor must fail (not falsely pass) on CLI failure, timeout, or missing findings (#1155).
+
+  Fixes a critical (P0) phantom-clean verdict: the review-phase executor returned `success: true, exitCode: 0` unconditionally and `readCandidateFindings` returned `[]` for a missing/invalid sidecar, so a review whose CLI died, timed out, or crashed was read as zero findings, computed to a `clean` verdict, and advanced the unreviewed change to `validate` (and marked the PR ready) as though a real review had confirmed it.
+
+  The executor now propagates the real child exit code / timeout into `PhaseResult` (mirroring `remediate-executor.ts`), and the agent writes its findings to a separate candidate path (`review-candidate-<id>.json`) that the engine clears before spawning, so a candidate present after the spawn is provably written this round. `readCandidateFindings` returns `ReviewFinding[] | null` — `null` (missing / unreadable / invalid) is treated as no proof of review, `[]` is a genuine clean review. A failed / no-verdict round persists nothing: any prior-round engine artifact — including `round` and `remediationCount` — is left exactly as-is, so repeated failures cannot burn the #1128 remediate cap and a crash between the candidate write and the engine rewrite cannot silently reset the budget. The happy path (valid candidate, exit 0) is byte-identical to before. The new candidate-path helpers are internal worker surface, not re-exported from the package public `index.ts`.
+
+- 8a5375a: Wire the PR review-posting + draft/ready lifecycle — the reader was never supplied (#1156).
+
+  The entire #1125 PR-visibility/lifecycle block in the phase loop was dead in production: it guards on both `deps.reviewPoster` and `deps.readFindingsArtifact`, but the worker wiring site supplied only the poster and left the reader `undefined`, so the guard was permanently false. As a result no COMMENT-event review ever posted, re-review never resolved inline threads, the clean-verdict `markReadyForReview` never fired, and `convertToDraftIfEngineMarkedReady` was a guaranteed no-op.
+
+  This supplies the `readFindingsArtifact` closure (via a new pure `bridgeReviewArtifact()` in `review-findings-bridge.ts` that maps the engine-written `ReviewArtifact` sidecar into the `FindingsArtifact` the poster consumes) plus the four latent-defect corrections wiring it exposes: severity-threshold bridging consistent with `computeVerdict`, a live `getPrNumber` getter on `ReviewPoster` (kills the "post to PR #0" bug for early rounds), the posting/gating `round` taken from the sidecar rather than the loop-local counter that resets each run, and a cross-run `markedReadyByEngine` flag persisted in the sidecar so a later re-entry can convert a previously-engine-marked-ready PR back to draft without ever demoting a human-marked-ready PR.
+
+  Internal plumbing only — no new public exports. Whole path stays inert when `reviewPhaseEnabled=false` or no sidecar is produced.
+
+- c78d07a: Red CI must not silently complete the workflow (#1157).
+
+  With `ciMergeGateEnabled` on (#1133), a successful `validate` followed by red CI
+  terminated the workflow indistinguishably from success: the `not-passed` verdict
+  merely skipped the `on-ci-green` gate, control fell through to
+  `onPhaseComplete('validate')` (granting `completed:validate`, cockpit's
+  merge-eligible surface), the loop returned `completed: true`, and the completion
+  flow re-marked the PR ready. No pause, no `waiting-for:*`, no comment.
+
+  Fix (defect fix, no new public exports):
+
+  - `@generacy-ai/orchestrator`: the `not-passed` verdict now pauses the workflow
+    in the same recoverable state as the existing `timeout` pause
+    (`waiting-for:ci` + `agent:paused`, no `completed:validate`), posting a
+    best-effort reason comment. An unresolvable head SHA fast-fails into the same
+    pause before `waitForCiGreen` is ever called. The shared `pauseForCiReadiness`
+    helper never calls `onPhaseComplete`, so the red path can never grant
+    `completed:validate` or reach `completed: true`. Also fail-closes the
+    `actions/runs` fallback: a would-be `green` aggregated from the fallback
+    (token lacks `checks:read`, third-party required checks invisible) is
+    downgraded to `not-passed`.
+  - `@generacy-ai/workflow-engine`: `startup_failure` and `stale` become
+    first-class failing CI conclusions (union-member widening is a semantic
+    correction of already-passed-through values), so a hard CI failure resolves
+    promptly to `not-passed` instead of falling through to `pending` and forcing
+    the slow 15-minute timeout.
+
+- 6a5b1c3: Fix validate-origin remediation to consume the shared remediation budget and have a reliable stop. Both validate-origin and review-origin remediations now converge on the single `RemediateExecutor` (each dispatch bumps `remediationCount`), so the `on-remediation-limit` gate is reachable on the validate path. The validate failure fingerprint reason is now stable across test-output nondeterminism, and the executor reports a `timedOut` signal so partial work from a timeout-kill is committed while a clean-run non-zero exit leaves the branch untouched. When a clean-run non-zero exit skips the remediate commit, the working tree is now reverted (hard-reset + clean, preserving `.generacy/`) via the new `GitHubClient.discardWorkingTreeChanges()` method so the abandoned partial fix cannot be committed by the subsequent review phase. Retires the `ValidateFixHandler` adapter and the `validate-fix` launch intent.
+- c78736b: Bound the external-feedback re-entry budget, fence untrusted `detail` at ingestion, and resolve the working branch from the PR head ref (#1159).
+
+  Fixes three composing defects on the flag-ON `address-pr-feedback` review/remediate path that together reproduced the #883-class runaway loop:
+
+  - **Budget bounding**: a blanket `failed:*` monitor re-enqueue skip (no allow-list) — plus the two other non-completing loop exits (`waiting-for:merge-conflicts`, `waiting-for:ci`) — keeps the `clearReviewArtifact` budget reset reachable only on the two legitimate reset occasions, so the `on-remediation-limit` cap becomes globally reachable across re-entries instead of resetting on every poll.
+  - **Prompt-injection fencing**: untrusted `detail` is wrapped with `wrapUntrustedData` at the two ingestion sites (seed comment body, validate-evidence output) before it reaches the remediate charter. Engine-authored review findings are not wrapped.
+  - **Head-ref checkout**: on the `address-pr-feedback` re-entry, the working branch is resolved from the linked open PR's `head.ref` (zero/one/many rule) instead of `createFeature(issueNumber)`, removing the duplicate-PR path under #1043 slug drift. Linked-PR counting matches the branch's numeric prefix by value so zero-padded branches (`042-slug` under `numberPadding: 3`) are counted for issue #42. The ambiguous (>1 linked open PR) park now applies a new `blocked:ambiguous-linked-prs` label so the monitor's `blocked:*` skip suppresses re-enqueue churn and surfaces the ambiguity once for the operator.
+
+  Internal defect fix (`workflow:speckit-bugfix`). The only new public surface is the `blocked:ambiguous-linked-prs` label vocabulary in `workflow-engine`. Whole path stays behind `reviewPhaseEnabled` / `WORKER_REVIEW_PHASE_ENABLED`; the new monitor skips only affect issues already carrying the corresponding label.
+
+- a1099e3: Wire four silently-dropped per-workflow/agent config keys so they take effect at runtime (#1160).
+
+  Four config keys shipped by the engine-native review/remediate epic parsed cleanly (or were documented) but were ignored at their runtime call sites:
+
+  - `validateCommand` — the non-bugfix validate seed now resolves through `resolveWorkflowOverrides` so a per-workflow `workflows.<name>.validateCommand` reaches the validate spawn. `speckit-bugfix` keeps its targeted-validate narrowing composed over the resolved base.
+  - `preValidateCommand` — the pre-validate install step now reads the resolved value; an explicit `""` at the workflow tier skips the install, while an unset tier falls through to the repo/cluster default.
+  - `phases.review` / `phases.remediate` agent selection — the review and remediate executors now resolve the agent via a new field-by-field `resolveReviewLikeAgent`, preferring the phase tier and falling back to the full `implement` resolution per field. Remediate never inherits the `review` tier.
+  - `ciWaitTimeoutMs` — added as an optional per-workflow override on the public `WorkflowOverride` schema (bounded `>= 30_000`, mirroring the cluster floor) and wired into the CI-readiness wait.
+
+  `@generacy-ai/config` bumps **minor** (additive optional `ciWaitTimeoutMs` on the public `WorkflowOverride` type — new user-facing config surface). `@generacy-ai/orchestrator` bumps **patch** (internal call-site wiring plus the new non-exported `resolveReviewLikeAgent`; no public export change).
+
+- ea0b243: Collapse the parallel review findings-artifact schemas, unify the verdict/severity logic, and activate the convergence engine inside the live review executor (#1161).
+
+  Three separate findings-artifact shapes, two `computeVerdict` implementations, and three `SEVERITY_RANK` tables had accreted across the review/remediate path. This consolidates them onto a single canonical `ReviewFinding`/`ReviewArtifact` schema, one `computeVerdict`, and one `SEVERITY_RANK` in `worker/review-artifact.ts`. Findings now carry a deterministic `id` (`sha256(file + "\0" + title)` sliced to 24 hex chars). The finding `round` constraint is tightened from non-negative to positive to match its semantics (rounds start at 1). A `backfillFindingFields` pass runs before Zod validation so pre-#1161 sidecars still parse: it default-fills a missing `id` and normalizes the pre-#1161 seed-synthesized `round: 0` up to `1` (an un-normalized 0 would otherwise fail the tightened schema and silently discard all prior review state on a mid-issue upgrade).
+
+  The #1126 delta-scoped convergence merge (round-N→N+1 carry-forward + verdict recompute) now runs end-to-end **inside** the live review executor; the old `runReviewConvergence` phase-loop pre-pass is deleted, so the round lives only in the sidecar (single round source). The per-workflow default `blockingSeverity` is reconciled to `major` for `speckit-feature` and `critical` for every other workflow, in both code and `docs/reference/review-artifacts.md`, and a `settings = null` resolution path is fixed.
+
+  Internal consolidation and bug fix — no new public exports, no new label vocabulary. The whole path stays behind `reviewPhaseEnabled` / `WORKER_REVIEW_PHASE_ENABLED`, so a flag-off cluster is byte-identical.
+
+- 975156e: Keep engine bookkeeping sidecars out of PR branches (#1162).
+
+  The phase-completion commit path staged the whole working tree with an unscoped
+  `git add -A` (`stageAll()`), committing engine bookkeeping sidecars
+  (`.generacy/review-findings-*`, `review-candidate-*`, `pause-context-*`) into
+  product PR diffs. Because the findings sidecar carries raw validate stderr
+  tails, the next review round then reviewed the engine's own bookkeeping as if it
+  were product code. The orchestrator-internal fixes:
+
+  - **FR-001/FR-002**: `PrManager.commitAndPush` now stages a targeted, filtered
+    set — `[...status.staged, ...status.unstaged, ...status.untracked]` minus any
+    path matching `isEngineSidecar` — and commits only when something
+    product-relevant remains. Including `status.staged` means an index-only product
+    change (already `git add`ed, no further working-tree diff) is no longer
+    stranded. The commit is made with an explicit pathspec of that filtered set
+    (`git commit -m <msg> -- <paths>`), so a sidecar some other actor pre-staged
+    into the index can never be folded in by a whole-index commit — the "never
+    committed" guarantee holds even against a dirty index. A sidecar-only phase
+    produces no commit (no empty commits). Deletions reported in `status.unstaged`
+    are still staged so removals commit. `.generacy/config.yaml` and
+    `.generacy/epics/*` remain product files and continue to commit.
+  - **FR-004**: the shared `ENGINE_SIDECAR_PREFIXES` predicate (`isEngineSidecar`)
+    is folded into `product-diff.ts`'s `EXCLUDED_PATH_PREFIXES`, so any _already
+    committed_ sidecar on a pre-fix branch is excluded from the review-round diff —
+    the raw stderr tail never reaches the reviewed files. The list is the single
+    source of truth for sidecar exclusion and now enumerates every
+    `.generacy/<name>-<id>.json` bookkeeping file written into the checkout:
+    `review-findings-`, `review-candidate-`, `pause-context-`, `external-feedback-`
+    (carries raw external human/PR feedback text), and `workflow-state-`.
+  - **`@generacy-ai/workflow-engine`**: `GitHubClient.commit()` gains an optional
+    `pathspec?: string[]` argument (`git commit -m <msg> -- <paths>`); when omitted
+    the whole index is committed (unchanged legacy behavior). This is the primitive
+    the scoped phase-completion commit above relies on.
+  - **FR-003**: `remediationCount` is mirrored to Redis via `PhaseTracker`
+    (`remediation-count:<owner>:<repo>:<issue>:<branch>`, 7-day TTL) alongside the
+    disk sidecar, reconciled on gate re-entry (`max(disk, redis)`, never lowers a
+    spent budget) and cleared on `completed:remediation-limit` resume. This keeps
+    the cap durable across a worker restart / re-clone now that the sidecar is no
+    longer committed. Best-effort no-op when Redis is down (falls back to the disk
+    value). `review-artifact.ts` gains `seedRemediationCount`.
+
+  No new labels, no new public exports, no workflow-YAML changes. Pre-shipped repos
+  with committed sidecars are cleaned up via the one-time manual
+  `specs/1162-severity-major-p1-engine/scripts/cleanup-committed-sidecars.sh`.
+
+- 5dfedcb: Fix four merge-conflict scoped-review lifecycle defects (#1164, `workflow:speckit-bugfix`).
+
+  The merge-conflict → scoped-review path introduced with the engine-native review/remediate epic carried four related defects. All fixes are orchestrator-internal (`worker/` surface, not re-exported at the package public boundary); no new label vocabulary and no new persisted state. Both epic flags (`reviewPhaseEnabled`, `ciMergeGateEnabled`) remain the on/off switches — a cluster with both OFF is unaffected.
+
+  - **Stale `reviewScope` (FR-001/FR-002)** — the review executor now honors `context.reviewScope` only on round 1 (`!priorRound`). Round 2+ falls back to the standard `lastReviewedCommitSha`..HEAD delta, so remediation commits are visible and the loop converges instead of burning to the remediation cap with the defect already fixed.
+  - **Base-delta resolution scope (FR-003)** — the resolution scope now carries the live conflicted-path allowlist (`git diff --name-only --diff-filter=U`) on the post-conflict-resolution success path only; the charter names the allowlist instead of the full parent-1 base delta. No-op and clean-merge success paths leave it absent and fall back to the pre-#1164 range description.
+  - **Trivial-diff charter rule (FR-004/FR-005)** — the "empty or trivial diff → blocking finding" paragraph is emitted only for whole-PR round-1 reviews (`!verification && !diffWindow`), so a small-but-valid scoped resolution no longer triggers a spurious `changes-required` loop.
+  - **Validate-bypass + crash window (FR-006/FR-007/FR-008)** — `applySuccessDisposition` now also removes `completed:validate` + `completed:implementation-review` on re-arm so the terminal short-circuit no longer fires on the post-merge tree and `validate` runs on the merged tree before mark-ready. Ownership-label clearing moves to an `afterEnqueue` closure invoked after `enqueueIfAbsent` resolves, converting the pre-#1164 "no label + no work" stall into a benign "queued work + stale ownership label".
+
+- 2ff9839: Close four flag-matrix guardrail corners for the review/remediate epic (#1165, `workflow:speckit-bugfix`).
+
+  Corner 4 (`worker/types.ts`): `getPhaseSequence` now filters `review` out of the fallback sequence for an unknown/custom workflow regardless of `reviewPhaseEnabled`, so only known workflows can opt into the `review` phase. Corner 1 (`worker/phase-loop.ts`): on the default (`reviewPhaseEnabled` OFF) path a failing `validate` gets exactly one bounded remediate attempt before escalating, keeping the legacy path self-healing without the full engine-native review→remediate loop. Corners 2 and 3 are doc/test-only (legacy `blocked:stuck-feedback-loop` bound reconcile; `speckit-bugfix` `on-ci-green` gate pin) and add no runtime behavior. Both epic flags remain default `false`, so a flags-OFF cluster is byte-identical to before.
+
+- a56f79e: Harden the `speckit-bugfix` targeted-validate classifier and fail-then-pass regression prover (#1166).
+
+  Closes seven post-merge-review defects (#1134/#1150) in the bugfix-profile validate path, all in the wiring layer — the pure `classifyDiff` classifier stays untouched:
+
+  - **targeted-validate wiring** (`phase-loop.ts`): existence-filter the changed-file set before classification so deletion-only and rename diffs never emit `pnpm vitest run <nonexistent-file>`; probe `pnpm ls --filter "...[origin/<base>]"` for the built-in default and fall back to the full command when the selection is empty or the probe errors (fail-safe); substitute `<base>` in custom `validateCommand`s with the resolved base branch so the same command works on `develop`- and `main`-based repos.
+  - **fail-then-pass prover** (`fail-then-pass.ts`): a conservative `isInfraFailure` predicate maps pre-collection failures (zero tests collected, dist/module-resolution errors) to `skip` instead of a false `base-passed`/`branch-failed`; a base-test timeout maps to `skip: timeout` while phase-signal aborts still propagate; the worktree lifecycle is made best-effort and signal-free in `finally`, and a `git worktree add` failure skips rather than throwing.
+
+  Every new fallback/skip/infra decision emits exactly one structured log line. Non-bugfix workflows and non-triggering bugfix runs stay byte-identical.
+
+- 4e0ad87: Add an engine-side `tasks.md` safety net for the implement→continue increment (#1187, `workflow:speckit-bugfix`).
+
+  The implement→continue increment previously fired only when the agent emitted a `SPECKIT_IMPLEMENT_PARTIAL` sentinel. When the agent stopped mid-tasklist without emitting it, `result.implementResult` was `undefined`, the re-loop was skipped, `completed:implement` was granted, and a substantially-unfinished tree advanced into review→remediate (which caps and stalls).
+
+  The fix adds an engine-side fallback: after a `success` implement phase with **no** sentinel, the engine reads the workflow's `tasks.md`, counts unchecked `- [ ]` tasks, and — when work remains — synthesizes a `result.implementResult` so the existing increment block (WIP commit/push, fresh session, no-progress guard, `i--; continue`) drives re-entry unchanged. The sentinel stays the fast path; `tasks.md` becomes the fallback source of truth. All changes are orchestrator-internal (`worker/` surface, not re-exported at the package public boundary); no new public exports and no new label vocabulary. A fully-checked or task-less `tasks.md` advances exactly as today, and an unreadable/ambiguous fallback source logs and advances (fail-open).
+
+  Also fixes a latent teardown hang in `@generacy-ai/generacy`'s cockpit doorbell `AnswersFileSource`: the `fs.watch` async iterator was awaited on `stop()` without an `AbortSignal`, so a pending `next()`/`return()` never settled once the watch loop was active (parent dir present), hanging teardown until the test timeout. An `AbortController` is now wired through the watcher and aborted before `stop()` awaits the iterator's `return()`.
+
+- b7b6151: Fix the clarify gate silently self-answering and skipping (#1189).
+
+  The FR-004 discriminator that distinguishes a question comment from a cockpit answer block required a colon after `Q<n>` (`### Q1: Topic`). A clarification batch posted with a different separator — `### Q1 — Topic` — therefore fell on the answer-block side of the test: the fail-closed guard never fired, `parseAnswersFromComments` captured each question's own topic as its answer, `clarifications.md` was written with `**Answer**: — <question title>`, every question read as answered, and the `on-questions` gate was skipped. The workflow then ran plan → tasks → implement on unanswered design questions, and because integration only ever replaces the literal `*Pending*`, a real answer posted afterwards could never land.
+
+  The discriminator now keys on whether the `Q<n>` heading line carries any trailing content, which is the property that actually separates the two shapes: a question comment always names its topic on the heading line, while a cockpit answer block writes a bare `### Q1` and puts the answer on the next line. A bare heading (with or without trailing whitespace) still does not match, so legitimate cockpit integrations are unaffected.
+
+- 7be3119: Teach the `tasks.md` safety net to recognize the heading task grammar (#1192, `workflow:speckit-bugfix`).
+
+  The #1187 safety net counted only GitHub-style checkbox task lines (`- [ ] T001`). The implement prompt emits **two** task grammars — checkbox and heading (`### T001` unchecked → `### T001 [DONE]` done). A `tasks.md` written in the heading grammar parsed as zero task lines, so `evaluateTasksMd` returned `{ kind: 'complete', total: 0 }`, the safety net no-op'd, `completed:implement` was granted, and a substantially-unfinished tree advanced into review→remediate — silently reproducing the exact bug #1187 was built to prevent.
+
+  The fix is additive and confined to `countTasks`: heading-task detection (`### T001`) with a strict `[DONE]` position (checked only when `[DONE]` immediately follows the task-ID token) and a boundary that rejects range/summary follow-ons (`### T001-T026 remaining`, en-/em-dash variants). Both grammars feed the same `{ unchecked, checked, total }` tally, so mixed-grammar files sum. Checkbox behavior is byte-identical. The phase-loop `complete` branch also gains one log-only `info` line keyed on `total === 0`, so an operator can distinguish "no task lines recognized in either grammar" from a legitimate all-checked advance. All changes are orchestrator-internal (`worker/` surface); no new public exports and no new label vocabulary.
+
+- a625c4c: Capture the agent's real messages in CLI-phase failure comments. The worker's
+  `OutputCapture` stores every Claude CLI stream-json line as a `type: 'text'`
+  chunk whose `data` is the raw envelope, so the agent's prose lives at
+  `data.message.content[].text` (assistant turns) or `data.result` (final turn) —
+  not at a flat `data.text`. `synthesizeOutputTail` only read `data.text`, so every
+  CLI-phase failure comment (e.g. `implement` failing `no-product-code-changes`)
+  rendered an empty or one-line "output (last N lines)" tail even when the agent
+  had explained itself at length. Extract text from all three envelope shapes so
+  the diagnostic tail carries the agent's last message — the "why it stopped"
+  narrative that is the whole point of the failure comment — while still skipping
+  structural tool/lifecycle chunks and de-duplicating the trailing `result` echo.
+- 06c6b3e: Grant `completed:review` only on a clean review verdict. The phase loop granted
+  `completed:review` on every successful review-phase execution — before the
+  verdict was inspected — so a `changes-required` review (about to remediate and
+  re-review) was labelled "review completed" while its findings were still open.
+  That misreported progress (cockpit's `STAGE_COMPLETE_PIPELINE_ORDER` treats
+  `completed:review` as a stage-complete marker) and set the label-derived-resume
+  trap the merge-conflict path already carries an explicit-`startPhase` workaround
+  for (a resume could resolve straight past an open review into `validate`).
+
+  The review verdict is now read up front and the grant is gated on it: a
+  `changes-required` pass clears `phase:review` without granting `completed:review`
+  (new `LabelManager.onPhaseExecutedWithoutCompletion`), and the clean grant lands
+  on the converging pass. The cap/remediate/verdict logic keys on the review
+  sidecar (`verdict` / `remediationCount` / `round`), never on this label, so
+  withholding it is behavior-safe.
+
+- 79672be: Fix the second wave of review/remediate regressions found in the post-merge review of #1153: narrow the resume-strip retain set (clarification/sibling-review/ci answers are stripped again; only remediation-limit and, under the CI gate, implementation-review survive), trust actions-runs CI green and post an honest, deduped CI-pause comment, dedupe the remediation-limit comment against issue comments, clear the Redis remediation budget on completion and at the on-ci-green approval pause, mark validate-origin/body-only findings `synthetic` so the verification pass can resolve them, gate resolution-scoped reviews on scope consumption instead of "no prior artifact", preserve engine sidecars across `git clean` while never committing them (PrManager and the legacy feedback handler), expand untracked directories in `getStatus`, and reclassify fail-then-pass infra failures against real vitest/pnpm output with a per-package fallback.
+- Updated dependencies [8c925b4]
+- Updated dependencies [cf38f6b]
+- Updated dependencies [c1154f5]
+- Updated dependencies [6920dc0]
+- Updated dependencies [1484e11]
+- Updated dependencies [81f873b]
+- Updated dependencies [a7658b4]
+- Updated dependencies [c78d07a]
+- Updated dependencies [6a5b1c3]
+- Updated dependencies [c78736b]
+- Updated dependencies [a1099e3]
+- Updated dependencies [975156e]
+- Updated dependencies [d6d53d7]
+- Updated dependencies [1adc973]
+- Updated dependencies [79672be]
+  - @generacy-ai/workflow-engine@0.7.0
+  - @generacy-ai/config@0.6.0
+  - @generacy-ai/generacy-plugin-claude-code@0.6.0
+  - @generacy-ai/cockpit@0.9.0
+  - @generacy-ai/control-plane@0.8.2
+
 ## 0.13.1
 
 ### Patch Changes

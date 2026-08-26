@@ -1,5 +1,56 @@
 # @generacy-ai/cockpit
 
+## 0.9.0
+
+### Minor Changes
+
+- d6d53d7: Add `remediation-limit` (#1120) and `ci` (#1133) to the cockpit gate-type wire
+  enum (`GateTypeSchema`) in both in-repo mirrors — the canonical
+  `@generacy-ai/cockpit` enum (`packages/cockpit/src/gates/schema.ts`) and the
+  MCP-boundary mirror (`packages/generacy/src/cli/commands/cockpit/mcp/gates/schemas.ts`).
+  Both engine-raisable operator gates were previously `.strict()`-rejected as
+  `invalid-args` under `/cockpit:auto --gates=ui`. The two members are appended
+  after `scope-drained`; the existing 8 values are neither reordered nor renamed.
+  The four exhaustive `Record<GateType, …>` fixture maps in
+  `packages/cockpit/src/gates/fixtures.ts` gain plain-string generations for the
+  new types (no new derivation helper). Cluster-side only; the cloud
+  `cockpitGateTypeEnum` mirror is coordinated separately.
+
+### Patch Changes
+
+- 81f873b: PR-feedback monitor: exclude engine review threads, route external feedback into the remediate loop
+
+  - `PrFeedbackMonitorService` now excludes engine-authored review threads from the trigger, so the engine's own review comments no longer re-enqueue the fixer.
+  - When the review phase is enabled, trusted external PR feedback (inline threads + review bodies) is seeded into the shared `review`/`remediate` phase loop instead of the legacy fixer, and converges through the `on-remediation-limit` gate (`waiting-for:remediation-limit`).
+  - The legacy (review-phase-disabled, default) fixer keeps its own bounded stop: a no-diff / push-failed cycle still applies `blocked:stuck-feedback-loop` so the monitor pauses re-enqueue until an operator clears it. Each path has a distinct bounded stop — the flag-ON path uses the `remediation-limit` gate, the flag-OFF path uses `blocked:stuck-feedback-loop`.
+
+- 1adc973: Reconcile review/remediate docs, comments, and enumerations with shipped
+  behavior (#1167). Cockpit's `WAITING_PIPELINE_ORDER` gains
+  `waiting-for:remediation-limit` (after `waiting-for:implementation-review`) and
+  `waiting-for:ci` (last), and `STAGE_COMPLETE_PIPELINE_ORDER` gains
+  `completed:validate` / `completed:remediate` / `completed:review` so the new
+  review/remediate gates sort deterministically instead of falling back to the
+  default `WORKFLOW_LABELS` index. The workflow-engine `ReviewGate` union is
+  widened with the existing `remediation-limit` and `ci` gate labels for type
+  completeness. No runtime behavior change — these are deterministic-ordering and
+  type-surface additions only.
+- Updated dependencies [8c925b4]
+- Updated dependencies [cf38f6b]
+- Updated dependencies [c1154f5]
+- Updated dependencies [6920dc0]
+- Updated dependencies [1484e11]
+- Updated dependencies [81f873b]
+- Updated dependencies [a7658b4]
+- Updated dependencies [c78d07a]
+- Updated dependencies [6a5b1c3]
+- Updated dependencies [c78736b]
+- Updated dependencies [a1099e3]
+- Updated dependencies [975156e]
+- Updated dependencies [1adc973]
+- Updated dependencies [79672be]
+  - @generacy-ai/workflow-engine@0.7.0
+  - @generacy-ai/config@0.6.0
+
 ## 0.8.1
 
 ### Patch Changes
