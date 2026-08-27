@@ -10,7 +10,7 @@
 - B: `onPhaseExecutedWithoutCompletion('implement')` then apply gate labels — implement is *not* marked complete (manual tasks remain unchecked in tasks.md), and the resolver/resume path is extended to handle this state.
 - C: Bare `onGateHit('implement', 'waiting-for:manual-validation')` (mirror #1211) and change `GATE_MAPPING['manual-validation']` to resume at `implement` instead of `validate`.
 
-**Answer**: *Pending*
+**Answer**: A — `onPhaseComplete('implement')` first (grants `completed:implement`), then `onGateHit('implement', 'waiting-for:manual-validation')`. Precedent: the #1133 on-ci-green gate at `phase-loop.ts:1937-1952` uses exactly this completed-at-pause sequence, and `GATE_MAPPING['manual-validation']` already carries `resumeFrom: 'validate'` — option A makes the resolver resolve cleanly at `validate` with zero resolver/mapping changes. Option B extends the resolver for a state only this gate produces; option C changes resume semantics for an existing gate other flows may rely on. IMPLEMENTATION NOTE: update the #1133 comment at `phase-loop.ts:1930-1932` claiming "This is the one gate where completed:<phase> is granted at pause" (manual-validation becomes the second). Ordering is safe against `label-manager.ts:287-292`'s #958 assumption because `onPhaseComplete` already removed `phase:implement`, making `onGateHit`'s removeLabels a no-op exactly as on the ci-green path.
 
 ### Q2: Keyword-detection matching semantics
 **Context**: FR-006 classifies tasks as manual via keywords (`manual`, `manually`, `hand-test`, `manually verify`) when no `[manual]` marker is present. Substring matching would misfire on task text like "update the user manual" or "add manuals directory", silently suppressing legitimate re-entry (the inverse of the current bug). The evidence cases (#2723 T028/T029) contain phrases like "Manually verify" at the start of the task text.
@@ -20,7 +20,7 @@
 - B: Case-insensitive match only when the keyword appears in the first N words (e.g., first 4) of the task text after the checkbox/ID — targets imperative task phrasing ("Manually verify X…") and avoids mid-sentence noun uses.
 - C: Only exact leading verbs (`Manually …`, `Hand-test …`, `Verify manually …`) — lowest false-positive rate; misses tasks phrased differently.
 
-**Answer**: *Pending*
+**Answer**: B — case-insensitive keyword match only when the keyword appears in the first N words (e.g., first 4) of the task text after the checkbox/ID. Keywords are the medium-confidence tier only (per `implement.md:176-178`); a false positive suppresses re-entry only when ALL remaining unchecked tasks classify manual, and the resulting pause is a visible labeled gate a human can override — so the first-N-words rule's residual miss risk is acceptable while avoiding mid-sentence noun misfires like "update the user manual". Mirrors the strict-positional precedent of `HEADING_DONE` at `tasks-md-fallback.ts:34-39`.
 
 ### Q3: Manual classification for the heading task grammar
 **Context**: `countTasks` recognizes two grammars: checkbox (`- [ ] T001 …`) and heading (`### T001 …` / `### T001 [DONE] …`). FR-005/FR-006 describe the `[manual]` marker and keywords for classification, but the heading grammar has strict position rules (`[DONE]` must appear immediately after the task ID, per FR-002 of #1187). Evidence case #2714 used `[manual]` markers and still failed, so marker handling must be pinned for whichever grammars it applies to.
@@ -30,7 +30,7 @@
 - B: Both grammars; `[manual]` must appear immediately after the task ID (mirroring the strict `[DONE]` position rule) — strict and symmetric, but risks missing real-world placements like trailing `[manual]`.
 - C: Checkbox grammar only — heading tasks are never classified manual (heading grammar is rare and the evidence is checkbox-based).
 
-**Answer**: *Pending*
+**Answer**: A — both grammars; `[manual]` recognized anywhere in the task line (checkbox: anywhere after `- [ ]`; heading: anywhere after the task ID). Lenient placement matches how authors actually write the marker — evidence case #2714 used `[manual]` markers that were ignored, so strict positioning (option B) risks re-missing real-world placements like trailing `[manual]`. IMPLEMENTATION NOTE: match the literal bracketed token (e.g., `/\[manual\]/i`), not a bare word; the marker check must not interact with the strict `HEADING_DONE` `[DONE]`-after-ID rule at `tasks-md-fallback.ts:39` — a heading line can carry both tokens, and `[manual]` must not affect checked/unchecked counting.
 
 ### Q4: Precedence when the label and tasks.md disagree
 **Context**: FR-001..004 say the `waiting-for:manual-validation` label suppresses partial synthesis, while US2's acceptance says a mixed remainder (manual + automatable unchecked tasks) still re-enters. These can conflict: the label may be present on the issue while tasks.md still shows unchecked *automatable* tasks (e.g., operator applied the label early, or a prior increment left work behind). There is also the failure mode where the label read itself errors.
@@ -40,7 +40,7 @@
 - B: tasks.md wins — automatable-unchecked > 0 forces re-entry even with the label present (label only matters when the automatable remainder is zero); label-read failure behaves as label-absent.
 - C: Label wins, and label-read failure also suppresses re-entry (fail-closed) — safest against wasted CLI runs but can strand genuinely incomplete stories on transient GitHub errors.
 
-**Answer**: *Pending*
+**Answer**: A — label wins unconditionally; never synthesize partial when `waiting-for:manual-validation` is present, regardless of tasks.md contents. Label-read failure falls back to tasks.md classification (fail-open to classification, not to blind re-entry) — matching the existing fail-open philosophy at `tasks-md-fallback.ts:14-16` and `:88-91`. Option C's fail-closed behavior can strand genuinely incomplete stories on transient GitHub errors. IMPLEMENTATION NOTE: when the label is present but classification says automatable tasks remain, log the divergence (mirroring the structured logs at `phase-loop.ts:928-946`) so operators can spot agent mislabeling.
 
 ### Q5: WIP commit on the manual-pause path
 **Context**: The #1211 dependency-block pause commits and pushes WIP (via `prManager.commitPushAndEnsurePr`, honoring the #1051 `pushRefused` abort) *before* posting its marker comment and applying gate labels, so the checkout state survives the pause. The new manual-validation pause path (FR-009/FR-010: no-progress guard pauses instead of failing when the remainder is human-gated) occurs at the same structural point in the phase loop, but the spec does not say whether it must also commit/push first.
@@ -49,4 +49,4 @@
 - A: Yes — always commit/push any uncommitted work before pausing (mirror #1211; the tree may hold real work from the just-finished increment).
 - B: No — the pause fires after a successful implement phase whose normal commit path already ran; an extra commit step is redundant and adds failure surface.
 
-**Answer**: *Pending*
+**Answer**: A — yes, always WIP commit/push any uncommitted work before pausing (mirror #1211). Option B's premise is factually wrong: the safety-net region (`phase-loop.ts:919-952`) and the #1211 dependency-block branch (`:956-1064`) both run BEFORE the normal step-5 commit at `:1396`, so an early `gateHit` return skips the phase's only commit path — the tree may hold real work from the just-finished increment. IMPLEMENTATION NOTE: mirror the #1211 sequence exactly — WIP commit/push via `prManager.commitPushAndEnsurePr` (honoring `pushRefused` with an aborting return, per the trap documented at `phase-loop.ts:1401-1417`), propagate `prUrl` into context, THEN apply the Q1 label sequence.
