@@ -50,7 +50,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   insensitivity; keyword positives (`Manually verify …` word 1, `Hand-test the …` word 1,
   `Verify manually that …` word 2), keyword negatives (`rewrite the entire user manual
   section` — word 5+, `add manuals directory` — whole-word failure). Explicitly pin the
-  **accepted residual false positive** `- [ ] T011 update the user manual` (keyword lands at
+  **accepted residual false positive** `- [X] T011 update the user manual` (keyword lands at
   word 4, inside the window → classifies manual) with a comment naming it as the documented
   Q2=B trade-off, so a future reader does not "fix" it silently.
 
@@ -125,7 +125,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
 ## Phase 5: Phase-loop tests (`__tests__/phase-loop.manual-validation.test.ts`)
 <!-- Phase boundary: needs Phases 3-4. -->
 
-- [ ] T011 [US1] Create
+- [X] T011 [US1] Create
   `packages/orchestrator/src/worker/__tests__/phase-loop.manual-validation.test.ts`,
   following the harness/mock conventions of the sibling
   `__tests__/phase-loop.dependency-block.test.ts` (injected `deps.evaluateTasksMd`, stub
@@ -136,14 +136,14 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   `failed:implement` nor `failed:implement-repeated` and no failure alert was posted (SC-003,
   FR-004).
 
-- [ ] T012 [US2] Add `manual-only` pause coverage to the same file: label **absent** +
+- [X] T012 [US2] Add `manual-only` pause coverage to the same file: label **absent** +
   evaluation `manual-only` (the #2714 shape) → pause, not re-entry (SC-002); assert the
   **call order** `onPhaseComplete('implement')` before
   `onGateHit('implement', 'waiting-for:manual-validation')` (Q1=A — this ordering is what
   makes `resumeFrom: 'validate'` resolvable); and `pushRefused` from
   `commitPushAndEnsurePr` → returns `gateHit: false` with **zero** label calls (#1051 abort).
 
-- [ ] T013 [US2] [US4] Add precedence and mixed-remainder coverage: mixed remainder
+- [X] T013 [US2] [US4] Add precedence and mixed-remainder coverage: mixed remainder
   (automatable > 0, no label) → still re-enters and the synthesized `tasks_remaining` equals
   the **automatable** count, not `unchecked` (SC-006); label present + `automatable > 0` →
   pause **and** a divergence warn carrying `reason: 'manual-validation-label-present'`;
@@ -151,13 +151,13 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   (`manual-only` → pause, `incomplete` → re-entry); purely automatable remainder with no
   label → re-entry identical to #1187 (SC-007 companion, US4).
 
-- [ ] T014 [US3] Add guard coverage to the same file: unchanged remainder that is human-gated
+- [X] T014 [US3] Add guard coverage to the same file: unchanged remainder that is human-gated
   (label present, and separately `manual-only`) → pause, no `failed:implement`, stage comment
   **not** written with `status: 'error'`, `escalateAndAlert` not called (FR-009); unchanged
   remainder with automatable work → guard fires exactly as today (`result.success === false`,
   error message/output text unchanged, escalation called, `gateHit: false`) (FR-010).
 
-- [ ] T015 [US4] Add a sentinel-path pin: an implement result **with**
+- [X] T015 [US4] Add a sentinel-path pin: an implement result **with**
   `SPECKIT_IMPLEMENT_PARTIAL`-derived `implementResult` never reaches the safety-net block —
   `deps.evaluateTasksMd` is not called and `getIssueLabels` is not consulted for the manual
   check (SC-007). Then confirm the pre-existing `__tests__/phase-loop.test.ts` safety-net
@@ -167,13 +167,13 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
 ## Phase 6: Verification & release
 <!-- Phase boundary: all code and tests must land first. -->
 
-- [ ] T016 Add `.changeset/1214-manual-task-safety-net.md` — `@generacy-ai/orchestrator`
+- [X] T016 Add `.changeset/1214-manual-task-safety-net.md` — `@generacy-ai/orchestrator`
   **patch** (`workflow:speckit-bugfix`; internal worker fix, no new public exports, no new
   label vocabulary). Required: this diff touches non-test files under
   `packages/orchestrator/src/`, so the changeset-bot CI gate fails without a **newly added**
   changeset file (see CLAUDE.md § Changesets).
 
-- [ ] T017 Run the gates and confirm the non-change invariants:
+- [X] T017 Run the gates and confirm the non-change invariants:
   `pnpm --filter @generacy-ai/orchestrator test -- tasks-md-fallback`,
   `pnpm --filter @generacy-ai/orchestrator test -- phase-loop`,
   `pnpm type-check`, then the full orchestrator suite. Verify via `git diff --stat` that

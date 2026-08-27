@@ -2296,18 +2296,6 @@ export class PhaseLoop {
   }
 
   /**
-   * Clear the durable Redis mirror of the remediation budget
-   * (`remediation-count:<owner>:<repo>:<issue>:<branch>`) on a SUCCESSFUL
-   * loop completion (`completed: true`). The mirror must persist across every
-   * non-completing exit (gate pauses, failures, push refusals) so a restart
-   * resumes with the spent budget; but a workflow that converged after N
-   * remediations would otherwise leave N in Redis, and a later re-entry
-   * (e.g. address-pr-feedback, which clears the disk sidecar and re-seeds at
-   * 0) would reconcile `max(disk, redis)` back up to N — parking the human's
-   * feedback at the cap with zero attempts when N ≥ max. Best-effort: a Redis
-   * failure never changes the completion outcome.
-   */
-  /**
    * #1214: read whether `waiting-for:manual-validation` is already on the issue.
    *
    * Tri-state on purpose (Q4=A): a read failure is NOT the same as "absent".
@@ -2392,6 +2380,18 @@ export class PhaseLoop {
     return { results, completed: false, lastPhase: phase, gateHit: true };
   }
 
+  /**
+   * Clear the durable Redis mirror of the remediation budget
+   * (`remediation-count:<owner>:<repo>:<issue>:<branch>`) on a SUCCESSFUL
+   * loop completion (`completed: true`). The mirror must persist across every
+   * non-completing exit (gate pauses, failures, push refusals) so a restart
+   * resumes with the spent budget; but a workflow that converged after N
+   * remediations would otherwise leave N in Redis, and a later re-entry
+   * (e.g. address-pr-feedback, which clears the disk sidecar and re-seeds at
+   * 0) would reconcile `max(disk, redis)` back up to N — parking the human's
+   * feedback at the cap with zero attempts when N ≥ max. Best-effort: a Redis
+   * failure never changes the completion outcome.
+   */
   private async clearRemediationBudgetMirror(
     context: WorkerContext,
     deps: PhaseLoopDeps,
