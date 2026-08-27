@@ -5,6 +5,7 @@ import { ZodError } from 'zod';
 import { type GeneracyConfig, validateConfig, type AgentEntry, type AgentsConfig } from './schema.js';
 import { validateSemantics, ConfigValidationError } from './validator.js';
 import { hasEffortMechanism } from './effort-mechanism-probe.js';
+import { resolveRoute } from '@generacy-ai/generacy-plugin-claude-code';
 
 /**
  * Environment variable for explicit config path override
@@ -345,7 +346,7 @@ export interface LoadConfigResult {
  */
 export function loadConfigWithWarnings(options: LoadConfigOptions = {}): LoadConfigResult {
   const config = loadConfig(options);
-  const warnings = collectEffortWarnings(config);
+  const warnings = [...collectEffortWarnings(config), ...collectGatewayWarnings(config)];
   return { config, warnings };
 }
 
@@ -404,6 +405,77 @@ export function collectEffortWarnings(config: GeneracyConfig): string[] {
         wfEntry.default,
         agents.default,
       );
+    }
+  }
+
+  return warnings;
+}
+
+/**
+ * Cockpit auto-mode agent roles that carry a per-role `model`. Mirrors
+ * `COCKPIT_AGENT_ROLES` in `packages/cockpit/src/config/schema.ts`.
+ */
+const COCKPIT_AGENT_ROLES = ['clarifier', 'reviewer', 'validator', 'fixer', 'diagnoser'] as const;
+
+/**
+ * Collect warnings for agent entries whose model resolves to the gateway route
+ * (`resolveRoute(model) === 'gateway'`, i.e. the model string contains `/`)
+ * while `GENERACY_LLM_GATEWAY_URL` is unset — such a model routes nowhere at
+ * spawn time (#1200, FR-003/D-7). Warnings-only; never throws.
+ *
+ * Only entries that **explicitly set** `model` are considered (D-2): inherited
+ * models are not re-warned per set-site. The cockpit block is walked
+ * tolerantly (D-3) — any shape mismatch yields no warnings, no crash.
+ */
+export function collectGatewayWarnings(
+  config: GeneracyConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  // Short-circuit when the gateway URL is present: no entry can warn.
+  if (env.GENERACY_LLM_GATEWAY_URL) return [];
+
+  const warnings: string[] = [];
+
+  const emitIfGatewayRouted = (entry: AgentEntry | undefined, path: string): void => {
+    if (!entry?.model) return;
+    if (resolveRoute(entry.model) !== 'gateway') return;
+    warnings.push(
+      `${path}.model — set to '${entry.model}' which resolves to the gateway route, but GENERACY_LLM_GATEWAY_URL is not set in this environment. The model will not route anywhere at spawn time.`,
+    );
+  };
+
+  // orchestrator.agents tier-walk (mirror collectEffortWarnings).
+  const agents = config.orchestrator?.agents as AgentsConfig | undefined;
+  if (agents) {
+    emitIfGatewayRouted(agents.default, 'orchestrator.agents.default');
+
+    const workflows = agents.workflows ?? {};
+    for (const [wfName, wfEntry] of Object.entries(workflows)) {
+      if (!wfEntry) continue;
+      emitIfGatewayRouted(wfEntry.default, `orchestrator.agents.workflows.${wfName}.default`);
+
+      const phases = wfEntry.phases ?? {};
+      for (const [phaseName, phaseEntry] of Object.entries(phases)) {
+        if (!phaseEntry) continue;
+        emitIfGatewayRouted(phaseEntry, `orchestrator.agents.workflows.${wfName}.phases.${phaseName}`);
+      }
+    }
+  }
+
+  // cockpit.auto.agents tolerant duck-walk (D-3).
+  const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
+
+  const readModelEntry = (value: unknown): AgentEntry | undefined => {
+    if (!isObject(value)) return undefined;
+    return typeof value.model === 'string' ? ({ model: value.model } as AgentEntry) : undefined;
+  };
+
+  const cockpit = (config as { cockpit?: unknown }).cockpit;
+  if (isObject(cockpit) && isObject(cockpit.auto) && isObject(cockpit.auto.agents)) {
+    const cockpitAgents = cockpit.auto.agents;
+    emitIfGatewayRouted(readModelEntry(cockpitAgents.default), 'cockpit.auto.agents.default');
+    for (const role of COCKPIT_AGENT_ROLES) {
+      emitIfGatewayRouted(readModelEntry(cockpitAgents[role]), `cockpit.auto.agents.${role}`);
     }
   }
 
