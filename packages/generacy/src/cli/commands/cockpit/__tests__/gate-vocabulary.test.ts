@@ -22,6 +22,10 @@ describe('gate-vocabulary', () => {
       'manual-validation',
       'children-complete',
       'epic-approval',
+      // #1211: dependency-blocked implement pause. Both sides of each pair now
+      // exist in WORKFLOW_LABELS, so both are advance-able gates.
+      'dependencies',
+      'dependency-limit',
     ];
     for (const name of expected) {
       expect(GATES.has(name), `expected gate ${name} in GATES`).toBe(true);
@@ -33,7 +37,6 @@ describe('gate-vocabulary', () => {
     expect(GATES.has('sibling-review')).toBe(false);
     expect(GATES.has('pr-feedback')).toBe(false);
     expect(GATES.has('address-pr-feedback')).toBe(false);
-    expect(GATES.has('dependencies')).toBe(false);
   });
 
   it('excludes unpaired completed-only labels (phase completions)', () => {

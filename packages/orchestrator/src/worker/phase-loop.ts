@@ -12,6 +12,7 @@ import type { RemediateExecutor } from './remediate-executor.js';
 import { readReviewArtifactSync, readReviewArtifact, writeReviewArtifact, resetRemediationCount, seedRemediationCount, deriveFindingId, computeVerdict, type ReviewFinding, type ReviewArtifact, type Severity } from './review-artifact.js';
 import { waitForCiGreen } from './ci-merge-readiness.js';
 import { evaluateTasksMd, type TasksMdEvaluation } from './tasks-md-fallback.js';
+import { parseDependencyRefs, countDependencyBlockCycles, buildBlockComment, buildLimitComment } from './dependency-block.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -948,6 +949,118 @@ export class PhaseLoop {
           );
         }
         // 'complete' with total > 0 → no-op → the increment block below is skipped → advance.
+      }
+
+      // 3b-quater. Dependency-blocked branch (#1211): implement succeeded but the
+      // agent emitted a SPECKIT_IMPLEMENT_BLOCKED sentinel. Runs BEFORE the
+      // increment re-loop and no-progress guard per contracts/sentinel-and-gate-protocol.md §4.
+      if (phase === 'implement' && result.success && result.implementResult?.blocked_on?.length) {
+        // Step 1: Parse/validate refs
+        const { valid, invalid } = parseDependencyRefs(
+          result.implementResult.blocked_on,
+          context.item.owner,
+          context.item.repo,
+          this.logger,
+        );
+
+        if (invalid.length > 0) {
+          this.logger.warn(
+            { phase, invalid, issueNumber: context.item.issueNumber },
+            'Dependency-block sentinel contained invalid refs — dropped',
+          );
+        }
+
+        // Zero valid refs ⇒ fall through to normal flow
+        if (valid.length === 0) {
+          this.logger.warn(
+            { phase, issueNumber: context.item.issueNumber },
+            'Dependency-block sentinel had zero valid refs after grammar validation — falling through to normal flow',
+          );
+        } else {
+          // Step 2: WIP commit/push
+          const refList = valid.map(r => `${r.owner}/${r.repo}#${r.number}`).join(', ');
+          const wipOutcome = await prManager.commitPushAndEnsurePr(phase, {
+            message: `wip(speckit): implement blocked on ${refList} for #${context.item.issueNumber}`,
+          });
+          if (wipOutcome.pushRefused) {
+            this.logger.warn(
+              { phase, refusal: wipOutcome.pushRefused },
+              'Phase loop aborted at dependency-block: pre-push guard refused',
+            );
+            return { results, completed: false, lastPhase: phase, gateHit: false };
+          }
+          if (wipOutcome.prUrl) context.prUrl = wipOutcome.prUrl;
+
+          // Step 3: Cycle-cap check
+          const issueComments = await context.github.getIssueComments(
+            context.item.owner,
+            context.item.repo,
+            context.item.issueNumber,
+          );
+          const { atCap } = countDependencyBlockCycles(issueComments);
+
+          if (atCap) {
+            // Post limit comment. The contract's "skip if a limit comment newer
+            // than the newest block comment exists" dedup rule needs no explicit
+            // check: `countDependencyBlockCycles` only counts blocks NEWER than
+            // the newest limit comment, so a current limit comment forces
+            // `atCap === false` and this branch is unreachable in that state.
+            try {
+              const limitBody = buildLimitComment(valid);
+              await context.github.addIssueComment(
+                context.item.owner,
+                context.item.repo,
+                context.item.issueNumber,
+                limitBody,
+              );
+            } catch (err) {
+              this.logger.warn(
+                { phase, error: String(err), issueNumber: context.item.issueNumber },
+                'Failed to post dependency-limit comment (non-fatal)',
+              );
+            }
+
+            await deps.labelManager.onGateHit('implement', 'waiting-for:dependency-limit');
+            return { results, completed: false, lastPhase: phase, gateHit: true };
+          }
+
+          // Step 4: Post block marker comment
+          try {
+            const blockBody = buildBlockComment(valid);
+            await context.github.addIssueComment(
+              context.item.owner,
+              context.item.repo,
+              context.item.issueNumber,
+              blockBody,
+            );
+          } catch (err) {
+            this.logger.warn(
+              { phase, error: String(err), issueNumber: context.item.issueNumber },
+              'Failed to post dependency-block comment (non-fatal)',
+            );
+          }
+
+          // Step 5: Defensively remove lingering completed:dependencies
+          try {
+            await context.github.removeLabels(
+              context.item.owner,
+              context.item.repo,
+              context.item.issueNumber,
+              ['completed:dependencies'],
+            );
+          } catch (err) {
+            this.logger.warn(
+              { phase, error: String(err), issueNumber: context.item.issueNumber },
+              'Failed to remove completed:dependencies (non-fatal)',
+            );
+          }
+
+          // Step 6: Apply waiting-for:dependencies gate
+          await deps.labelManager.onGateHit('implement', 'waiting-for:dependencies');
+
+          // Step 7: Return gate-hit
+          return { results, completed: false, lastPhase: phase, gateHit: true };
+        }
       }
 
       // 3c. Increment boundary: re-invoke implement with a fresh session if partial

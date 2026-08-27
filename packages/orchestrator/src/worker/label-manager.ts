@@ -104,7 +104,7 @@ export interface ResumeStartOptions {
  * consumes `completed:remediation-limit` (resets the counter AND removes the
  * label itself), so stripping it here would discard the operator's answer.
  */
-export const DEFAULT_RESUME_RETAIN_SUFFIXES: readonly string[] = ['remediation-limit'];
+export const DEFAULT_RESUME_RETAIN_SUFFIXES: readonly string[] = ['remediation-limit', 'dependency-limit'];
 
 /**
  * Compute the resume-strip retain set from worker config. Rule:
