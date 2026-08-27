@@ -22,7 +22,7 @@ discovered, per plan D-1 note).
 ## Phase 1: Dependency Gate & Setup
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 -->
 
-- [ ] T001 [Setup] **Dependency gate (clarification Q3=A — BLOCKING).** Verify all three
+- [X] T001 [Setup] **Dependency gate (clarification Q3=A — BLOCKING).** Verify all three
       siblings are merged to `develop` and this branch is rebased on them by running:
       `grep -rn "resolveRoute\|GatewayRouteUnavailableError\|agent.route.transition" packages/`
       — this MUST return production (non-test) hits for `resolveRoute` +
@@ -32,7 +32,7 @@ discovered, per plan D-1 note).
       branch is rebased (matches #1127 precedent). Do NOT proceed to any test-writing task
       until this passes.
 
-- [ ] T002 [Setup] Confirm the exact merged API bindings the deferred tests must target
+- [X] T002 [Setup] Confirm the exact merged API bindings the deferred tests must target
       (plan D-6): inspect the merged `resolveRoute` export + `GatewayRouteUnavailableError`
       in `packages/generacy-plugin-claude-code/src/launch/`, the gateway env key
       (`CLAUDE_CONFIG_DIR`, default `/home/node/.claude-gateway`, override
@@ -40,7 +40,7 @@ discovered, per plan D-1 note).
       `packages/orchestrator/src/worker/`. Record the concrete symbols/signatures so T010,
       T020, T030 bind to real code, not the pinned behavior placeholders.
 
-- [ ] T003 [Setup] Confirm the launcher/interceptor seams still match plan §Technical Context
+- [X] T003 [Setup] Confirm the launcher/interceptor seams still match plan §Technical Context
       (they may have shifted with sibling merges): `AgentLauncher.launch` +
       injectable `ProcessFactory` map + env merge in
       `packages/orchestrator/src/launcher/agent-launcher.ts`; `wrapCommand()`/`applyCredentials()`
