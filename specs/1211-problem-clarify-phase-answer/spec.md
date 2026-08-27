@@ -30,6 +30,16 @@ Each `tasks.md` carried an explicit blocking gate task (e.g. #1199's T001: *"HAR
 
 Each forced requeue re-triggers a rebase onto a `develop` that sibling merges have moved, driving `CLAUDE.md` merge-conflict escalations within the same phase.
 
+## Clarifications
+
+### Session 2026-08-27
+
+- Q1 → **A**: Blocked refs persist in a dedicated marker-stamped comment (`<!-- generacy-dependency-block -->`) with a machine-parseable refs list; newest marker comment wins. Stage comment may additionally mention the block for human readability. (Stage-comment embedding is unsafe — edited in place; Redis is unsafe — dev-cluster Redis has no volume, a `compose down` loses the gate.)
+- Q2 → **A**: Commit and push WIP (when there are changes) before applying the gate. `SPECKIT_IMPLEMENT_PARTIAL` and `SPECKIT_IMPLEMENT_BLOCKED` may coexist in the same increment — blocked wins control flow, partial counts are recorded.
+- Q3 → **C**: Any closed state re-arms (issues and PRs), but a closed-as-not-planned issue or an unmerged-closed PR is flagged in the re-arm comment so the operator is alerted. Safe only because of the Q4 cap.
+- Q4 → **B**: Blocked→resume cycles are capped at a small N; at the cap, escalate to a distinct operator gate instead of re-pausing silently (precedent: `maxRemediations` + `waiting-for:remediation-limit`).
+- Q5 → **B**: Transient ref-read errors retry quietly; after 3 consecutive failures on the same ref, surface an operator-visible escalation (comment or distinct label) while keeping the gate held. N=3 suggested; adjust in plan if a better precedent exists.
+
 ## User Stories
 
 ### US1: Agent signals a deliberate dependency block
@@ -52,7 +62,7 @@ Each forced requeue re-triggers a rebase onto a `develop` that sibling merges ha
 
 **Acceptance Criteria**:
 - [ ] `waiting-for:dependencies` appears in `WAITING_PIPELINE_ORDER` in cockpit
-- [ ] The blocked refs are visible (via stage comment or gate body)
+- [ ] The blocked refs are visible (marker-stamped comment; stage comment may also mention the block)
 - [ ] Cockpit `advance` can clear the gate when the dependency is resolved
 
 ### US3: Workflow resumes when dependencies close
@@ -74,13 +84,16 @@ Each forced requeue re-triggers a rebase onto a `develop` that sibling merges ha
 | FR-002 | `ImplementPartialResult` gains optional `blocked_on?: string[]` field | P1 | Non-empty array of `owner/repo#N` refs |
 | FR-003 | No-progress guard in `phase-loop.ts` is skipped when `implementResult.blocked_on` is present | P1 | Before the `tasksRemaining >= lastTasksRemaining` check |
 | FR-004 | Engine applies `waiting-for:dependencies` + `agent:paused` via `LabelManager.onGateHit` | P1 | Follows the same pattern as other gates |
-| FR-005 | Blocked refs are posted in a stage comment so the operator can see what the issue is waiting on | P2 | Gate body follows the existing `onGateHit` → `stageCommentManager` pattern |
+| FR-005 | Blocked refs are persisted in a dedicated marker-stamped comment (`<!-- generacy-dependency-block -->`) with a machine-parseable refs list; newest marker comment wins | P1 | Q1=A. The stage comment may additionally mention the block for human readability |
 | FR-006 | `waiting-for:dependencies` added to `WAITING_PIPELINE_ORDER` in cockpit | P1 | Ensures the gate surfaces correctly in the UI |
-| FR-007 | New dependency monitor (or label-monitor extension) checks closed state of referenced issues | P1 | Polls `gh issue view --json closed` per ref; re-arms when all are closed |
+| FR-007 | New dependency monitor (or label-monitor extension) checks closed state of referenced issues | P1 | Reads refs from the marker comment; any closed state re-arms (Q3=C). A not-planned close or unmerged-closed PR is flagged in the re-arm comment |
 | FR-008 | Re-arm clears `waiting-for:dependencies` + `agent:paused`, applies `completed:dependencies` | P1 | Follows the existing resume label protocol |
 | FR-009 | `completed:dependencies` label definition added to `label-definitions.ts` | P1 | Color `0E8A16` (matches other completed labels) |
 | FR-010 | Sentinels are idempotent — last seen wins (same as `SPECKIT_IMPLEMENT_PARTIAL`) | P2 | Multiple sentinels in the same increment = last one used |
 | FR-011 | Malformed sentinel JSON is logged and ignored (same as `SPECKIT_IMPLEMENT_PARTIAL`) | P2 | Non-breaking; the implement phase continues normally |
+| FR-012 | Engine commits and pushes WIP (when there are changes) before applying the dependency gate; `SPECKIT_IMPLEMENT_PARTIAL` and `SPECKIT_IMPLEMENT_BLOCKED` may coexist — blocked wins control flow, partial counts recorded | P1 | Q2=A. Matches the existing increment commit/push contract (`phase-loop.ts:990`) |
+| FR-013 | Blocked→resume cycles on the same issue are capped at a small N; at the cap, escalate to a distinct operator gate instead of re-pausing silently | P1 | Q4=B. Precedent: `maxRemediations` + `waiting-for:remediation-limit` (`phase-loop.ts:1642-1677`). Cap label must join the resume-retain set (`DEFAULT_RESUME_RETAIN_SUFFIXES`) so a resume cannot strip it |
+| FR-014 | Monitor retries transient ref-read errors quietly; after 3 consecutive failures on the same ref, surfaces an operator-visible escalation (comment or distinct label) while keeping the gate held | P1 | Q5=B. Never fail-open; never strand silently |
 
 ## Success Criteria
 
@@ -95,7 +108,7 @@ Each forced requeue re-triggers a rebase onto a `develop` that sibling merges ha
 
 1. **Sentinel is emitted by the agent, not the engine**. The speckit agent prompt will be updated (in the agency repo) to include the `SPECKIT_IMPLEMENT_BLOCKED` sentinel format. The engine only parses and reacts to it.
 2. **Re-arm is poll-based, not webhook-based**. The dependency monitor polls the referenced issues periodically (same cadence as the label monitor). This avoids webhook setup complexity.
-3. **Blocked refs are stored in a stage comment**. The engine posts a comment with the blocked refs so the operator and the re-arm monitor can read them. This is the same pattern used by other gate bodies.
+3. **Blocked refs are stored in a dedicated marker-stamped comment** (`<!-- generacy-dependency-block -->`), matching every existing machine-read comment contract (`generacy-clarifications:N`, `generacy-cockpit:unanchored-findings`, `generacy-finding:*`, `generacy-ci-pause`). Newest marker comment wins. The stage comment may additionally mention the block for human readability. (Clarified from "stage comment" — Q1=A.)
 4. **`waiting-for:dependencies` is treated as a human gate**. The `isHumanGateCompletion` check in `label-manager.ts` already covers it (derived from `GATE_MAPPING`), so `completed:dependencies` survives the resume strip.
 5. **Single `completed:dependencies` label** satisfies the resume protocol. The monitor applies it when clearing the gate so the issue's label history is auditable.
 6. **The `on` array uses the `owner/repo#N` format** matching the existing issue-ref grammar (`resolver.ts`). Numeric-only refs are resolved against the current repo.
