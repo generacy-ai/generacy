@@ -13,7 +13,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
 
 ## Phase 1: Classification core (`tasks-md-fallback.ts`)
 
-- [ ] T001 [US2] Add the two-tier manual detectors to `packages/orchestrator/src/worker/tasks-md-fallback.ts`:
+- [X] T001 [US2] Add the two-tier manual detectors to `packages/orchestrator/src/worker/tasks-md-fallback.ts`:
   module-level `const MANUAL_MARKER = /\[manual\]/i` (Tier 1) and
   `const MANUAL_KEYWORDS = /\b(?:manual|manually|hand-test)\b/i` (Tier 2), plus a pure
   per-line helper that extracts the **task text** and returns whether the line classifies
@@ -25,14 +25,14 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   strict (`HEADING_DONE`-style discipline) — mirroring the existing regex doc comments at
   `tasks-md-fallback.ts:23-39`.
 
-- [ ] T002 [US2] Widen `countTasks` (`tasks-md-fallback.ts:55-84`) to return
+- [X] T002 [US2] Widen `countTasks` (`tasks-md-fallback.ts:55-84`) to return
   `{ unchecked, checked, total, manual }`, where `manual` counts **unchecked** tasks that
   classify manual. Call the T001 helper only on the unchecked branch of each grammar —
   checked lines are simply checked, so a heading carrying both `[DONE]` and `[manual]` counts
   checked, full stop (FR-005/006, contracts §1). `unchecked` / `checked` / `total` semantics
   and the checkbox-first / heading-second line dispatch must be byte-identical (SC-005).
 
-- [ ] T003 [US2] Widen `TasksMdEvaluation` and `evaluateTasksMd` (`tasks-md-fallback.ts:18-21`,
+- [X] T003 [US2] Widen `TasksMdEvaluation` and `evaluateTasksMd` (`tasks-md-fallback.ts:18-21`,
   `:125-129`) per data-model.md: add the `manual-only` variant
   (`{ kind: 'manual-only'; unchecked; manual; checked; total }`) and add `automatable` +
   `manual` to the `incomplete` variant. Derive `automatable = unchecked - manual` and classify:
@@ -43,7 +43,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
 
 ## Phase 2: Classification tests (`__tests__/tasks-md-fallback.test.ts`)
 
-- [ ] T004 [US2] Add a marker-tier and keyword-tier classification matrix to
+- [X] T004 [US2] Add a marker-tier and keyword-tier classification matrix to
   `packages/orchestrator/src/worker/__tests__/tasks-md-fallback.test.ts`, pinning the
   data-model.md truth table: marker anywhere in the checkbox line (leading and trailing),
   marker in heading grammar, `[DONE]` + `[manual]` co-presence counting as checked, case
@@ -54,7 +54,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   word 4, inside the window → classifies manual) with a comment naming it as the documented
   Q2=B trade-off, so a future reader does not "fix" it silently.
 
-- [ ] T005 [US2] In the same file, add counting-invariance and variant-classification tests:
+- [X] T005 [US2] In the same file, add counting-invariance and variant-classification tests:
   `manual` never shifts `unchecked` / `checked` / `total` (re-assert against a fixture mixing
   manual and non-manual lines in both grammars, SC-005); `manual-only` vs `incomplete`
   (with correct `automatable` / `manual` splits) vs `complete` vs `unreadable`. Add the two
@@ -67,7 +67,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
 ## Phase 3: Safety-net pause path (`phase-loop.ts`)
 <!-- Phase boundary: Phase 1 must land first — the pause path consumes the `manual-only` variant. -->
 
-- [ ] T006 [US1] Add a private label-read helper to
+- [X] T006 [US1] Add a private label-read helper to
   `packages/orchestrator/src/worker/phase-loop.ts` that calls
   `context.github.getIssueLabels(owner, repo, issueNumber)` (same call shape as `:2064`)
   inside try/catch and returns a tri-state — label present / absent / read-failed. On
@@ -75,7 +75,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   fallback to tasks.md classification (FR-002, Q4=A: fail-open to classification, never
   fail-closed and never blind re-entry).
 
-- [ ] T007 [US1] [US3] Add a private `pauseForManualValidation` method to `phase-loop.ts`
+- [X] T007 [US1] [US3] Add a private `pauseForManualValidation` method to `phase-loop.ts`
   implementing the contracts §3 sequence exactly once, so both the safety-net block and the
   no-progress guard share it: (1) `prManager.commitPushAndEnsurePr(phase, { message:
   'wip(speckit): pause for manual validation for #<issue>' })`; (2) on `pushRefused` →
@@ -87,7 +87,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   `failed:implement`, `failed:implement-repeated`, or `agent:error`, and never post a failure
   alert (FR-004). Structure mirrors the #1211 dependency-block branch at `:979-1062`.
 
-- [ ] T008 [US1] [US2] [US4] Rewire the safety-net block (`phase-loop.ts:914-952`) to the
+- [X] T008 [US1] [US2] [US4] Rewire the safety-net block (`phase-loop.ts:914-952`) to the
   contracts §2 decision table, keeping the outer guard
   `phase === 'implement' && result.success && result.implementResult === undefined`
   untouched so the sentinel path stays byte-identical (SC-007):
@@ -102,7 +102,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
   re-entry message extended with the automatable/manual split; `complete` / `unreadable` →
   advance with the existing log lines unchanged (FR-011).
 
-- [ ] T009 [US1] Update the #1133 comment at `phase-loop.ts:1923-1932`: the sentence claiming
+- [X] T009 [US1] Update the #1133 comment at `phase-loop.ts:1923-1932`: the sentence claiming
   on-ci-green is "the one gate where `completed:<phase>` is granted at pause" is now false —
   `waiting-for:manual-validation` is the second such gate (#1214). Note that the ordering is
   safe against the #958 assumption at `label-manager.ts:287-292` for the same reason as the
@@ -112,7 +112,7 @@ vocabulary (SC-008), no feature flag, no persisted state (FR-013).
 ## Phase 4: No-progress guard pause (`phase-loop.ts`)
 <!-- Phase boundary: needs T006 + T007. -->
 
-- [ ] T010 [US3] In the no-progress guard branch (`phase-loop.ts:1071-1100`), before
+- [X] T010 [US3] In the no-progress guard branch (`phase-loop.ts:1071-1100`), before
   `result.success = false` and before `escalateAndAlert`, re-run the T006 label check and the
   evaluator. If the remainder is human-gated (label present **or** evaluation is
   `manual-only`) → log the reason and take the T007 pause instead of the failure path
