@@ -4,6 +4,7 @@
  */
 import type {
   Issue,
+  IssueRefState,
   PullRequest,
   Comment,
   Label,
@@ -121,6 +122,28 @@ export interface GitHubClient {
    * Get an issue by number
    */
   getIssue(owner: string, repo: string, number: number): Promise<Issue>;
+
+  /**
+   * Get the reference state of a GitHub issue or PR by number.
+   *
+   * Uses `GET /repos/{owner}/{repo}/issues/{number}` (returns both issues and
+   * PRs) to read `state` + `state_reason`. When the ref is a PR, follows up
+   * with `GET /repos/{owner}/{repo}/pulls/{number}` for `merged`.
+   *
+   * @throws Error on any non-zero exit from the underlying `gh api` calls.
+   */
+  getIssueRefState(owner: string, repo: string, number: number): Promise<IssueRefState>;
+
+  /**
+   * Get the reference state of a GitHub issue or PR by number.
+   *
+   * Uses `GET /repos/{owner}/{repo}/issues/{number}` (returns both issues and
+   * PRs) to read `state` + `state_reason`. When the ref is a PR, follows up
+   * with `GET /repos/{owner}/{repo}/pulls/{number}` for `merged`.
+   *
+   * @throws Error on any non-zero exit from the underlying `gh api` calls.
+   */
+  getIssueRefState(owner: string, repo: string, number: number): Promise<IssueRefState>;
 
   /**
    * Update an issue

@@ -180,6 +180,8 @@ export interface ImplementPartialResult {
   tasks_completed?: number;
   tasks_remaining?: number;
   tasks_total?: number;
+  /** Raw refs from `SPECKIT_IMPLEMENT_BLOCKED` sentinel (#1211). */
+  blocked_on?: string[];
 }
 
 /**

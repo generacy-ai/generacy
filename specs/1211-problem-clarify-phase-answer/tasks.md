@@ -10,33 +10,33 @@
 
 ## Phase 1: Workflow-Engine — Types, Labels & Client
 
-- [ ] T001 [P] [US1] Add new labels to `packages/workflow-engine/src/actions/github/labels/label-definitions.ts`
+- [X] T001 [P] [US1] Add new labels to `packages/workflow-engine/src/actions/github/labels/label-definitions.ts`
   - `completed:dependencies` (color `0E8A16`)
   - `waiting-for:dependency-limit` (color `FBCA04`)
   - `completed:dependency-limit` (color `0E8A16`)
   - Place alongside the existing `waiting-for:dependencies` entry
 
-- [ ] T002 [P] [US1] Add `IssueRefState` type to `packages/workflow-engine/src/types/github.ts`
+- [X] T002 [P] [US1] Add `IssueRefState` type to `packages/workflow-engine/src/types/github.ts`
   - Fields: `state`, `stateReason`, `isPullRequest`, `merged`
   - Per `data-model.md` §5
 
-- [ ] T003 [US1] Add `getIssueRefState` to `GitHubClient` interface and implement in `GhCliGitHubClient`
+- [X] T003 [US1] Add `getIssueRefState` to `GitHubClient` interface and implement in `GhCliGitHubClient`
   - `packages/workflow-engine/src/actions/github/client/interface.ts`: add method signature
   - `packages/workflow-engine/src/actions/github/client/gh-cli.ts`: implement via `gh api repos/{o}/{r}/issues/{n}` + follow-up `pulls/{n}` for `merged`
   - Per `research.md` D-7 and `contracts/sentinel-and-gate-protocol.md` §6
 
 ## Phase 2: Orchestrator — Sentinel Parsing & Types
 
-- [ ] T004 [P] [US1] Parse `SPECKIT_IMPLEMENT_BLOCKED` sentinel in `packages/orchestrator/src/worker/output-capture.ts`
+- [X] T004 [P] [US1] Parse `SPECKIT_IMPLEMENT_BLOCKED` sentinel in `packages/orchestrator/src/worker/output-capture.ts`
   - Add `SENTINEL_BLOCKED_PREFIX = 'SPECKIT_IMPLEMENT_BLOCKED: '` alongside `SENTINEL_PREFIX`
   - Mirror the `SPECKIT_IMPLEMENT_PARTIAL` parse branch byte-for-byte (per `research.md` D-1)
   - Last-wins, malformed-JSON warn+ignore, line still captured as text
 
-- [ ] T005 [P] [US1] Extend `ImplementPartialResult` with `blocked_on?: string[]` in `packages/orchestrator/src/worker/types.ts`
+- [X] T005 [P] [US1] Extend `ImplementPartialResult` with `blocked_on?: string[]` in `packages/orchestrator/src/worker/types.ts`
   - Both sentinels may populate the same object (Q2=A)
   - Per `data-model.md` §2
 
-- [ ] T006 [P] [US1] Create `packages/orchestrator/src/worker/dependency-block.ts`
+- [X] T006 [P] [US1] Create `packages/orchestrator/src/worker/dependency-block.ts`
   - Pure functions: `parseDependencyRefs()` (ref grammar per `data-model.md` §3)
   - Marker comment format/parse helpers (block, limit, error, re-arm per `contracts/dependency-block-comments.md`)
   - Cycle counting: `countDependencyBlockCycles()` — count of block comments newer than newest limit comment (per `research.md` D-4)
@@ -44,14 +44,14 @@
 
 ## Phase 3: Orchestrator — Phase Loop & Gate Wiring
 
-- [ ] T007 [US1] Add gate entries to `packages/orchestrator/src/worker/phase-resolver.ts`
+- [X] T007 [US1] Add gate entries to `packages/orchestrator/src/worker/phase-resolver.ts`
   - `GATE_MAPPING` += `'dependencies'` and `'dependency-limit'`, both `{ phase: 'implement', resumeFrom: 'implement' }`
   - Per `research.md` D-5 and `contracts/sentinel-and-gate-protocol.md` §3
 
-- [ ] T008 [US1] Add `'dependency-limit'` to `DEFAULT_RESUME_RETAIN_SUFFIXES` in `packages/orchestrator/src/worker/label-manager.ts`
+- [X] T008 [US1] Add `'dependency-limit'` to `DEFAULT_RESUME_RETAIN_SUFFIXES` in `packages/orchestrator/src/worker/label-manager.ts`
   - Per `research.md` D-5 (prevents resume from stripping the operator's grant)
 
-- [ ] T009 [US1] Implement the blocked branch in `packages/orchestrator/src/worker/phase-loop.ts`
+- [X] T009 [US1] Implement the blocked branch in `packages/orchestrator/src/worker/phase-loop.ts`
   - Insert after `result.success` check for implement, **before** the increment re-loop and no-progress guard
   - 7-step sequence per `contracts/sentinel-and-gate-protocol.md` §4:
     1. Parse/validate refs (zero valid → fall through to normal flow)
@@ -64,36 +64,36 @@
 
 ## Phase 4: Orchestrator — Dependency Monitor
 
-- [ ] T010 [US3] Create `packages/orchestrator/src/services/dependency-monitor-service.ts`
+- [X] T010 [US3] Create `packages/orchestrator/src/services/dependency-monitor-service.ts`
   - Clone structure from `ClarificationAnswerMonitorService` (per `research.md` D-10)
   - Poll cycle per `data-model.md` §8: list issues with `waiting-for:dependencies` → read newest block marker → `getIssueRefState` per ref → all closed ⇒ re-arm
   - Re-arm sequence per `contracts/sentinel-and-gate-protocol.md` §5
   - In-memory `refFailures` map for Q5=B escalation (per `research.md` D-8)
   - Post re-arm comment with ⚠ flags for not-planned/unmerged closes (Q3=C)
 
-- [ ] T011 [US3] Wire `DependencyMonitorService` into `packages/orchestrator/src/server.ts`
+- [X] T011 [US3] Wire `DependencyMonitorService` into `packages/orchestrator/src/server.ts`
   - Construct and start in full mode only (beside clarification monitor)
   - Per `research.md` D-10
 
 ## Phase 5: Cockpit
 
-- [ ] T012 [US2] Add `waiting-for:dependencies` and `waiting-for:dependency-limit` to `WAITING_PIPELINE_ORDER` in `packages/cockpit/src/state/precedence.ts`
+- [X] T012 [US2] Add `waiting-for:dependencies` and `waiting-for:dependency-limit` to `WAITING_PIPELINE_ORDER` in `packages/cockpit/src/state/precedence.ts`
   - Place `waiting-for:dependency-limit` beside `remediation-limit`
   - Place `waiting-for:dependencies` in the appropriate position
   - Gate-vocabulary derivation auto-makes both advance-able once `completed:*` labels exist in `WORKFLOW_LABELS`
 
 ## Phase 6: Tests
 
-- [ ] T013 [P] [US1] Create `packages/orchestrator/src/worker/__tests__/output-capture.blocked-sentinel.test.ts`
+- [X] T013 [P] [US1] Create `packages/orchestrator/src/worker/__tests__/output-capture.blocked-sentinel.test.ts`
   - Valid sentinel → `blocked_on` populated, last-wins, malformed-JSON warn+ignore, sentinel line still in output text
   - Coexistence with PARTIAL sentinel
 
-- [ ] T014 [P] [US1] Create `packages/orchestrator/src/worker/__tests__/dependency-block.test.ts`
+- [X] T014 [P] [US1] Create `packages/orchestrator/src/worker/__tests__/dependency-block.test.ts`
   - Ref grammar matrix (canonical, `#N`, bare `N`, invalid, mixed)
   - Marker comment round-trip format/parse
   - Cycle counting with and without limit comments
 
-- [ ] T015 [P] [US1] Create `packages/workflow-engine/tests/actions/github/gh-cli.issue-ref-state.test.ts`
+- [X] T015 [P] [US1] Create `packages/workflow-engine/tests/actions/github/gh-cli.issue-ref-state.test.ts`
   - `getIssueRefState` for open issue, closed issue (completed/not_planned), open PR, merged PR, closed-unmerged PR
   - Non-zero exit throws
 

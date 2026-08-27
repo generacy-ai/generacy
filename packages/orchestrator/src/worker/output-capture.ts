@@ -116,6 +116,9 @@ export class OutputCapture {
   /** Prefix used by the implement operation to signal a partial result. */
   private static readonly SENTINEL_PREFIX = 'SPECKIT_IMPLEMENT_PARTIAL: ';
 
+  /** Prefix used by the implement operation to signal a dependency block. */
+  private static readonly SENTINEL_BLOCKED_PREFIX = 'SPECKIT_IMPLEMENT_BLOCKED: ';
+
   /**
    * Parse a single line of JSON and push the resulting OutputChunk.
    */
@@ -126,12 +129,69 @@ export class OutputCapture {
       const jsonPart = line.slice(OutputCapture.SENTINEL_PREFIX.length);
       try {
         const parsed = JSON.parse(jsonPart) as ImplementPartialResult;
-        this._implementResult = parsed;
+        this._implementResult = {
+          ...(this._implementResult ?? {}),
+          ...parsed,
+        };
         this.logger.debug({ implementResult: this._implementResult }, 'Parsed SPECKIT_IMPLEMENT_PARTIAL sentinel');
       } catch {
         this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_PARTIAL sentinel — ignoring');
       }
       // Still push as a text chunk so the full output is preserved
+      const chunk: OutputChunk = {
+        type: 'text',
+        data: { text: line },
+        timestamp: new Date().toISOString(),
+      };
+      this.buffer.push(chunk);
+      return;
+    }
+
+    // Check for the dependency-block sentinel.
+    // Same shape as PARTIAL: prefix match, JSON parse, last-wins, line preserved.
+    if (line.startsWith(OutputCapture.SENTINEL_BLOCKED_PREFIX)) {
+      const jsonPart = line.slice(OutputCapture.SENTINEL_BLOCKED_PREFIX.length);
+      try {
+        const parsed = JSON.parse(jsonPart) as { on: string[] };
+        if (Array.isArray(parsed.on) && parsed.on.length > 0) {
+          this._implementResult = {
+            ...(this._implementResult ?? {}),
+            blocked_on: parsed.on,
+          };
+          this.logger.debug({ blocked_on: parsed.on }, 'Parsed SPECKIT_IMPLEMENT_BLOCKED sentinel');
+        } else {
+          this.logger.warn({ line, parsed }, 'SPECKIT_IMPLEMENT_BLOCKED sentinel missing valid "on" array — ignoring');
+        }
+      } catch {
+        this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_BLOCKED sentinel — ignoring');
+      }
+      const chunk: OutputChunk = {
+        type: 'text',
+        data: { text: line },
+        timestamp: new Date().toISOString(),
+      };
+      this.buffer.push(chunk);
+      return;
+    }
+
+    // Check for the dependency-block sentinel.
+    // Same shape as PARTIAL: prefix match, JSON parse, last-wins, line preserved.
+    if (line.startsWith(OutputCapture.SENTINEL_BLOCKED_PREFIX)) {
+      const jsonPart = line.slice(OutputCapture.SENTINEL_BLOCKED_PREFIX.length);
+      try {
+        const parsed = JSON.parse(jsonPart) as { on: string[] };
+        if (Array.isArray(parsed.on) && parsed.on.length > 0) {
+          this._implementResult = {
+            ...(this._implementResult ?? {}),
+            blocked_on: parsed.on,
+          };
+          this.logger.debug({ blocked_on: parsed.on }, 'Parsed SPECKIT_IMPLEMENT_BLOCKED sentinel');
+        } else {
+          this.logger.warn({ line, parsed }, 'SPECKIT_IMPLEMENT_BLOCKED sentinel missing valid "on" array — ignoring');
+        }
+      } catch {
+        this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_BLOCKED sentinel — ignoring');
+      }
       const chunk: OutputChunk = {
         type: 'text',
         data: { text: line },

@@ -246,6 +246,21 @@ export interface CiRun {
  */
 export type CiVerdict = 'green' | 'pending' | 'not-passed';
 
+/**
+ * State of a GitHub issue or PR reference, as returned by
+ * `GET /repos/{owner}/{repo}/issues/{number}` + optional follow-up pulls API
+ * call for `merged`. Used by the dependency-block gate (#1211).
+ */
+export interface IssueRefState {
+  state: 'open' | 'closed';
+  /** GitHub `state_reason` field — issues only; `null` for PRs and non-closed issues. */
+  stateReason: 'completed' | 'not_planned' | 'reopened' | null;
+  /** `true` when the REST response carries a `pull_request` field. */
+  isPullRequest: boolean;
+  /** PR merged state — `null` for issues or when the pulls follow-up was skipped. */
+  merged: boolean | null;
+}
+
 // =============================================================================
 // Workflow Entities
 // =============================================================================

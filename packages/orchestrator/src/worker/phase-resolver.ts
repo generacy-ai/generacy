@@ -15,6 +15,10 @@ export const GATE_MAPPING: Record<string, { phase: WorkflowPhase; resumeFrom: Wo
   'implementation-review':  { phase: 'implement',  resumeFrom: 'validate' },
   'manual-validation':      { phase: 'validate',   resumeFrom: 'validate' },
   'remediation-limit':      { phase: 'review',     resumeFrom: 'review' },
+  'dependencies':           { phase: 'implement', resumeFrom: 'implement' },
+  'dependency-limit':       { phase: 'implement', resumeFrom: 'implement' },
+  'dependencies':           { phase: 'implement', resumeFrom: 'implement' },
+  'dependency-limit':       { phase: 'implement', resumeFrom: 'implement' },
   // #1154 FR-004: `waiting-for:ci` is raised during `validate` (CI wait-timeout),
   // so resume re-runs `validate` to re-verify CI is green on the new head.
   // NOTE: `completed:ci` is deliberately NOT in the resume-strip retain set

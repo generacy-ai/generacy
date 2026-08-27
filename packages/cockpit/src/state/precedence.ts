@@ -19,7 +19,7 @@ export const TIER_RANK: Record<CockpitState, number> = {
  * Earlier index wins. Gates not listed here sort after all listed gates.
  *
  * Note: `clarification-review`, `sibling-review`, `pr-feedback`,
- * `children-complete`, `epic-approval`, `dependencies`, and `needs:*`
+ * `children-complete`, `epic-approval`, and `needs:*`
  * labels also exist but fall back to `WORKFLOW_LABELS` index when not
  * listed here (see classifier).
  */
@@ -56,6 +56,14 @@ export const WAITING_PIPELINE_ORDER: string[] = [
   // #1167 FR-008: the review/remediate cap pause sorts immediately after the
   // implementation-review gate it succeeds in the flow.
   'waiting-for:remediation-limit',
+  // #1211: dependency-blocked implement pause — operator-grant cycle cap.
+  'waiting-for:dependency-limit',
+  // #1211: dependency-blocked implement pause — gate held until all refs closed.
+  'waiting-for:dependencies',
+  // #1211: dependency-blocked implement pause — operator-grant cycle cap.
+  'waiting-for:dependency-limit',
+  // #1211: dependency-blocked implement pause — gate held until all refs closed.
+  'waiting-for:dependencies',
   'waiting-for:manual-validation',
   // #1167 FR-008: CI-green gate is the final pause in the flow, sorted last.
   'waiting-for:ci',

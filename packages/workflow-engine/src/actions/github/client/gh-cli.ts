@@ -15,6 +15,7 @@ import type {
 } from './interface.js';
 import type {
   Issue,
+  IssueRefState,
   PullRequest,
   Comment,
   Label,
@@ -177,6 +178,46 @@ export class GhCliGitHubClient implements GitHubClient {
       } : undefined,
       created_at: data['createdAt'] as string,
       updated_at: data['updatedAt'] as string,
+    };
+  }
+
+  async getIssueRefState(owner: string, repo: string, number: number): Promise<IssueRefState> {
+    const result = await this.executeGh([
+      'api', `repos/${owner}/${repo}/issues/${number}`,
+      '--jq', '{state, state_reason, pull_request: .pull_request != null}',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to get issue ref state for ${owner}/${repo}#${number}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Record<string, unknown> | null;
+    if (!data) {
+      throw new Error(`Failed to parse issue ref state for ${owner}/${repo}#${number}`);
+    }
+
+    const state = (data['state'] as string)?.toLowerCase() as 'open' | 'closed';
+    const stateReason = (data['state_reason'] as string | null) ?? null;
+    const isPullRequest = data['pull_request'] === true;
+
+    let merged: boolean | null = null;
+    if (isPullRequest) {
+      const prResult = await this.executeGh([
+        'api', `repos/${owner}/${repo}/pulls/${number}`,
+        '--jq', '.merged',
+      ]);
+      if (prResult.exitCode !== 0) {
+        throw new Error(`Failed to get PR merged state for ${owner}/${repo}#${number}: ${prResult.stderr}`);
+      }
+      const prData = parseJSONSafe(prResult.stdout);
+      merged = prData === true || (typeof prData === 'string' && prData.trim() === 'true');
+    }
+
+    return {
+      state,
+      stateReason: stateReason as IssueRefState['stateReason'],
+      isPullRequest,
+      merged,
     };
   }
 
