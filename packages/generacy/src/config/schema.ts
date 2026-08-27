@@ -270,6 +270,13 @@ export const GeneracyConfigSchema = z.object({
    * Configures paths, files, and branch naming for speckit operations
    */
   speckit: SpecKitConfigSchema.optional(),
+
+  /**
+   * Cockpit configuration (optional) — lenient passthrough (#1200 D-3).
+   * Cockpit owns its own schema/loader; this untyped passthrough only stops
+   * Zod from stripping the block so the gateway-warning walk can inspect it.
+   */
+  cockpit: z.unknown().optional(),
 });
 
 export type GeneracyConfig = z.infer<typeof GeneracyConfigSchema>;
