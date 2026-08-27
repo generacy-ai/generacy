@@ -186,6 +186,29 @@ describe('ReviewExecutor — engine recomputes the verdict (#1124)', () => {
     gates: {},
   } as WorkerConfig;
 
+  it('FR-007: the spawn log payload includes the resolved route', async () => {
+    const { launcher, launch } = makeLauncher({ verdict: 'clean', findings: [] });
+    const github = makeGithub();
+
+    const executor = new ReviewExecutor({
+      agentLauncher: launcher,
+      config: baseConfig,
+      settings: null,
+      logger,
+    });
+
+    await executor.execute(makeContext(github));
+
+    const spawnLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[1] === 'Spawning Claude CLI for review phase',
+    );
+    expect(spawnLog).toBeDefined();
+    // No configured model → subscription route; the field is present verbatim.
+    expect(spawnLog![0]).toMatchObject({ route: 'subscription' });
+    // Launch options are unchanged (no route threaded into the launcher).
+    expect(launch.mock.calls[0]![0]).not.toHaveProperty('route');
+  });
+
   it('SC-004: persisted verdict = changes-required from a critical open finding, ignoring the candidate verdict:clean', async () => {
     const candidate = {
       verdict: 'clean', // agent-claimed — MUST be ignored (FR-007)

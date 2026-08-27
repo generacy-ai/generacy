@@ -21,6 +21,7 @@ const SKIP_EXTERNAL = [
   'anthropic-key',
   'npm-packages',
   'agency-mcp',
+  'llm-gateway',
   'devcontainer',
 ];
 
@@ -470,7 +471,7 @@ repos:
 
     it('should exclude skipped checks from results', () => {
       const result = runDoctor(
-        '--skip docker devcontainer github-token anthropic-key npm-packages agency-mcp env-file --json',
+        '--skip docker devcontainer github-token anthropic-key npm-packages agency-mcp llm-gateway env-file --json',
         { cwd: testDir },
       );
       const report = JSON.parse(result);

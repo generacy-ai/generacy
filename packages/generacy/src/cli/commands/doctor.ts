@@ -17,6 +17,7 @@ import { githubTokenCheck } from './doctor/checks/github-token.js';
 import { anthropicKeyCheck } from './doctor/checks/anthropic-key.js';
 import { npmPackagesCheck } from './doctor/checks/npm-packages.js';
 import { agencyMcpCheck } from './doctor/checks/agency-mcp.js';
+import { llmGatewayCheck } from './doctor/checks/llm-gateway.js';
 
 /**
  * Create and configure a registry with all built-in checks.
@@ -41,6 +42,7 @@ function createDefaultRegistry(): CheckRegistry {
 
   // Service checks
   registry.register(agencyMcpCheck);
+  registry.register(llmGatewayCheck);
 
   return registry;
 }

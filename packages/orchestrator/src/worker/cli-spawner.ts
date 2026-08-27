@@ -56,6 +56,7 @@ export class CliSpawner {
         cwd: options.cwd,
         timeoutMs: options.timeoutMs,
         resumeSessionId: options.resumeSessionId ?? null,
+        route: options.route,
       },
       options.resumeSessionId
         ? 'Resuming Claude CLI session for phase (via AgentLauncher)'
