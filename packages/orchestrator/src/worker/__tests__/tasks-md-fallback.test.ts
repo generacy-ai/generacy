@@ -305,6 +305,40 @@ describe('countTasks manual counting invariance (SC-005)', () => {
   });
 });
 
+describe('#2723 field remainder is NOT keyword-classified (#1214, ITEM-7)', () => {
+  // VERBATIM from Painworth/ai-lawfirm#2723 — the PR's headline evidence.
+  const lines = [
+    '- [ ] T028 Browser-verify per repo policy (quickstart.md §Emulator): ...',
+    '- [ ] T029 Berman-deploy checklist for SC-002 (deferred per house practice — emulator cannot place LiveKit calls)',
+  ];
+
+  it('classifies both real-world manual tasks as automatable (manual: 0)', () => {
+    // Neither line carries `[manual]` nor a keyword in the Q2=B window, so the
+    // classifier CANNOT see the manual intent. This is not a classifier bug to
+    // paper over — it is the reason `waiting-for:manual-validation` must be
+    // authoritative on its own (Q4=A). Any change that makes the engine require
+    // tasks.md to corroborate the label reproduces the original bug on this
+    // exact input.
+    expect(countTasks(lines.join('\n'))).toEqual({
+      unchecked: 2,
+      checked: 0,
+      total: 2,
+      manual: 0,
+    });
+  });
+
+  it('the keyword tier only fires when the intent is stated up front', () => {
+    // The paraphrase a keyword-bearing fixture would have used — shown here so
+    // the difference from the field text is explicit.
+    expect(countTasks('- [ ] T028 Manually browser-verify per repo policy').manual).toBe(1);
+    // …and the field text does not become manual just because "manual" appears
+    // late in the line (Q2=B window).
+    expect(
+      countTasks('- [ ] T029 Berman-deploy checklist per the house manual').manual,
+    ).toBe(0);
+  });
+});
+
 describe('evaluateTasksMd classification matrix', () => {
   let checkoutPath: string;
 

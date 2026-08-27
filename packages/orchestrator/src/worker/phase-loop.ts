@@ -50,6 +50,13 @@ const execFileAsync = promisify(execFile);
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
 
 /**
+ * #1214: the gate the implement phase pauses on when its remainder is
+ * human-gated. Applied by `pauseForManualValidation`, read (as a pre-existing
+ * label) by `readManualValidationLabel`.
+ */
+const MANUAL_VALIDATION_GATE_LABEL = 'waiting-for:manual-validation';
+
+/**
  * #1154 FR-005: hidden marker prepended to the "Remediation limit reached" gate
  * body. A resume that re-parks the same cap would otherwise post a duplicate
  * comment on every cycle. Before posting we grep existing PR comment bodies for
@@ -362,6 +369,24 @@ export class PhaseLoop {
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
     let lastTasksRemaining: number | undefined;
+    // #1214 (PR #1215 review Finding 2): `tasks_remaining` reaches the guard in
+    // TWO different units. The agent's `SPECKIT_IMPLEMENT_PARTIAL` sentinel
+    // reports the FULL unchecked count (per agency's `implement.md:220` —
+    // "incomplete tasks still in tasks.md"), which includes manual tasks. The
+    // tasks.md safety net synthesizes AUTOMATABLE-only (FR-008), because manual
+    // tasks never shrink across increments. Comparing a value measured in one
+    // unit against a value measured in the other is meaningless: a fallback
+    // increment recording `automatable = 7` followed by a sentinel increment
+    // reporting `10 unchecked` false-fails as `10 >= 7` on a run that was
+    // progressing.
+    //
+    // The fix is to compare like with like: record the unit alongside the
+    // value, and when the unit changes, RESET the baseline instead of comparing.
+    // Deliberately NOT fixed by re-deriving the sentinel's count from tasks.md —
+    // the sentinel path must not consult the fallback source (SC-007), and doing
+    // so would itself false-fail a real run (sentinel 20 → 10 over a tasks.md
+    // that still shows 30 unchecked normalizes to 30 >= 30).
+    let lastTasksRemainingUnit: 'sentinel' | 'automatable' | undefined;
 
     // Find the starting index in the phase sequence
     const startIndex = sequence.indexOf(context.startPhase);
@@ -927,30 +952,35 @@ export class PhaseLoop {
       // unchecked task classify manual? Either way it pauses on the gate instead
       // of re-entering. Mixed remainders still re-enter, counting only the
       // automatable tasks.
+      // #1214 Q4=A: the label is AUTHORITATIVE and UNCONDITIONAL. When
+      // `waiting-for:manual-validation` is on the issue the engine never
+      // synthesizes a partial, REGARDLESS of tasks.md contents. Requiring
+      // tasks.md to "corroborate" the label reproduces the exact bug this
+      // change exists to fix: the field remainder on Painworth/ai-lawfirm#2723
+      // ("Browser-verify per repo policy…", "Berman-deploy checklist…") carries
+      // neither a `[manual]` marker nor an in-window keyword, so tasks.md
+      // classifies it `incomplete` with `manual: 0`. Corroboration would
+      // discard the agent's own gate request, re-enter implement, and land
+      // `failed:implement` + `failed:implement-repeated` on a complete, green
+      // story. The stale-label trap that motivated the corroboration idea is
+      // fixed where it belongs instead — `LabelMonitorService` now strips
+      // `waiting-for:*` on the `process:` requeue path, so a stale label cannot
+      // survive a fresh run.
       let safetyNetEvalResult: TasksMdEvaluation | undefined;
+      // True when THIS iteration's `result.implementResult` was synthesized by
+      // the safety net below rather than parsed from an agent sentinel. Drives
+      // the guard's unit bookkeeping (see `lastTasksRemainingUnit`).
+      let tasksRemainingSynthesized = false;
       if (phase === 'implement' && result.success && result.implementResult === undefined) {
         const labelState = await this.readManualValidationLabel(context, phase);
         const evalResult = (deps.evaluateTasksMd ?? evaluateTasksMd)(context);
         safetyNetEvalResult = evalResult;
 
-        // PR #1215 review Finding 4: `waiting-for:manual-validation` is not
-        // stripped on the `process:` requeue path (label-monitor-service only
-        // strips it on `continue`), so an issue carrying a stale label from a
-        // prior run would otherwise force an unconditional pause here — even
-        // when the current tasks.md shows every task checked. Require
-        // corroboration: the label activates the pause only when tasks.md also
-        // shows a manual remainder. Label + no-manual-work falls through to
-        // the normal automatable-only synthesis (or advance for `complete`),
-        // with a divergence warn so the disagreement is visible.
-        const evalHasManual =
-          evalResult.kind === 'manual-only'
-          || (evalResult.kind === 'incomplete' && evalResult.manual > 0);
-        if (labelState === 'present' && evalHasManual) {
+        if (labelState === 'present') {
           if (evalResult.kind === 'incomplete') {
             // The agent applied the gate but left automatable tasks unchecked.
-            // The label wins here (Q4=A) because there IS a manual remainder
-            // corroborating the intent, but the automatable remainder is
-            // notable — surface the disagreement rather than silently dropping.
+            // The label wins (Q4=A), so surface the disagreement rather than
+            // silently dropping the automatable remainder.
             this.logger.warn(
               {
                 phase,
@@ -979,21 +1009,6 @@ export class PhaseLoop {
             currentIndex: i,
             phaseTimestamps,
           });
-        }
-
-        if (labelState === 'present' && !evalHasManual) {
-          // Stale-label rescue: the label is present but tasks.md has no manual
-          // work. Do not pause on the label alone — fall through to the normal
-          // advance / automatable-only re-entry path. Log a divergence warn.
-          this.logger.warn(
-            {
-              phase,
-              issueNumber: context.item.issueNumber,
-              evaluation: evalResult.kind,
-              reason: 'manual-validation-label-stale',
-            },
-            'tasks.md safety net: manual-validation label present but tasks.md has no manual work — treating label as stale',
-          );
         }
 
         if (evalResult.kind === 'manual-only') {
@@ -1034,6 +1049,7 @@ export class PhaseLoop {
             tasks_completed: evalResult.checked,
             tasks_total: evalResult.total,
           };
+          tasksRemainingSynthesized = true;
           this.logger.info(
             {
               phase,
@@ -1175,50 +1191,57 @@ export class PhaseLoop {
 
       // 3c. Increment boundary: re-invoke implement with a fresh session if partial
       if (phase === 'implement' && result.success && result.implementResult?.partial) {
-        // PR #1215 review Finding 2: the sentinel-emitted `tasks_remaining` is
-        // the FULL unchecked count (per implement.md:220 — "incomplete tasks
-        // still in tasks.md"), which includes manual tasks. The safety-net
-        // synthesis above uses AUTOMATABLE-only. Comparing the two in the
-        // no-progress guard causes a false-fail on any fallback-then-sentinel
-        // sequence whose real progress ≤ the manual count. Normalize both
-        // sides to automatable-only by re-reading tasks.md at the guard seam.
-        // Also reused for the human-gate rescue below and Finding 4
-        // corroboration. When the safety-net block above already computed the
-        // eval this iteration, reuse it (nothing has changed on disk between
-        // that call and this one).
-        const guardEval = safetyNetEvalResult ?? (deps.evaluateTasksMd ?? evaluateTasksMd)(context);
-        const sentinelTasksRemaining = result.implementResult.tasks_remaining ?? 0;
-        const normalizedTasksRemaining =
-          guardEval.kind === 'incomplete'
-            ? guardEval.automatable
-            : guardEval.kind === 'manual-only'
-              ? 0
-              : sentinelTasksRemaining;
-        const tasksRemaining = normalizedTasksRemaining;
+        // #1187: `?? 0` is load-bearing. `tasks_remaining` is optional on the
+        // sentinel AND can be absent from a synthesized partial, and the guard's
+        // precondition below is `lastTasksRemaining !== undefined` — an
+        // `undefined` here would make the guard permanently unreachable and
+        // `i--` loop forever.
+        const tasksRemaining = result.implementResult.tasks_remaining ?? 0;
+        // PR #1215 review Finding 2: which unit is this value measured in? See
+        // `lastTasksRemainingUnit` at the top of the loop. The sentinel path is
+        // NOT normalized against tasks.md (SC-007) — the guard compares only
+        // same-unit pairs and resets the baseline across a unit change.
+        const tasksRemainingUnit: 'sentinel' | 'automatable' = tasksRemainingSynthesized
+          ? 'automatable'
+          : 'sentinel';
+        const comparableToBaseline =
+          lastTasksRemaining !== undefined && lastTasksRemainingUnit === tasksRemainingUnit;
+        if (lastTasksRemaining !== undefined && !comparableToBaseline) {
+          this.logger.info(
+            {
+              phase,
+              issueNumber: context.item.issueNumber,
+              tasksRemaining,
+              tasksRemainingUnit,
+              lastTasksRemaining,
+              lastTasksRemainingUnit,
+            },
+            'Implement increment: tasks_remaining unit changed between increments — resetting the no-progress baseline instead of comparing',
+          );
+        }
 
         // Guard: fail if no progress made (prevents infinite loop)
-        if (lastTasksRemaining !== undefined && tasksRemaining >= lastTasksRemaining) {
+        if (comparableToBaseline && tasksRemaining >= lastTasksRemaining!) {
           // #1214: the stalled remainder may be human-gated rather than broken —
           // the agent can emit `SPECKIT_IMPLEMENT_PARTIAL` over a remainder that
           // is entirely manual, which the safety-net block above never sees
           // (sentinel present). Re-check before escalating: a manual remainder
           // pauses on the gate, everything else fails exactly as before.
           //
-          // PR #1215 review Finding 4: the label alone must NOT force a pause
-          // on a stale label — corroborate with tasks.md manual work, mirroring
-          // the safety-net block above.
+          // Q4=A: the label wins unconditionally here too — no tasks.md
+          // corroboration. tasks.md is consulted ONLY as the fallback when the
+          // label is absent (or its read failed), and ONLY inside this
+          // about-to-escalate branch, so a progressing sentinel run never
+          // touches the fallback source (SC-007).
           const guardLabelState = await this.readManualValidationLabel(context, phase);
-          const guardEvalHasManual =
-            guardEval.kind === 'manual-only'
-            || (guardEval.kind === 'incomplete' && guardEval.manual > 0);
-          const labelWithCorroboration = guardLabelState === 'present' && guardEvalHasManual;
-          if (labelWithCorroboration || guardEval.kind === 'manual-only') {
+          const guardEval = safetyNetEvalResult ?? (deps.evaluateTasksMd ?? evaluateTasksMd)(context);
+          if (guardLabelState === 'present' || guardEval.kind === 'manual-only') {
             this.logger.info(
               {
                 phase,
                 issueNumber: context.item.issueNumber,
                 tasksRemaining,
-                sentinelTasksRemaining,
+                tasksRemainingUnit,
                 lastTasksRemaining,
                 labelState: guardLabelState,
                 evaluation: guardEval.kind,
@@ -1227,9 +1250,10 @@ export class PhaseLoop {
             );
             return await this.pauseForManualValidation({
               phase,
-              reason: labelWithCorroboration
-                ? 'no-progress-guard-manual-validation-label-present'
-                : 'no-progress-guard-manual-only',
+              reason:
+                guardLabelState === 'present'
+                  ? 'no-progress-guard-manual-validation-label-present'
+                  : 'no-progress-guard-manual-only',
               context,
               deps,
               results,
@@ -1241,17 +1265,6 @@ export class PhaseLoop {
               currentIndex: i,
               phaseTimestamps,
             });
-          }
-          if (guardLabelState === 'present' && !guardEvalHasManual) {
-            this.logger.warn(
-              {
-                phase,
-                issueNumber: context.item.issueNumber,
-                evaluation: guardEval.kind,
-                reason: 'manual-validation-label-stale',
-              },
-              'No-progress guard: manual-validation label present but tasks.md has no manual work — treating label as stale and failing normally',
-            );
           }
 
           this.logger.error(
@@ -1284,6 +1297,7 @@ export class PhaseLoop {
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
         lastTasksRemaining = tasksRemaining;
+        lastTasksRemainingUnit = tasksRemainingUnit;
 
         // Commit, push, and ensure PR with a WIP message
         const partialOutcome = await prManager.commitPushAndEnsurePr(phase, {
@@ -1318,6 +1332,7 @@ export class PhaseLoop {
       // Reset increment tracking when leaving the implement phase normally
       if (phase !== 'implement') {
         lastTasksRemaining = undefined;
+        lastTasksRemainingUnit = undefined;
       }
 
       // 4. Handle phase failure
@@ -2113,11 +2128,15 @@ export class PhaseLoop {
         // terminal no-op at loop entry — which keys on both `completed:validate`
         // AND `completed:implementation-review` — actually fires, so `validate`
         // does not re-run (re-test / re-mark-ready / re-wait-CI). This is one of
-        // two gates where `completed:<phase>` is granted at pause — the other is
-        // `waiting-for:manual-validation` (#1214, `pauseForManualValidation`),
-        // where implement has likewise finished its automatable work; every
-        // other gate keeps the #958 FR-008 ordering (granted only after all
-        // gates skip) because their phase has NOT completed. Order matters: onPhaseComplete
+        // two POST-completion pauses where `completed:<phase>` is granted at the
+        // pause — the other is `pauseForManualValidation` (#1214), where
+        // `implement` has likewise finished its automatable work. Note that the
+        // #1214 pause co-applies implement's own gates (PR #1215 review
+        // Finding 1), so `completed:implement` + an un-answered
+        // `waiting-for:implementation-review` is a REACHABLE state; the safety
+        // analysis for it lives on `LabelManager.onGateHit`. Every gate raised by
+        // this loop keeps the #958 FR-008 ordering (granted only after all gates
+        // skip) because their phase has NOT completed. Order matters: onPhaseComplete
         // removes `phase:validate` + adds `completed:validate`, then onGateHit
         // adds the pause pair — end state is completed:validate +
         // waiting-for:implementation-review + agent:paused.
@@ -2402,7 +2421,7 @@ export class PhaseLoop {
         context.item.repo,
         context.item.issueNumber,
       );
-      return labels.includes('waiting-for:manual-validation') ? 'present' : 'absent';
+      return labels.includes(MANUAL_VALIDATION_GATE_LABEL) ? 'present' : 'absent';
     } catch (error) {
       this.logger.warn(
         { phase, issueNumber: context.item.issueNumber, error: String(error) },
@@ -2420,23 +2439,29 @@ export class PhaseLoop {
    * a purely manual remainder). Both share this sequence so the pause state is
    * identical either way.
    *
+   * Sequence — every step is load-bearing:
+   *   1. (Q5=A) WIP commit/push honouring `pushRefused` BEFORE any label
+   *      mutation. The safety-net and guard branches both run before the normal
+   *      end-of-phase commit, so this is the phase's only commit path; an early
+   *      gate return without it would drop the increment's work.
+   *   2. (Q1=A) `onPhaseComplete('implement')` — grants `completed:implement`.
+   *   3. (Q1=A) `onGateHit('implement', 'waiting-for:manual-validation')`.
+   *   4. `onGateHit` for every OTHER active-and-unsatisfied implement gate.
+   *
    * `completed:implement` IS granted here (via `onPhaseComplete`): the implement
    * phase genuinely finished its automatable work, and the gate resumes at
    * `validate` (`GATE_MAPPING['manual-validation'].resumeFrom`), which only
-   * resolves if `completed:implement` exists. Ordering matters and is safe
-   * against the #958 assumption at `label-manager.ts:287-292` for the same
-   * reason as the ci-green path: `onPhaseComplete` has already removed
-   * `phase:implement`, so `onGateHit`'s `removeLabels` is a no-op.
+   * resolves if `completed:implement` exists.
    *
-   * PR #1215 review Finding 1: before applying `waiting-for:manual-validation`,
-   * evaluate the workflow's configured `implement`-phase gates. A workflow like
-   * flag-OFF `speckit-feature` carries `waiting-for:implementation-review`
-   * (condition: `always`) on implement, which would otherwise be silently
-   * bypassed by this pause — the manual-validation resume goes straight to
-   * `validate` (per `GATE_MAPPING['manual-validation'].resumeFrom`), skipping
-   * implement's post-phase gate check. When an unsatisfied implement gate is
-   * found, pause on THAT gate instead so the PR still gets reviewed.
-   * Manual-validation is applied only when no other implement gate is active.
+   * PR #1215 review Finding 1: this pause returns BEFORE the normal post-phase
+   * gate loop (step 6), so every implement-phase gate the workflow configures
+   * would otherwise be silently dropped. On the default flag-OFF
+   * `speckit-feature` that gate is `waiting-for:implementation-review`
+   * (`condition: 'always'`, see `config.ts` gate defaults) — the story would be
+   * validated and merged carrying an unchecked manual task and no review. Those
+   * gates are therefore applied IN ADDITION to `waiting-for:manual-validation`,
+   * never INSTEAD of it: FR-003, US1's acceptance and SC-001/SC-002 all require
+   * the manual-validation label to land on the issue.
    *
    * PR #1215 review Finding 3: emits `job:paused` + updates the stage comment
    * so a paused story doesn't keep reporting as `status: active`,
@@ -2474,16 +2499,14 @@ export class PhaseLoop {
       currentIndex,
       phaseTimestamps,
     } = params;
-    const { labelManager, prManager, gateChecker, stageCommentManager, jobEventEmitter } = deps;
+    const { labelManager, prManager, stageCommentManager, jobEventEmitter } = deps;
 
     this.logger.info(
       { phase, issueNumber: context.item.issueNumber, reason },
       'Pausing implement for manual validation',
     );
 
-    // The safety-net and guard branches both run BEFORE the normal end-of-phase
-    // commit, so this is the phase's only commit path — an early gate return
-    // without it would drop the increment's work (Q5=A).
+    // Step 1 (Q5=A): the phase's only commit path.
     const wipOutcome = await prManager.commitPushAndEnsurePr(phase, {
       message: `wip(speckit): pause for manual validation for #${context.item.issueNumber}`,
     });
@@ -2496,25 +2519,29 @@ export class PhaseLoop {
     }
     if (wipOutcome.prUrl) context.prUrl = wipOutcome.prUrl;
 
-    // Finding 1: apply `completed:implement` up front (the phase genuinely
-    // finished its automatable work in either the safety-net or the
-    // sentinel-guard branch that reaches this method). Then evaluate implement
-    // gates: if any active-and-unsatisfied implement gate exists (typically
-    // `waiting-for:implementation-review` with condition `always`), pause on
-    // THAT instead of `waiting-for:manual-validation`. Otherwise proceed with
-    // the manual-validation gate.
-    await labelManager.onPhaseComplete('implement');
-
-    const gatePauseLabel = await this.selectImplementGateOverride({
+    // Resolve the co-applied implement gates BEFORE mutating labels, so a gate
+    // that keys on label state (the `completed:<gate>` satisfaction check) reads
+    // the pre-pause snapshot rather than the labels this method is about to add.
+    const additionalGateLabels = await this.collectAdditionalImplementGates({
       phase,
       context,
       config,
-      gateChecker,
+      deps,
     });
-    const effectiveGateLabel = gatePauseLabel ?? 'waiting-for:manual-validation';
+
+    // Step 2 (Q1=A): completed:implement FIRST. Ordering is safe against the
+    // #958 assumption in `label-manager.ts` `onGateHit` for the same reason as
+    // the #1133 ci-green path: `onPhaseComplete` has already removed
+    // `phase:implement`, so `onGateHit`'s `removeLabels` is a no-op and there is
+    // nothing to retract.
+    await labelManager.onPhaseComplete('implement');
+
+    const gateLabels = [MANUAL_VALIDATION_GATE_LABEL, ...additionalGateLabels];
 
     // Finding 3: emit `job:paused` and refresh the stage comment so cockpit /
     // cloud dashboards see the pause. Mirrors `pauseForCiReadiness`.
+    // `gateLabel` stays the manual-validation gate — it is the reason this
+    // pause exists; co-applied gates travel in `gateLabels`.
     jobEventEmitter?.('job:paused', {
       jobId: context.jobId,
       workflowName: context.item.workflowName,
@@ -2523,16 +2550,21 @@ export class PhaseLoop {
       issueNumber: context.item.issueNumber,
       status: 'paused',
       currentStep: phase,
-      gateLabel: effectiveGateLabel,
+      gateLabel: MANUAL_VALIDATION_GATE_LABEL,
+      gateLabels,
     });
 
-    await labelManager.onGateHit('implement', effectiveGateLabel);
+    // Steps 3 + 4: manual-validation first (Q1=A), then the co-applied gates.
+    for (const gateLabel of gateLabels) {
+      await labelManager.onGateHit('implement', gateLabel);
+    }
 
     result.gateHit = {
-      gateLabel: effectiveGateLabel,
-      reason: gatePauseLabel !== undefined
-        ? `Implement-phase gate "${effectiveGateLabel}" activated before manual-validation pause (${reason})`
-        : `Manual-validation pause: ${reason}`,
+      gateLabel: MANUAL_VALIDATION_GATE_LABEL,
+      reason:
+        additionalGateLabels.length > 0
+          ? `Manual-validation pause: ${reason} (also raised ${additionalGateLabels.join(', ')})`
+          : `Manual-validation pause: ${reason}`,
     };
     const ts = phaseTimestamps.get(phase);
     if (ts) ts.completedAt = new Date().toISOString();
@@ -2548,32 +2580,52 @@ export class PhaseLoop {
   }
 
   /**
-   * PR #1215 review Finding 1 helper: find an active-and-unsatisfied
-   * implement-phase gate that would otherwise be bypassed by the
-   * manual-validation pause. Returns the gate label to apply instead, or
-   * `undefined` if no such gate exists (in which case the caller uses
-   * `waiting-for:manual-validation`).
+   * PR #1215 review Finding 1 helper: the implement-phase gates that must be
+   * co-applied with `waiting-for:manual-validation`, because this pause returns
+   * before the normal post-phase gate loop that would otherwise raise them.
    *
-   * Only inspects gate conditions that can fire at this seam without further
-   * side-effects: `always` and `on-request` (the latter is corroborated via
-   * label presence). Conditions handled by other seams — `on-sibling-review`
-   * (mutates PR readiness), `on-merge-conflict` (base-merge outcome only),
-   * `on-questions` (clarify), `on-ci-green` (validate), `on-remediation-limit`
-   * (review) — are intentionally skipped: raising them here would either
-   * duplicate side-effects or fire in the wrong phase.
+   * Condition evaluation mirrors the gate loop in `executeLoopInner` step 6
+   * exactly — same activation rules, same side-effects, so no gate fires here
+   * that would not have fired there, and none fires twice (this pause is an
+   * early return; the gate loop never runs for this phase execution):
+   *
+   * - `always` — active. This is flag-OFF `speckit-feature`'s
+   *   `waiting-for:implementation-review`, the gate BLOCKER-3 exists for.
+   * - `on-sibling-review` — active when not every linked sibling PR is approved,
+   *   and flips the siblings ready-for-review first, exactly as the gate loop
+   *   does. Skipping it (as the first fix attempt did) means a multi-repo story
+   *   that pauses for manual validation never flips its sibling PRs ready and
+   *   never raises the gate.
+   * - every other condition — inactive, matching the gate loop:
+   *   `on-merge-conflict` and `on-request` have NO branch in the gate loop's
+   *   condition chain (they are driven by other seams / fixer rounds and always
+   *   leave `gateActive === false` there); `on-questions` is clarify-only;
+   *   `on-remediation-limit` is review-only; and `on-ci-green` is the flag-ON
+   *   relocation of `implementation-review` onto `validate`, so it is never an
+   *   implement gate — under flag-ON `checkGates('implement')` yields only
+   *   `on-sibling-review` / `on-merge-conflict` and this method raises at most
+   *   the sibling gate. That is what keeps the flag-ON `on-ci-green` gate from
+   *   being duplicated here.
+   *
+   * Gates already satisfied (`completed:<suffix>` present) are dropped, mirroring
+   * the gate loop's skip. A label-read failure drops the satisfaction check only
+   * (treats gates as unsatisfied) — the same fail-open direction the rest of this
+   * feature takes: a redundant `waiting-for:` label is recoverable, a silently
+   * skipped review gate is not.
    */
-  private async selectImplementGateOverride(params: {
+  private async collectAdditionalImplementGates(params: {
     phase: WorkflowPhase;
     context: WorkerContext;
     config: WorkerConfig;
-    gateChecker: GateChecker;
-  }): Promise<string | undefined> {
-    const { phase, context, config, gateChecker } = params;
+    deps: PhaseLoopDeps;
+  }): Promise<string[]> {
+    const { phase, context, config, deps } = params;
+    const { gateChecker, prManager } = deps;
     const gates = gateChecker.checkGates('implement', context.item.workflowName, config);
-    if (gates.length === 0) return undefined;
+    if (gates.length === 0) return [];
 
     let issueLabels: string[] | undefined;
-    const readLabels = async (): Promise<string[] | undefined> => {
+    const readLabels = async (): Promise<string[]> => {
       if (issueLabels !== undefined) return issueLabels;
       try {
         issueLabels = await context.github.getIssueLabels(
@@ -2581,39 +2633,58 @@ export class PhaseLoop {
           context.item.repo,
           context.item.issueNumber,
         );
-        return issueLabels;
       } catch (error) {
         this.logger.warn(
           { phase, issueNumber: context.item.issueNumber, error: String(error) },
-          'Implement-gate override: failed to read issue labels — treating gates as unsatisfied',
+          'Manual-validation pause: implement-gate label read failed — treating gates as unsatisfied',
         );
         issueLabels = [];
-        return issueLabels;
       }
+      return issueLabels;
     };
 
+    const selected: string[] = [];
     for (const gate of gates) {
+      if (gate.gateLabel === MANUAL_VALIDATION_GATE_LABEL) continue;
+
       let active = false;
       if (gate.condition === 'always') {
         active = true;
-      } else if (gate.condition === 'on-request') {
-        const labels = await readLabels();
-        active = labels?.includes(gate.gateLabel) === true;
+      } else if (gate.condition === 'on-sibling-review') {
+        const reviewResult = await checkSiblingReviews(context.linkedPRs, this.logger);
+        active = !reviewResult.allApproved;
+        if (active) {
+          this.logger.info(
+            { phase, gateLabel: gate.gateLabel, statuses: reviewResult.statuses },
+            'Manual-validation pause: gate condition "on-sibling-review" active — not all siblings approved',
+          );
+          await prManager.markSiblingsReadyForReview(context.linkedPRs);
+        }
+      } else {
+        this.logger.debug(
+          { phase, gateLabel: gate.gateLabel, condition: gate.condition },
+          'Manual-validation pause: implement gate condition is not evaluated at this seam — skipping (matches the gate loop)',
+        );
       }
       if (!active) continue;
 
-      const gateSuffix = gate.gateLabel.replace(/^waiting-for:/, '');
-      const completedLabel = `completed:${gateSuffix}`;
-      const labels = await readLabels();
-      if (labels?.includes(completedLabel)) continue;
+      const completedLabel = `completed:${gate.gateLabel.replace(/^waiting-for:/, '')}`;
+      if ((await readLabels()).includes(completedLabel)) {
+        this.logger.info(
+          { phase, gateLabel: gate.gateLabel, completedLabel },
+          'Manual-validation pause: implement gate already satisfied — not re-raising',
+        );
+        continue;
+      }
 
+      if (selected.includes(gate.gateLabel)) continue;
       this.logger.info(
         { phase, gateLabel: gate.gateLabel, condition: gate.condition },
-        'Manual-validation pause deferring to unsatisfied implement gate',
+        'Manual-validation pause: co-applying active implement gate',
       );
-      return gate.gateLabel;
+      selected.push(gate.gateLabel);
     }
-    return undefined;
+    return selected;
   }
 
   /**

@@ -285,11 +285,41 @@ export class LabelManager {
   async onGateHit(phase: WorkflowPhase, gateLabel: string): Promise<void> {
     const phaseLabel = `phase:${phase}`;
     // #958 FR-008 — `completed:<phase>` is applied AFTER the gate check in
-    // phase-loop.ts, so it is never present when this handler runs. Do NOT
-    // add it back to `removeLabels` — the paired T011 reorder ensures the
-    // label was never granted; a retract call here would be dead code, and
-    // future readers seeing "why isn't it removing completed?" should read
-    // this comment before re-adding it.
+    // phase-loop.ts for every gate raised by the normal post-phase gate loop,
+    // so it is not present when this handler runs on that path. Do NOT add it
+    // back to `removeLabels` — the paired T011 reorder ensures the label was
+    // never granted; a retract call here would be dead code, and future readers
+    // seeing "why isn't it removing completed?" should read this comment before
+    // re-adding it.
+    //
+    // Two POST-completion pauses are documented exceptions, and BOTH are safe
+    // without a retract branch:
+    //   1. #1133 `on-ci-green` — `validate` genuinely finished, so
+    //      `completed:validate` is granted at the pause.
+    //   2. #1214 `pauseForManualValidation` — `implement` genuinely finished its
+    //      automatable work, so `completed:implement` is granted at the pause,
+    //      and (PR #1215 review Finding 1) the pause may co-apply implement's
+    //      own `waiting-for:implementation-review` gate. That means this handler
+    //      CAN now run with `completed:implement` already present.
+    //
+    // Why (2) still needs no retract, even for the second, co-applied gate:
+    // this handler only ever removes `phase:<phase>` and adds
+    // `waiting-for:<gate>` + `agent:paused`. `onPhaseComplete` has already
+    // removed `phase:implement`, so `removeLabels` is a no-op, and nothing here
+    // reads or contradicts `completed:implement`. The #958 hazard the ordering
+    // guards against is a label-derived resume resolving PAST an open gate:
+    //   - `continue` (a gate was answered): `GATE_MAPPING` sends both
+    //     `manual-validation` and flag-OFF `implementation-review` to
+    //     `resumeFrom: 'validate'`, so `completed:implement` changes nothing.
+    //   - `process` (operator-forced requeue): `resolveFromProcess` would indeed
+    //     resolve to `validate` and skip the open gate — but a `process` requeue
+    //     is an explicit restart that now strips both the `completed:*` markers
+    //     AND the `waiting-for:*` gate labels (see `LabelMonitorService`), so
+    //     there is no open gate left to skip.
+    // Residual, tracked rather than fixed here: with two gates open, answering
+    // ONE of them triggers a resume whose `onResumeStart` strips the other's
+    // `waiting-for:` label. Sequencing two simultaneously-open gates is a
+    // pre-existing limitation of the resume path, not specific to #1214.
     await this.retryWithBackoff(async () => {
       await this.ensureRepoLabelsExist();
 

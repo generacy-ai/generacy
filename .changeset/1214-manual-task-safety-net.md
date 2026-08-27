@@ -28,3 +28,16 @@ agent emitted `SPECKIT_IMPLEMENT_PARTIAL` over a purely manual remainder.
 No new label vocabulary and no new persisted state. The sentinel path is
 untouched, so runs that emit `SPECKIT_IMPLEMENT_PARTIAL` behave exactly as
 before.
+
+The pause co-applies implement's own configured gates (on the default
+`speckit-feature` that is `waiting-for:implementation-review`) rather than
+substituting for them, so a story that pauses for manual validation is still
+reviewed. The no-progress guard now records which unit `tasks_remaining` was
+measured in — the sentinel's full unchecked count vs. the safety net's
+automatable-only count — and resets its baseline across a unit change instead
+of comparing incomparable values.
+
+`LabelMonitorService` also clears `waiting-for:*` labels on the `process:`
+requeue path, alongside the `completed:*` / `failed:*` labels it already
+cleared, so a gate label from a previous run cannot survive an explicit
+restart.
