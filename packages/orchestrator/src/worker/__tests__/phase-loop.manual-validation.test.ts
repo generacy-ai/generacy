@@ -395,13 +395,17 @@ describe('PhaseLoop — manual-validation pause (#1214)', () => {
     expect(errorStageComments(deps)).toHaveLength(0);
   });
 
-  it('no-progress guard + manual-validation label → pauses instead of failing (FR-009)', async () => {
+  // PR #1215 review Finding 4: the label alone must NOT rescue a no-progress
+  // guard failure — a stale label is not stripped on `process:` requeue, so
+  // corroborating tasks.md manual remainder is required.
+  it('no-progress guard + manual-validation label (corroborated) → pauses instead of failing (FR-009)', async () => {
     const context = createMockContext([MANUAL_GATE]);
     (deps.cliSpawner.spawnPhase as any).mockImplementation(async () =>
       makeSentinelResult({ partial: true, tasks_completed: 5, tasks_remaining: 5, tasks_total: 10 }),
     );
-    // Label wins even though the remainder still reports automatable work.
-    deps.evaluateTasksMd = vi.fn().mockReturnValue(incompleteEval(5, 0, 5));
+    // Label present AND tasks.md carries a manual remainder → corroborated
+    // pause. `incompleteEval(3, 2, 5)`: 3 automatable, 2 manual.
+    deps.evaluateTasksMd = vi.fn().mockReturnValue(incompleteEval(3, 2, 5));
 
     const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
 
@@ -409,6 +413,25 @@ describe('PhaseLoop — manual-validation pause (#1214)', () => {
     expect(gateCalls(deps)).toContainEqual(['implement', MANUAL_GATE]);
     expect(deps.labelManager.onError).not.toHaveBeenCalled();
     expect(errorStageComments(deps)).toHaveLength(0);
+  });
+
+  // PR #1215 review Finding 4: label without corroboration is treated as stale.
+  it('no-progress guard + stale manual-validation label + no manual work → fails (Finding 4)', async () => {
+    const { logger, warns } = createCapturingLogger();
+    const loop = new PhaseLoop(logger);
+    const context = createMockContext([MANUAL_GATE]);
+    (deps.cliSpawner.spawnPhase as any).mockImplementation(async () =>
+      makeSentinelResult({ partial: true, tasks_completed: 5, tasks_remaining: 5, tasks_total: 10 }),
+    );
+    // Label present but tasks.md has no manual work → label is treated as stale.
+    deps.evaluateTasksMd = vi.fn().mockReturnValue(incompleteEval(5, 0, 5));
+
+    const result = await loop.executeLoop(context, createConfig(), deps, ['implement']);
+
+    expect(result.gateHit).toBe(false);
+    expect(result.completed).toBe(false);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+    expect(warns.some((w) => w.obj.reason === 'manual-validation-label-stale')).toBe(true);
   });
 
   it('no-progress guard + automatable remainder → fails exactly as before (FR-010)', async () => {
@@ -437,9 +460,16 @@ describe('PhaseLoop — manual-validation pause (#1214)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // T015 — the sentinel path is untouched (SC-007)
+  // T015 — the sentinel path advances normally (SC-007)
+  //
+  // PR #1215 review Finding 2: the sentinel path now consults tasks.md in the
+  // no-progress guard to normalize `tasks_remaining` to automatable-only
+  // (the sentinel emits the full unchecked count, the safety-net synthesizes
+  // automatable-only — comparing the two units caused false-fails). The SC-007
+  // invariant is preserved as "sentinel path advances the same as pre-#1214":
+  // the manual-only safety-net pause is never triggered by the sentinel path.
   // -------------------------------------------------------------------------
-  it('sentinel-derived implementResult never reaches the manual check (SC-007)', async () => {
+  it('sentinel-derived implementResult advances normally without triggering the manual-only pause (SC-007)', async () => {
     const context = createMockContext([MANUAL_GATE]);
     (deps.cliSpawner.spawnPhase as any)
       .mockImplementationOnce(async () =>
@@ -458,17 +488,128 @@ describe('PhaseLoop — manual-validation pause (#1214)', () => {
           tasks_total: 10,
         }),
       );
-    deps.evaluateTasksMd = vi.fn().mockReturnValue(manualOnlyEval());
+    // Tasks.md eval used only for Finding 2 normalization in the guard block.
+    // First increment shows progress (automatable=3), second is not partial so
+    // the guard block doesn't run. `getIssueLabels` is not consulted because
+    // the safety-net block never runs (sentinel present).
+    (deps.evaluateTasksMd as any) = vi
+      .fn()
+      .mockReturnValueOnce(incompleteEval(3, 0, 7))
+      .mockReturnValueOnce(completeEval(10));
 
     const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
 
     expect(result.completed).toBe(true);
     expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
-    // Neither the fallback evaluator nor the label read is consulted while a
-    // sentinel is driving the increments — even with the gate label present.
-    expect(deps.evaluateTasksMd).not.toHaveBeenCalled();
+    // Label read (from the safety-net block) is not consulted while a sentinel
+    // is driving the increments — even with the gate label present.
     expect(context.github.getIssueLabels).not.toHaveBeenCalled();
     expect(gateCalls(deps)).toHaveLength(0);
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  // -------------------------------------------------------------------------
+  // PR #1215 review Finding 1: gate override
+  // -------------------------------------------------------------------------
+  it('unsatisfied implement-phase gate (always) → pauses on that gate instead of manual-validation (Finding 1)', async () => {
+    const context = createMockContext([]);
+    deps.evaluateTasksMd = vi.fn().mockReturnValue(manualOnlyEval());
+    (deps.gateChecker.checkGates as any).mockReturnValue([
+      { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
+    ]);
+
+    const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
+
+    expect(result.gateHit).toBe(true);
+    expect(result.completed).toBe(false);
+    // The implementation-review gate was applied, not manual-validation.
+    expect(gateCalls(deps)).toEqual([['implement', 'waiting-for:implementation-review']]);
+    // completed:implement is still granted (the phase completed automatable work).
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  it('satisfied implement-phase gate (completed label present) → falls through to manual-validation (Finding 1)', async () => {
+    const context = createMockContext(['completed:implementation-review', MANUAL_GATE]);
+    deps.evaluateTasksMd = vi.fn().mockReturnValue(manualOnlyEval());
+    (deps.gateChecker.checkGates as any).mockReturnValue([
+      { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
+    ]);
+
+    const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
+
+    expect(result.gateHit).toBe(true);
+    // implementation-review is already satisfied; apply manual-validation.
+    expect(gateCalls(deps)).toEqual([['implement', MANUAL_GATE]]);
+  });
+
+  // -------------------------------------------------------------------------
+  // PR #1215 review Finding 3: job:paused + stage comment on pause
+  // -------------------------------------------------------------------------
+  it('manual-validation pause emits job:paused and refreshes the stage comment (Finding 3)', async () => {
+    const jobEvents: Array<[string, any]> = [];
+    const context = createMockContext([]);
+    deps.evaluateTasksMd = vi.fn().mockReturnValue(manualOnlyEval());
+    deps.jobEventEmitter = ((event: string, payload: any) => {
+      jobEvents.push([event, payload]);
+    }) as any;
+    (context as any).jobId = 'job-abc';
+
+    const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
+
+    expect(result.gateHit).toBe(true);
+    const pausedEvent = jobEvents.find(([e]) => e === 'job:paused');
+    expect(pausedEvent).toBeDefined();
+    expect(pausedEvent![1]).toMatchObject({
+      jobId: 'job-abc',
+      status: 'paused',
+      currentStep: 'implement',
+      gateLabel: MANUAL_GATE,
+    });
+
+    // The stage comment was refreshed with the pause snapshot (status: in_progress,
+    // implement marked complete in the phases array).
+    const stageCalls = (deps.stageCommentManager.updateStageComment as any).mock.calls;
+    const pauseSnapshot = stageCalls[stageCalls.length - 1][0];
+    expect(pauseSnapshot.status).toBe('in_progress');
+    expect(
+      pauseSnapshot.phases.find((p: any) => p.phase === 'implement')?.status,
+    ).toBe('complete');
+  });
+
+  // PR #1215 review Finding 2: the false-fail scenario the reviewer flagged.
+  // safety-net first (synthesizes automatable=7 → lastTasksRemaining=7),
+  // sentinel second reports tasks_remaining=8 (10 unchecked − 2 done, manual
+  // included). Pre-fix this false-failed as `8 >= 7`. Post-fix the guard reads
+  // tasks.md and compares automatable-only (5 < 7 → continues normally).
+  it('mixed synthesized-then-sentinel remainder: guard normalizes to automatable-only (Finding 2)', async () => {
+    const context = createMockContext([]);
+    // Three implement runs: (1) no sentinel → safety-net synthesizes,
+    // (2) sentinel partial with unchecked count including manual,
+    // (3) sentinel non-partial → advance.
+    (deps.cliSpawner.spawnPhase as any)
+      .mockImplementationOnce(async () => makeSuccessResult('implement'))
+      .mockImplementationOnce(async () =>
+        makeSentinelResult({ partial: true, tasks_completed: 2, tasks_remaining: 8, tasks_total: 10 }),
+      )
+      .mockImplementationOnce(async () =>
+        makeSentinelResult({ partial: false, tasks_completed: 10, tasks_remaining: 0, tasks_total: 10 }),
+      );
+    // Increment 1: safety-net evaluates once (7 automatable, 3 manual) and the
+    // guard block reuses that result. Increment 2: guard evaluates once
+    // (5 automatable, 3 manual). Increment 3: sentinel partial=false → guard
+    // block skipped, no eval call.
+    (deps.evaluateTasksMd as any) = vi
+      .fn()
+      .mockReturnValueOnce(incompleteEval(7, 3, 0))
+      .mockReturnValueOnce(incompleteEval(5, 3, 2));
+
+    const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
+
+    // Progress observed (automatable dropped 7→5) → guard does not fire,
+    // workflow completes.
+    expect(result.completed).toBe(true);
+    expect(deps.labelManager.onError).not.toHaveBeenCalled();
+    expect(gateCalls(deps)).toHaveLength(0);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(3);
   });
 });
