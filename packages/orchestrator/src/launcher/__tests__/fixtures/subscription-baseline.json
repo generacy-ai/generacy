@@ -1,0 +1,148 @@
+{
+  "capturedAt": "2026-08-27T03:02:08.845Z",
+  "sourceSha": "ff26ee7e",
+  "spawns": {
+    "conversation-turn": {
+      "args": [
+        "-c",
+        ". \"$GENERACY_SESSION_DIR/env\" && exec \"$@\"",
+        "_",
+        "python3",
+        "-u",
+        "-c",
+        "import pty, os, sys\n# Prevent PTY line wrapping by setting huge terminal width\nos.environ[\"COLUMNS\"] = \"50000\"\ndef read(fd):\n    data = os.read(fd, 65536)\n    # Strip CRLF that PTY adds, return cleaned data\n    # (pty._copy writes our return value to stdout)\n    return data.replace(b\"\\r\\n\", b\"\\n\")\npty.spawn(sys.argv[1:], read)",
+        "claude",
+        "-p",
+        "hello agent",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions"
+      ],
+      "command": "sh",
+      "env": {
+        "DOCKER_HOST": "unix:///fixed/session/docker.sock",
+        "GENERACY_SESSION_DIR": "/fixed/session",
+        "GIT_CONFIG_GLOBAL": "/fixed/session/git/config",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/fixed/session/gcp/external-account.json",
+        "HOME": "/home/fixed",
+        "PATH": "/usr/bin"
+      }
+    },
+    "merge-conflict": {
+      "args": [
+        "-c",
+        ". \"$GENERACY_SESSION_DIR/env\" && exec \"$@\"",
+        "_",
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "resolve the conflicts"
+      ],
+      "command": "sh",
+      "env": {
+        "DOCKER_HOST": "unix:///fixed/session/docker.sock",
+        "GENERACY_SESSION_DIR": "/fixed/session",
+        "GIT_CONFIG_GLOBAL": "/fixed/session/git/config",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/fixed/session/gcp/external-account.json",
+        "HOME": "/home/fixed",
+        "PATH": "/usr/bin"
+      }
+    },
+    "phase": {
+      "args": [
+        "-c",
+        ". \"$GENERACY_SESSION_DIR/env\" && exec \"$@\"",
+        "_",
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "/plan https://example.com/issues/1"
+      ],
+      "command": "sh",
+      "env": {
+        "DOCKER_HOST": "unix:///fixed/session/docker.sock",
+        "GENERACY_SESSION_DIR": "/fixed/session",
+        "GIT_CONFIG_GLOBAL": "/fixed/session/git/config",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/fixed/session/gcp/external-account.json",
+        "HOME": "/home/fixed",
+        "PATH": "/usr/bin"
+      }
+    },
+    "pr-feedback": {
+      "args": [
+        "-c",
+        ". \"$GENERACY_SESSION_DIR/env\" && exec \"$@\"",
+        "_",
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "address the review feedback"
+      ],
+      "command": "sh",
+      "env": {
+        "DOCKER_HOST": "unix:///fixed/session/docker.sock",
+        "GENERACY_SESSION_DIR": "/fixed/session",
+        "GIT_CONFIG_GLOBAL": "/fixed/session/git/config",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/fixed/session/gcp/external-account.json",
+        "HOME": "/home/fixed",
+        "PATH": "/usr/bin"
+      }
+    },
+    "remediate": {
+      "args": [
+        "-c",
+        ". \"$GENERACY_SESSION_DIR/env\" && exec \"$@\"",
+        "_",
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "remediation charter body"
+      ],
+      "command": "sh",
+      "env": {
+        "DOCKER_HOST": "unix:///fixed/session/docker.sock",
+        "GENERACY_SESSION_DIR": "/fixed/session",
+        "GIT_CONFIG_GLOBAL": "/fixed/session/git/config",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/fixed/session/gcp/external-account.json",
+        "HOME": "/home/fixed",
+        "PATH": "/usr/bin"
+      }
+    },
+    "review": {
+      "args": [
+        "-c",
+        ". \"$GENERACY_SESSION_DIR/env\" && exec \"$@\"",
+        "_",
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "review charter body"
+      ],
+      "command": "sh",
+      "env": {
+        "DOCKER_HOST": "unix:///fixed/session/docker.sock",
+        "GENERACY_SESSION_DIR": "/fixed/session",
+        "GIT_CONFIG_GLOBAL": "/fixed/session/git/config",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/fixed/session/gcp/external-account.json",
+        "HOME": "/home/fixed",
+        "PATH": "/usr/bin"
+      }
+    }
+  }
+}

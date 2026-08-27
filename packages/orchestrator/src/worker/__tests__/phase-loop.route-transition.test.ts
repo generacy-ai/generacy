@@ -312,3 +312,76 @@ describe('PhaseLoop — first CLI phase initializes route only (Q3→A)', () => 
     expect(logger.infoCalls.find((c) => c.msg === 'agent.route.transition')).toBeUndefined();
   });
 });
+
+describe('PhaseLoop — three-phase subscription → gateway → subscription (#1201 T030-T032)', () => {
+  it('drops the session at exactly each route crossing and logs one transition per crossing', async () => {
+    const logger = createCapturingLogger();
+    const phaseLoop = new PhaseLoop(logger);
+    const deps = createMockDeps();
+
+    // Four phases, all routed through spawnPhase (never validate/review, and
+    // never implement — implement carries post-execution machinery that
+    // terminates the loop when it is not the final phase). Routes:
+    // plan=subscription, tasks=gateway, clarify=subscription, specify=
+    // subscription. Two route crossings (plan→tasks, tasks→clarify); the
+    // clarify→specify step is same-route (control: session must carry across
+    // it).
+    const config = createConfig({
+      agents: {
+        default: { provider: 'claude-code' },
+        workflows: {
+          'speckit-feature': {
+            phases: {
+              plan: { model: 'claude-opus-4-8' },
+              tasks: { model: 'openrouter/a/b' },
+              clarify: { model: 'claude-sonnet-5' },
+              specify: { model: 'claude-haiku-5' },
+            },
+          },
+        },
+      },
+    });
+
+    const capturedSpawns = captureSpawns(deps);
+
+    await phaseLoop.executeLoop(createContext(logger), config, deps, [
+      'plan',
+      'tasks',
+      'clarify',
+      'specify',
+    ]);
+
+    expect(capturedSpawns).toHaveLength(4);
+    expect(capturedSpawns[0]).toMatchObject({ phase: 'plan', route: 'subscription' });
+    expect(capturedSpawns[1]).toMatchObject({ phase: 'tasks', route: 'gateway' });
+    expect(capturedSpawns[2]).toMatchObject({ phase: 'clarify', route: 'subscription' });
+    expect(capturedSpawns[3]).toMatchObject({ phase: 'specify', route: 'subscription' });
+
+    // T031 / FR-006 / SC-003: exactly 2 session drops — the session id from
+    // phase N is NOT supplied as resumeSessionId to N+1 across either crossing.
+    expect(capturedSpawns[0]?.resumeSessionId).toBeUndefined(); // first phase, no prior
+    expect(capturedSpawns[1]?.resumeSessionId).toBeUndefined(); // subscription → gateway
+    expect(capturedSpawns[2]?.resumeSessionId).toBeUndefined(); // gateway → subscription
+    // Control: same-route step carries the session forward.
+    expect(capturedSpawns[3]?.resumeSessionId).toBe('ses-clarify');
+
+    // T032 / FR-007: one agent.route.transition line per crossing, keyed on
+    // the (provider, route) tuple.
+    const routeLogs = logger.infoCalls.filter((c) => c.msg === 'agent.route.transition');
+    expect(routeLogs).toHaveLength(2);
+    expect(routeLogs[0]?.obj).toMatchObject({
+      phase: 'tasks',
+      prevRoute: 'subscription',
+      nextRoute: 'gateway',
+      prevModel: 'claude-opus-4-8',
+      nextModel: 'openrouter/a/b',
+    });
+    expect(routeLogs[1]?.obj).toMatchObject({
+      phase: 'clarify',
+      prevRoute: 'gateway',
+      nextRoute: 'subscription',
+      prevModel: 'openrouter/a/b',
+      nextModel: 'claude-sonnet-5',
+    });
+  });
+});

@@ -153,6 +153,16 @@ With this config, `plan` runs on Fable at `xhigh` effort while `implement` (and 
 
 Strict validation is confined to `orchestrator.agents` and its descendants — typos like `defualt:` or `efort:` inside the block are rejected at `generacy validate`, while typos outside the block (e.g. under `defaults:`) continue to be silently stripped as today.
 
+### Model routing
+
+:::note Requires a gateway-enabled cluster
+Model routing only takes effect on a cluster provisioned with an LLM gateway. On a standard subscription cluster the `model` field selects a Claude subscription model and launches are unaffected.
+:::
+
+A `model` value that contains a `/` (for example `openai/gpt-4o` or `openrouter/anthropic/claude-3.5-sonnet`) is routed through the cluster's LLM gateway instead of the Claude subscription. Slash-free values (`opus-4-7`, `fable`, `claude-code`) resolve to the subscription route and launch exactly as before — subscription launches are byte-for-byte unchanged whether or not a gateway is configured.
+
+Gateway routing is part of the LLM gateway model routing epic ([generacy#1197](https://github.com/generacy-ai/generacy/issues/1197)); the gateway sidecar and provisioning are tracked in P2 ([generacy#1203](https://github.com/generacy-ai/generacy/issues/1203)).
+
 ## `.generacy/generacy.env`
 
 The `generacy.env` file stores secrets and environment-specific settings. It is **gitignored by default** — never commit this file.
