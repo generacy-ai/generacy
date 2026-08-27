@@ -77,7 +77,7 @@ discovered, per plan D-1 note).
 ## Phase 3: US2 — Subscription-only clusters are byte-for-byte unchanged (load-bearing)
 <!-- Phase boundary: Complete Phase 1 before starting Phase 3; independent of Phase 2 -->
 
-- [ ] T020 [US2] Create `packages/orchestrator/src/launcher/__tests__/golden-subscription-spawns.test.ts`
+- [X] T020 [US2] Create `packages/orchestrator/src/launcher/__tests__/golden-subscription-spawns.test.ts`
       (plan D-1/D-2). Compose the real `ClaudeCodeLaunchPlugin` + real credentials interceptor
       + spy `ProcessFactory` (both stdio profiles) driving `AgentLauncher.launch` for all six
       spawn kinds: phase, pr-feedback, merge-conflict, review, remediate, conversation-turn
@@ -86,14 +86,14 @@ discovered, per plan D-1 note).
       `afterEach`), stub `CredhelperClient` → fixed session (`sessionDir: '/fixed/session'`,
       fixed env), fixed `cwd: '/fixed/checkout'`, fixed intent literals per kind.
 
-- [ ] T021 [US2] In `golden-subscription-spawns.test.ts`, add the `stableStringify` helper
+- [X] T021 [US2] In `golden-subscription-spawns.test.ts`, add the `stableStringify` helper
       (recursive key sort; arrays keep order) and a `GOLDEN_UPDATE=1` capture branch that
       writes `fixtures/subscription-baseline.json` (shape per contracts/golden-fixture.md +
       data-model.md), plus the comparison branch: `stableStringify(actual) ===
       stableStringify(fixture.spawns[kind])` per kind, failing with a unified diff.
       `capturedAt`/`sourceSha` are metadata only, excluded from comparison.
 
-- [ ] T022 [US2] **Capture the golden fixture from the pre-P1 merge-base** (Q1=C, plan D-3,
+- [X] T022 [US2] **Capture the golden fixture from the pre-P1 merge-base** (Q1=C, plan D-3,
       quickstart §Capturing). Find `<PRE_P1_SHA>` (`develop` commit immediately before #1198's
       merge via `git log --first-parent --merges develop`); `git worktree add ../generacy-pre-p1
       <PRE_P1_SHA>`; `pnpm install && pnpm -r build` there; copy the T020/T021 harness + fixtures
@@ -103,64 +103,64 @@ discovered, per plan D-1 note).
       this branch; `git worktree remove ../generacy-pre-p1`. Fixture MUST contain no
       `CLAUDE_CONFIG_DIR` in any env map (contracts/golden-fixture.md invariant 2).
 
-- [ ] T023 [US2] Create
+- [X] T023 [US2] Create
       `packages/orchestrator/src/launcher/__tests__/fixtures/README.md` recording the fixture
       provenance: `<PRE_P1_SHA>`, capture date (2026-08-26+), and the regeneration protocol
       (`GOLDEN_UPDATE=1 ... vitest run golden` + PR-description justification; fixture-only diff
       is a review red flag).
 
-- [ ] T024 [US2] Run `golden-subscription-spawns.test.ts` against the current (post-P1) branch
+- [X] T024 [US2] Run `golden-subscription-spawns.test.ts` against the current (post-P1) branch
       with no gateway configured + fully Anthropic config; confirm all six spawn kinds are
       byte-identical to the captured baseline (FR-005 / SC-002 — zero byte differences).
 
 ## Phase 4: US3 — Cross-route phase transition drops the CLI session
 <!-- Phase boundary: Complete Phase 1 before starting Phase 4; independent of Phases 2-3 -->
 
-- [ ] T030 [US3] Create `packages/orchestrator/src/worker/__tests__/phase-loop.route-transition.test.ts`
+- [X] T030 [US3] Create `packages/orchestrator/src/worker/__tests__/phase-loop.route-transition.test.ts`
       (plan D-6, contracts/route-launch-env.md §Route-aware session invalidation). Bind to
       #1199's merged session-drop hook + log call shape (from T002). Drive the phase loop
       through a three-phase sequence whose resolved per-phase agents alternate
       `subscription → gateway → subscription`, with a recording logger injected via phase-loop
       deps and `resumeSessionId` observed at the spawn boundary (mock cliSpawner / spy factory).
 
-- [ ] T031 [US3] In `phase-loop.route-transition.test.ts`, assert (FR-006 / SC-003) **exactly
+- [X] T031 [US3] In `phase-loop.route-transition.test.ts`, assert (FR-006 / SC-003) **exactly
       2 session drops**: the CLI session id captured from phase N is NOT supplied as
       `resumeSessionId` to phase N+1 across either crossing. Assert same-route/same-provider
       transitions drop nothing (control case if convenient).
 
-- [ ] T032 [US3] In `phase-loop.route-transition.test.ts`, assert (FR-007) **one
+- [X] T032 [US3] In `phase-loop.route-transition.test.ts`, assert (FR-007) **one
       `agent.route.transition` log line per crossing**, keyed on the `(provider, route)` tuple,
       matching #1199's log contract as bound in T002.
 
 ## Phase 5: US4 — Docs note
 <!-- Phase boundary: Complete Phase 1 before starting Phase 5; independent of Phases 2-4 -->
 
-- [ ] T040 [US4] Add a short "Model routing" note to
+- [X] T040 [US4] Add a short "Model routing" note to
       `docs/docs/getting-started/configuration.md` (FR-008, plan D-7): explain gateway-shaped
       model names (`provider/model`), where the gateway comes from, and link to the epic
       (generacy-ai/generacy#1197) and P2 issue (generacy#1203) as external GitHub URLs (NOT
       docs-page links — `onBrokenLinks: 'throw'`). Mark the note explicitly "requires a
       gateway-enabled cluster."
 
-- [ ] T041 [US4] Build the docs to confirm no broken links:
+- [X] T041 [US4] Build the docs to confirm no broken links:
       `cd docs && pnpm install && pnpm build` (`onBrokenLinks: 'throw'` must pass).
 
 ## Phase 6: Guards, Changeset & Final Verification
 <!-- Phase boundary: Complete Phases 2-5 before starting Phase 6 -->
 
-- [ ] T050 [P] [Polish] Create `packages/orchestrator/src/launcher/__tests__/no-settings-flag.test.ts`
+- [X] T050 [P] [Polish] Create `packages/orchestrator/src/launcher/__tests__/no-settings-flag.test.ts`
       (FR-009 / SC-004, plan D-5, source-grep.test.ts precedent). Recursive `readdirSync` walk
       of `packages/orchestrator/src/launcher/**` and
       `packages/generacy-plugin-claude-code/src/launch/**`, filtering to non-test `.ts` files
       (exclude any `__tests__` segment and `*.test.ts` — the guard file itself contains the
       literal), asserting `content.includes('--settings') === false` for every scanned file.
 
-- [ ] T051 [P] [Polish] Add the changeset (FR-011 / SC-006): `pnpm changeset --empty` →
+- [X] T051 [P] [Polish] Add the changeset (FR-011 / SC-006): `pnpm changeset --empty` →
       `.changeset/1201-p1-route-verification.md` (tests/fixtures/docs-only diff). If any seam
       fix under `packages/*/src/` landed during implementation, replace the empty changeset with
       a **patch** bump for the touched package instead.
 
-- [ ] T052 [Polish] Full green run (SC-001): `pnpm -r build` then
+- [X] T052 [Polish] Full green run (SC-001): `pnpm -r build` then
       `pnpm --filter @generacy-ai/orchestrator vitest run route-launch-env
       golden-subscription-spawns no-settings-flag phase-loop.route-transition`. Confirm all
       suites pass. Spot-check SC-005: `git diff` shows zero `AgentEntrySchema` changes.
