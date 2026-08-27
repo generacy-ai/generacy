@@ -97,7 +97,7 @@
   - `getIssueRefState` for open issue, closed issue (completed/not_planned), open PR, merged PR, closed-unmerged PR
   - Non-zero exit throws
 
-- [ ] T016 [US1] Create `packages/orchestrator/src/worker/__tests__/phase-loop.dependency-block.test.ts`
+- [X] T016 [US1] Create `packages/orchestrator/src/worker/__tests__/phase-loop.dependency-block.test.ts`
   - SC-001: implement with blocked sentinel → `onGateHit('implement','waiting-for:dependencies')` called, no `failed:implement`, WIP commit precedes gate
   - SC-002: no sentinel + unchanged `tasks_remaining` → no-progress guard still fires (regression pin)
   - FR-013: third block cycle → `waiting-for:dependency-limit` + limit comment; post-grant cycle count resets
