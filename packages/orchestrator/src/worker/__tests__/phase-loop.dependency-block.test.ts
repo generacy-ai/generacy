@@ -324,7 +324,7 @@ describe('PhaseLoop — dependency-blocked branch (#1211)', () => {
     (deps.cliSpawner.spawnPhase as any).mockResolvedValue(
       makeSuccessResult('implement', {
         blocked_on: ['garbage', 'not/a/ref', ''],
-        partial: true,
+        partial: false,
         tasks_completed: 1,
         tasks_remaining: 0,
         tasks_total: 1,
@@ -340,10 +340,19 @@ describe('PhaseLoop — dependency-blocked branch (#1211)', () => {
 
     // No gate hit — normal flow continues
     expect(gateCalls).toHaveLength(0);
-    // Should complete since tasks_remaining=0
+    // Phase advances normally and the loop completes
     expect(result.completed).toBe(true);
-    // WIP commit should NOT be called
-    expect(deps.prManager.commitPushAndEnsurePr).not.toHaveBeenCalled();
+    // No block marker comment posted
+    const commentBodies = (context.github.addIssueComment as any).mock.calls.map(
+      (c: unknown[]) => String(c[3]),
+    );
+    expect(commentBodies.some((b: string) => b.startsWith(MARKER_BLOCK))).toBe(false);
+    // The blocked-branch WIP commit did NOT run — the only commit is the
+    // ordinary end-of-phase commit at step 5 (no `blocked on` message).
+    const commitMessages = (deps.prManager.commitPushAndEnsurePr as any).mock.calls.map(
+      (c: unknown[]) => (c[1] as { message?: string } | undefined)?.message ?? '',
+    );
+    expect(commitMessages.some((m: string) => m.includes('blocked on'))).toBe(false);
   });
 
   // Coexistence with PARTIAL: blocked wins control flow

@@ -1000,7 +1000,11 @@ export class PhaseLoop {
           const { atCap } = countDependencyBlockCycles(issueComments);
 
           if (atCap) {
-            // Post limit comment
+            // Post limit comment. The contract's "skip if a limit comment newer
+            // than the newest block comment exists" dedup rule needs no explicit
+            // check: `countDependencyBlockCycles` only counts blocks NEWER than
+            // the newest limit comment, so a current limit comment forces
+            // `atCap === false` and this branch is unreachable in that state.
             try {
               const limitBody = buildLimitComment(valid);
               await context.github.addIssueComment(

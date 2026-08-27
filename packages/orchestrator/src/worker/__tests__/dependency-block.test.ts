@@ -86,6 +86,16 @@ describe('parseDependencyRefs', () => {
     expect(logger.warn).toHaveBeenCalledTimes(3);
   });
 
+  it('rejects zero-numbered refs in every grammar form', () => {
+    const { valid, invalid } = parseDependencyRefs(
+      ['owner/repo#0', '#0', '0'],
+      'def-owner',
+      'def-repo',
+    );
+    expect(valid).toHaveLength(0);
+    expect(invalid).toEqual(['owner/repo#0', '#0', '0']);
+  });
+
   it('returns empty valid when all refs are invalid', () => {
     const { valid, invalid } = parseDependencyRefs(
       ['garbage', 'not/a/ref'],
@@ -217,6 +227,22 @@ describe('countDependencyBlockCycles', () => {
     const { count, atCap } = countDependencyBlockCycles(comments, 3);
     expect(count).toBe(3);
     expect(atCap).toBe(true);
+  });
+
+  it('a current limit comment forces atCap=false — the limit-comment dedup rule is structural', () => {
+    // contracts/dependency-block-comments.md §2 asks the writer to skip posting a
+    // second limit comment while one newer than the newest block exists. The
+    // derived counter makes that state unreachable rather than merely guarded:
+    // a newer limit comment zeroes the count, so the cap branch never re-enters.
+    const comments = [
+      makeComment({ id: 1, body: MARKER_BLOCK + '\n```json\n{"on":["a/b#1"]}\n```', created_at: '2026-01-01T00:00:00Z' }),
+      makeComment({ id: 2, body: MARKER_BLOCK + '\n```json\n{"on":["a/b#1"]}\n```', created_at: '2026-02-01T00:00:00Z' }),
+      makeComment({ id: 3, body: MARKER_BLOCK + '\n```json\n{"on":["a/b#1"]}\n```', created_at: '2026-03-01T00:00:00Z' }),
+      makeComment({ id: 4, body: MARKER_LIMIT + '\nlimit', created_at: '2026-04-01T00:00:00Z' }),
+    ];
+    const { count, atCap } = countDependencyBlockCycles(comments, 3);
+    expect(count).toBe(0);
+    expect(atCap).toBe(false);
   });
 
   it('operator grant resets the baseline — new limit comment resets count', () => {

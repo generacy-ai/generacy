@@ -82,17 +82,27 @@ function removedLabels(): string[] {
 }
 
 describe('resolveResumeRetainSuffixes', () => {
-  it('retains only remediation-limit by default', () => {
-    expect(DEFAULT_RESUME_RETAIN_SUFFIXES).toEqual(['remediation-limit']);
-    expect(resolveResumeRetainSuffixes({})).toEqual(['remediation-limit']);
+  // #1211: `dependency-limit` joined the unconditional default set — resume
+  // must not strip the operator's grant of another block-cycle budget.
+  it('retains remediation-limit and dependency-limit by default', () => {
+    expect(DEFAULT_RESUME_RETAIN_SUFFIXES).toEqual([
+      'remediation-limit',
+      'dependency-limit',
+    ]);
+    expect(resolveResumeRetainSuffixes({})).toEqual([
+      'remediation-limit',
+      'dependency-limit',
+    ]);
     expect(resolveResumeRetainSuffixes({ ciMergeGateEnabled: false })).toEqual([
       'remediation-limit',
+      'dependency-limit',
     ]);
   });
 
   it('adds implementation-review only when ciMergeGateEnabled', () => {
     expect(resolveResumeRetainSuffixes({ ciMergeGateEnabled: true })).toEqual([
       'remediation-limit',
+      'dependency-limit',
       'implementation-review',
     ]);
   });

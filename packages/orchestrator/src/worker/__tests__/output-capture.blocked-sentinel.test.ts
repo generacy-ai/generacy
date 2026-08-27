@@ -75,6 +75,20 @@ describe('OutputCapture — SPECKIT_IMPLEMENT_BLOCKED sentinel', () => {
     expect(result!.blocked_on).toEqual(['a/b#1']);
   });
 
+  it('a later PARTIAL still last-wins for its own fields while preserving blocked_on', () => {
+    capture.processChunk('SPECKIT_IMPLEMENT_BLOCKED: {"on":["a/b#1"]}\n');
+    capture.processChunk('SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_completed":3,"tasks_remaining":7,"tasks_total":10}\n');
+    capture.processChunk('SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_total":10}\n');
+    const result = capture.implementResult;
+    // The second PARTIAL omitted the counts — last-wins means they are gone,
+    // not carried over from the first PARTIAL.
+    expect(result!.tasks_completed).toBeUndefined();
+    expect(result!.tasks_remaining).toBeUndefined();
+    expect(result!.tasks_total).toBe(10);
+    // …but blocked_on survives (Q2=A).
+    expect(result!.blocked_on).toEqual(['a/b#1']);
+  });
+
   it('BLOCKED sentinel arriving before PARTIAL also merges', () => {
     capture.processChunk('SPECKIT_IMPLEMENT_BLOCKED: {"on":["a/b#1"]}\n');
     capture.processChunk('SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_completed":3,"tasks_remaining":7,"tasks_total":10}\n');

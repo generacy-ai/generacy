@@ -71,8 +71,6 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
   { name: 'completed:dependencies', color: '0E8A16', description: 'Dependencies resolved — re-arming' },
   { name: 'completed:dependency-limit', color: '0E8A16', description: 'Dependency-limit gate satisfied by operator' },
-  { name: 'completed:dependencies', color: '0E8A16', description: 'Dependencies resolved — re-arming' },
-  { name: 'completed:dependency-limit', color: '0E8A16', description: 'Dependency-limit gate satisfied by operator' },
 
   // Failed phase labels
   { name: 'failed:specify', color: 'D73A4A', description: 'Phase specify failed' },

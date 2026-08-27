@@ -44,22 +44,22 @@ export function parseDependencyRefs(
     const trimmed = entry.trim();
 
     let match: RegExpMatchArray | null;
+    let candidate: DependencyRef | null = null;
 
     match = CANONICAL_REF_RE.exec(trimmed);
     if (match) {
-      valid.push({ owner: match[1]!, repo: match[2]!, number: Number(match[3]) });
-      continue;
+      candidate = { owner: match[1]!, repo: match[2]!, number: Number(match[3]) };
+    } else {
+      match = SHORT_REF_RE.exec(trimmed) ?? BARE_NUMBER_RE.exec(trimmed);
+      if (match) {
+        candidate = { owner: defaultOwner, repo: defaultRepo, number: Number(match[1]) };
+      }
     }
 
-    match = SHORT_REF_RE.exec(trimmed);
-    if (match) {
-      valid.push({ owner: defaultOwner, repo: defaultRepo, number: Number(match[1]) });
-      continue;
-    }
-
-    match = BARE_NUMBER_RE.exec(trimmed);
-    if (match) {
-      valid.push({ owner: defaultOwner, repo: defaultRepo, number: Number(match[1]) });
+    // Contract §1 ref grammar: `number` must be a positive integer. `#0` / `0`
+    // match the shape but can never name a real issue.
+    if (candidate && candidate.number > 0) {
+      valid.push(candidate);
       continue;
     }
 

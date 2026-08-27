@@ -104,19 +104,19 @@
   - Blocked with no valid refs → falls through to normal flow
   - Coexistence with PARTIAL: blocked wins control flow, partial counts recorded
 
-- [ ] T017 [US3] Create `packages/orchestrator/src/services/__tests__/dependency-monitor-service.test.ts`
+- [X] T017 [US3] Create `packages/orchestrator/src/services/__tests__/dependency-monitor-service.test.ts`
   - SC-003: all refs closed → `completed:dependencies` applied, `enqueueIfAbsent` called within one poll tick
   - Partially closed → gate held
   - FR-014: 2 consecutive failures → quiet retry; 3rd → escalation comment posted once (marker-deduped), gate held
   - Q3=C: not-planned close / unmerged PR close → ⚠ flags in re-arm comment
 
-- [ ] T018 [P] [US2] Extend cockpit precedence test in `packages/cockpit/src/__tests__/`
+- [X] T018 [P] [US2] Extend cockpit precedence test in `packages/cockpit/src/__tests__/`
   - SC-004: `waiting-for:dependencies` and `waiting-for:dependency-limit` present in `WAITING_PIPELINE_ORDER`
   - Gate-vocabulary derivation: `dependencies` gate advance-able once `completed:dependencies` exists
 
 ## Phase 7: Changeset
 
-- [ ] T019 Write `.changeset/1211-dependency-blocked-pause.md`
+- [X] T019 Write `.changeset/1211-dependency-blocked-pause.md`
   - `@generacy-ai/workflow-engine` **minor** (new label vocabulary + new public client method `getIssueRefState`)
   - `@generacy-ai/orchestrator` **patch** (internal worker/monitor wiring, no new public exports)
   - `@generacy-ai/cockpit` **patch** (`WAITING_PIPELINE_ORDER` additions, no new exports)
