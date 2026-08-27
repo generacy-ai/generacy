@@ -222,6 +222,30 @@ describe('RemediateExecutor (#1128)', () => {
     expect(persisted!.remediationCount).toBe(1);
   });
 
+  it('FR-007: the spawn log payload includes the resolved route', async () => {
+    await writeReviewArtifact(checkoutPath, WORKFLOW_ID, seedArtifact({ remediationCount: 0 }));
+    const { launcher, launch } = makeLauncher(makeProcess(0));
+    const { github } = makeGithub();
+
+    const executor = new RemediateExecutor({
+      agentLauncher: launcher,
+      config: baseConfig,
+      settings: null,
+      logger,
+    });
+
+    await executor.execute(makeContext(github));
+
+    const spawnLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[1] === 'Spawning Claude CLI for remediate phase',
+    );
+    expect(spawnLog).toBeDefined();
+    // No configured model → subscription route; the field is present verbatim.
+    expect(spawnLog![0]).toMatchObject({ route: 'subscription' });
+    // Launch options are unchanged (no route threaded into the launcher).
+    expect(launch.mock.calls[0]![0]).not.toHaveProperty('route');
+  });
+
   it('INV-3: execute() leaves round + lastReviewedCommitSha untouched', async () => {
     await writeReviewArtifact(checkoutPath, WORKFLOW_ID, seedArtifact({
       round: 7,

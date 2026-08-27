@@ -23,6 +23,7 @@ import { resolveAgentForPhase } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code';
+import { resolveRoute } from '@generacy-ai/generacy-plugin-claude-code';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
@@ -891,9 +892,10 @@ Please proceed with addressing the feedback.`;
     // `implement` phase — pr-feedback revises the code `implement` produced,
     // so the same agent/model that wrote the code should address review on it.
     const { provider, model, effort } = resolveAgentForPhase(this.config, workflowName, 'implement');
+    const route = resolveRoute(model);
 
     this.logger.info(
-      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs, provider, model, effort },
+      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs, provider, model, effort, route },
       'Spawning Claude CLI for PR feedback',
     );
 

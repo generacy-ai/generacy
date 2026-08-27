@@ -41,6 +41,15 @@ describe('SmeeWebhookReceiver', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks()` only clears call history — queued `mockResolvedValueOnce`
+    // / `mockRejectedValueOnce` values and the default implementation survive it.
+    // A test that queues more one-shot responses than it consumes therefore
+    // leaks them into the next test, making this file's behaviour depend on how
+    // far the previous test's jittered backoff happened to run. Reset the fetch
+    // stub outright and give every test the same explicit starting point:
+    // "connecting fails unless this test says otherwise".
+    mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new Error('Connection failed'));
     vi.useFakeTimers();
 
     // Create mock logger
@@ -453,14 +462,35 @@ describe('SmeeWebhookReceiver', () => {
         watchedRepos: new Set(['owner/repo']),
       });
 
-      const mockBody = {
-        getReader: () => ({
-          read: vi.fn().mockResolvedValue({ done: false, value: new Uint8Array() }),
-          releaseLock: vi.fn(),
-        }),
-      };
-
-      mockFetch.mockResolvedValue({ ok: true, body: mockBody } as unknown as Response);
+      // Emulate a live SSE stream: the connection stays open with no traffic
+      // until the receiver is stopped, at which point it reports end-of-stream.
+      //
+      // `read()` must NOT resolve `{ done: false }` unconditionally. `connect()`
+      // consumes the body in a `while (!signal.aborted) { await reader.read() }`
+      // loop, so an already-resolved `read()` turns that into a pure-microtask
+      // spin: it never yields to the macrotask queue, so neither `stop()` nor the
+      // vitest timeout can ever run, and every iteration allocates (a promise, a
+      // decoded chunk, a `split()` array, and an entry in the `vi.fn()` call log)
+      // until the worker exhausts its heap and takes the whole suite down with an
+      // out-of-memory abort. Keying the read off the abort signal keeps the
+      // receiver genuinely "running" for the duration of the assertion while
+      // still letting `start()` unwind once the test stops it.
+      mockFetch.mockImplementation((_url: unknown, init: { signal: AbortSignal }) =>
+        Promise.resolve({
+          ok: true,
+          body: {
+            getReader: () => ({
+              read: () =>
+                new Promise((resolve) => {
+                  const endOfStream = () => resolve({ done: true, value: undefined });
+                  if (init.signal.aborted) endOfStream();
+                  else init.signal.addEventListener('abort', endOfStream, { once: true });
+                }),
+              releaseLock: vi.fn(),
+            }),
+          },
+        } as unknown as Response),
+      );
 
       // Act - start twice
       const startPromise1 = receiver.start();

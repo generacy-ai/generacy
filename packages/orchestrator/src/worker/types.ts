@@ -300,6 +300,12 @@ export interface CliSpawnOptions {
    * `agent.model.transition` log line on same-provider model change.
    */
   previousModel?: string;
+  /**
+   * #1199: resolved launch route (`subscription` | `gateway`) for this phase.
+   * Logged verbatim by the spawner; typed `string` (not the plugin union) so
+   * this module stays free of a plugin import — the spawner never branches on it.
+   */
+  route?: string;
 }
 
 /**
