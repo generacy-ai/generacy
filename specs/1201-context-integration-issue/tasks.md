@@ -52,23 +52,23 @@ discovered, per plan D-1 note).
 ## Phase 2: US1 — Gateway launches carry the config dir; subscription launches do not
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 -->
 
-- [ ] T010 [US1] Create `packages/orchestrator/src/launcher/__tests__/route-launch-env.test.ts`.
+- [X] T010 [US1] Create `packages/orchestrator/src/launcher/__tests__/route-launch-env.test.ts`.
       Drive the **real** `AgentLauncher.launch` through the **real** credentials interceptor
       (not a mock of it — FR-001), using a spy `ProcessFactory` map (`default` + `interactive`
       profiles) and a stub `CredhelperClient` (`StubCredhelperClient` per data-model.md §Test
       doubles). Follow the `multi-provider.test.ts` construction precedent.
 
-- [ ] T011 [US1] In `route-launch-env.test.ts`, assert (FR-002): a **gateway-route** intent
+- [X] T011 [US1] In `route-launch-env.test.ts`, assert (FR-002): a **gateway-route** intent
       (model containing `/`, e.g. `openai/gpt-4o`) produces a spawned env at `factory.spawn`
       containing `CLAUDE_CONFIG_DIR=<gatewayConfigDir>`; a **subscription-route** intent
       (`undefined`/`claude-*`/alias) produces a spawned env with **no** `CLAUDE_CONFIG_DIR`
       key (absent — not empty string, not default; see contracts/route-launch-env.md).
 
-- [ ] T012 [US1] In `route-launch-env.test.ts`, add the negative case: a gateway-route intent
+- [X] T012 [US1] In `route-launch-env.test.ts`, add the negative case: a gateway-route intent
       with **no gateway config available** throws `GatewayRouteUnavailableError` from `launch`
       and **no spawn occurs** (assert `factory.spawn` not called).
 
-- [ ] T013 [US1] In `route-launch-env.test.ts`, add the FR-003 **real-spawn wrapper proof**
+- [X] T013 [US1] In `route-launch-env.test.ts`, add the FR-003 **real-spawn wrapper proof**
       (plan D-4, spawn-e2e.test.ts precedent): spawn the actual
       `sh -c '. "$GENERACY_SESSION_DIR/env" && exec "$@"' _ /usr/bin/env` with a temp
       session-dir env file and `CLAUDE_CONFIG_DIR=<sentinel>` in the parent env; assert stdout
