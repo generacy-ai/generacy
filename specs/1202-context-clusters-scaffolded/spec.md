@@ -33,6 +33,9 @@ without me hand-editing the generated `docker-compose.yml`.
 **Acceptance Criteria**:
 - [ ] `generacy launch`/`deploy` accepts `--llm-gateway`; `GENERACY_LLM_GATEWAY_ENABLED=true`
   is an equivalent toggle.
+- [ ] The toggle persists as `llmGateway: true` in `.generacy/cluster.yaml`; subsequent
+  scaffolds default from it, so re-running `launch` without the flag does not drop the
+  gateway. Disabling requires an explicit `--no-llm-gateway` (or editing cluster.yaml).
 - [ ] With the toggle on, the emitted compose contains an `llm-gateway` service and the
   orchestrator + worker services receive `GENERACY_LLM_GATEWAY_URL` and
   `GENERACY_LLM_GATEWAY_TOKEN`.
@@ -47,8 +50,8 @@ without me hand-editing the generated `docker-compose.yml`.
 **Acceptance Criteria**:
 - [ ] With `llmGateway` false/unset, the emitted `docker-compose.yml` and `.env` are
   **byte-identical** to the current output (golden test).
-- [ ] No `llm-gateway/` directory, `.env.local.template` provider keys, or gateway env vars
-  are emitted.
+- [ ] No `llm-gateway/` directory, `.env.local` provider-key placeholders, or gateway env
+  vars are emitted.
 
 ### US3: Configure providers from a scaffolded example
 
@@ -62,21 +65,22 @@ without me hand-editing the generated `docker-compose.yml`.
   `count_tokens` (`allowed_requests`) for non-Anthropic upstreams.
 - [ ] `llm-gateway/config.json` is created from the example when absent and is gitignored;
   an existing `config.json` is never overwritten.
-- [ ] `.env.local.template` gains commented `OPENROUTER_API_KEY`, `FEATHERLESS_API_KEY`, and
-  `OPENAI_API_KEY` placeholders.
+- [ ] A commented `.env.local` with `OPENROUTER_API_KEY`, `FEATHERLESS_API_KEY`, and
+  `OPENAI_API_KEY` placeholders is scaffolded directly (create-if-absent, never overwrite),
+  only when the gateway is enabled. No `.env.local.template` is emitted.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `llmGateway?: boolean` to `ScaffoldComposeInput` (and the env-scaffolding input as needed); wire the `--llm-gateway` CLI flag and `GENERACY_LLM_GATEWAY_ENABLED=true` env toggle to it in both `launch` and `deploy`. | P1 | Shared scaffolder is used by both commands. |
-| FR-002 | When enabled, emit an `llm-gateway` compose service: pinned `maximhq/bifrost:<tag>` image, `./llm-gateway/config.json` bind-mounted, `env_file: .env.local`, `cluster-network` only (no host port), healthcheck, `restart: unless-stopped`. | P1 | Port of tetrad-dev#109; diff in PR. Pin an explicit tag, not `latest`. |
+| FR-001 | Add `llmGateway?: boolean` to `ScaffoldComposeInput` (and the env-scaffolding input as needed); wire the `--llm-gateway` CLI flag and `GENERACY_LLM_GATEWAY_ENABLED=true` env toggle to it in both `launch` and `deploy`. Persist the toggle as `llmGateway: true` in `.generacy/cluster.yaml`; later scaffolds default from it, and disabling requires `--no-llm-gateway` (or editing cluster.yaml). | P1 | Shared scaffolder is used by both commands. Persistence follows the existing cluster.yaml pattern (channel/workers/variant) and survives the unconditional compose rewrite (clarify Q1). |
+| FR-002 | When enabled, emit an `llm-gateway` compose service: pinned `maximhq/bifrost:v2.0.0` image, `./llm-gateway/config.json` bind-mounted, `env_file: .env.local` (provider keys), `GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}` in the service environment (interpolated from `.env`), `cluster-network` only (no host port), healthcheck, `restart: unless-stopped`. | P1 | Port of tetrad-dev#109; diff in PR. v2.0.0 is the tetrad pin and the version all P2 findings were verified against — bump deliberately (clarify Q4). |
 | FR-003 | Orchestrator + worker services get `GENERACY_LLM_GATEWAY_URL=http://llm-gateway:8080/anthropic` and `GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}`. | P1 | Matches env vars already consumed by config loader (loader.ts) and doctor check (#1200). |
-| FR-004 | `scaffoldEnvFile` generates a random cluster-local `GENERACY_LLM_GATEWAY_TOKEN` **once** and never overwrites an existing value; the same token is set as Bifrost's inbound auth key in the scaffolded config. | P1 | Mirror the never-overwrite discipline of `scaffoldClaudeSeed`. |
-| FR-005 | Scaffold `llm-gateway/config.example.json` with OpenRouter, featherless (custom OpenAI-compatible, base URL without `/v1`), and OpenAI entries and the `count_tokens`/`allowed_requests` comment. | P1 | Provider keys referenced by name from the config; values live in `.env.local`. |
+| FR-004 | `scaffoldEnvFile` generates a random cluster-local `GENERACY_LLM_GATEWAY_TOKEN` **once** and never overwrites an existing value. The token **must** be `sk-bf-` prefixed (e.g. `sk-bf-` + 48 hex chars) — Bifrost 401s an unprefixed Bearer token. The scaffolded config never contains the literal token: it references it as `env.GENERACY_LLM_GATEWAY_TOKEN`, and the value reaches the container via the FR-002 environment entry. | P1 | Mirror the never-overwrite discipline of `scaffoldClaudeSeed`. Env-ref keeps token rotation working (clarify Q2). |
+| FR-005 | Scaffold `llm-gateway/config.example.json` with OpenRouter, featherless (custom OpenAI-compatible, base URL without `/v1`), and OpenAI entries and the `count_tokens`/`allowed_requests` comment. Inbound auth key is expressed as `env.GENERACY_LLM_GATEWAY_TOKEN`, never a literal. | P1 | Provider keys referenced by name from the config; values live in `.env.local`. |
 | FR-006 | Create `llm-gateway/config.json` from the example if absent; gitignore it; never overwrite an existing one. | P1 | |
-| FR-007 | `.env.local.template` gains the three commented provider-key placeholders. | P1 | |
-| FR-008 | When `llmGateway` is false/unset, emitted compose and `.env` are byte-identical to today. | P1 | Golden test guards this. |
+| FR-007 | When the gateway is enabled, scaffold a commented `.env.local` (create-if-absent, never overwrite) containing the three provider-key placeholders (`OPENROUTER_API_KEY`, `FEATHERLESS_API_KEY`, `OPENAI_API_KEY`). No `.env.local.template` is emitted. | P1 | No such template exists in scaffolder output today; gateway fails closed with no keys, so a placeholder-only file is harmless (clarify Q3). |
+| FR-008 | When `llmGateway` is false/unset, emitted compose and `.env` are byte-identical to today. On a previously gateway-enabled cluster, a disabled-path re-scaffold leaves pre-existing gateway artifacts untouched (`llm-gateway/`, the `.env` token, `.env.local`) — only the compose stanza and service env vars disappear. | P1 | Golden test guards the fresh path. Leftovers are inert without the stanza; keeping the token lets re-enabling reuse it per FR-004 (clarify Q5). |
 
 ## Success Criteria
 
@@ -97,8 +101,8 @@ without me hand-editing the generated `docker-compose.yml`.
   already consumed elsewhere in the epic (config loader warnings, doctor `llm-gateway` check).
 - Bifrost listens on port 8080 inside the cluster network and serves the Anthropic ingress at
   `/anthropic` (Messages endpoint at `/anthropic/v1/messages`).
-- `.env.local` is the developer-supplied, gitignored secrets file; `.env.local.template` is
-  the committed placeholder scaffold.
+- `.env.local` is the developer-supplied, gitignored secrets file; the scaffolder seeds it
+  with commented placeholders (gateway-enabled only) and never overwrites it.
 
 ## Out of Scope
 
