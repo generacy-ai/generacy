@@ -10,18 +10,18 @@
 
 ## Phase 0: Sequencing gate (blocking — do NOT skip)
 
-- [ ] T001 Confirm generacy-ai/generacy#1203 (P2 dogfood) is **complete** before writing any
+- [X] T001 Confirm generacy-ai/generacy#1203 (P2 dogfood) is **complete** before writing any
   implementation code. This is a hard blocks-on dependency (spec.md Dependencies, plan.md
   Sequencing step 1). If #1203 is open, stop and report — do not begin Phase 1.
 
 ## Phase 1: Foundations (types, schema, new module skeleton)
 
-- [ ] T002 [US1] Add `llmGateway?: boolean` to `ScaffoldClusterYamlInput`, `ScaffoldComposeInput`,
+- [X] T002 [US1] Add `llmGateway?: boolean` to `ScaffoldClusterYamlInput`, `ScaffoldComposeInput`,
   and `ScaffoldEnvInput` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
   (data-model.md "Modified interfaces"). Types only — no emission logic yet.
-- [ ] T003 [P] [US1] Add `llmGateway: z.boolean().default(false)` to `ClusterYamlSchema` in
+- [X] T003 [P] [US1] Add `llmGateway: z.boolean().default(false)` to `ClusterYamlSchema` in
   `packages/generacy/src/cli/commands/cluster/context.ts:32` (data-model.md "Modified schema").
-- [ ] T004 [US1] Create `packages/generacy/src/cli/commands/cluster/llm-gateway.ts` with the four
+- [X] T004 [US1] Create `packages/generacy/src/cli/commands/cluster/llm-gateway.ts` with the four
   exported functions from data-model.md "New module": `resolveLlmGatewayToggle`,
   `generateGatewayToken` (`'sk-bf-' + randomBytes(24).toString('hex')`, `node:crypto`),
   `readExistingGatewayToken`, and `scaffoldLlmGatewayFiles(dir)`. Implement the resolver
@@ -30,39 +30,39 @@
 
 ## Phase 2: Compose + env + cluster.yaml emission (core)
 
-- [ ] T005 [US1] In `scaffoldDockerCompose` (`cluster/scaffolder.ts`), when `llmGateway` is true,
+- [X] T005 [US1] In `scaffoldDockerCompose` (`cluster/scaffolder.ts`), when `llmGateway` is true,
   append the `llm-gateway` service exactly per `contracts/llm-gateway-compose.yml`: image
   `maximhq/bifrost:v2.0.0`, `llm-gateway-data:/app/data` named volume,
   `./llm-gateway/config.json:/app/data/config.json:ro`, `env_file: [{ path: .env.local, required: false }]`,
   `environment: GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}`, `cluster-network` only
   (no host port), wget healthcheck (45s start_period), `restart: unless-stopped`. Add
   `llm-gateway-data: null` to the top-level `volumes` map. All emission strictly behind the boolean.
-- [ ] T006 [US1] In the same function, append to **both** orchestrator and worker `environment`:
+- [X] T006 [US1] In the same function, append to **both** orchestrator and worker `environment`:
   `GENERACY_LLM_GATEWAY_URL=http://llm-gateway:8080/anthropic` and
   `GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}` (FR-003, plan §3). When false, zero
   changes to the compose object.
-- [ ] T007 [US1] Update `scaffoldEnvFile` (`cluster/scaffolder.ts`) with token handling per plan §2:
+- [X] T007 [US1] Update `scaffoldEnvFile` (`cluster/scaffolder.ts`) with token handling per plan §2:
   read existing `<dir>/.env`, extract an existing `GENERACY_LLM_GATEWAY_TOKEN=` via
   `readExistingGatewayToken`; if present always re-emit verbatim (even on disabled path); if
   enabled and absent, generate via `generateGatewayToken`; if disabled and absent, emit nothing.
-- [ ] T008 [US1] Update `scaffoldClusterYaml` (`cluster/scaffolder.ts`) to write `llmGateway: true`
+- [X] T008 [US1] Update `scaffoldClusterYaml` (`cluster/scaffolder.ts`) to write `llmGateway: true`
   **only when enabled** (omit key when false so existing cluster.yaml output/tests are unchanged;
   plan §1, research R7).
 
 ## Phase 3: Gateway files (config example, config.json, .gitignore, .env.local)
 
-- [ ] T009 [US3] Implement `scaffoldLlmGatewayFiles(dir)` in `cluster/llm-gateway.ts`:
+- [X] T009 [US3] Implement `scaffoldLlmGatewayFiles(dir)` in `cluster/llm-gateway.ts`:
   - `llm-gateway/config.example.json` — content from `contracts/config.example.json`, overwritten
     every scaffold. Inbound virtual key value `env.GENERACY_LLM_GATEWAY_TOKEN`; provider key
     values `env.<PROVIDER>_API_KEY`; no literal secrets. Do NOT set
     `"source_of_truth": "config.json"` (research R4 — crash-loop).
   - `llm-gateway/config.json` — copied from example **only if absent**; never overwritten.
   - `llm-gateway/.gitignore` — contains `config.json`.
-- [ ] T010 [US3] In `scaffoldLlmGatewayFiles` (or the enabled command path), scaffold `.env.local`
+- [X] T010 [US3] In `scaffoldLlmGatewayFiles` (or the enabled command path), scaffold `.env.local`
   create-if-absent, never overwrite, **only when enabled**: commented `OPENROUTER_API_KEY=`,
   `FEATHERLESS_API_KEY=`, `OPENAI_API_KEY=` placeholders with per-provider URL comments and the
   `count_tokens`/`allowed_requests` note (contracts/env-files.md, FR-007). No `.env.local.template`.
-- [ ] T011 [US3] Wire `scaffoldLlmGatewayFiles` to be invoked when the gateway is enabled (from
+- [X] T011 [US3] Wire `scaffoldLlmGatewayFiles` to be invoked when the gateway is enabled (from
   `scaffoldDockerCompose` or the command scaffolders, per plan §4). Verify the featherless entry
   is a custom OpenAI-compatible provider with base URL `https://api.featherless.ai` (no `/v1`) and
   the `allowed_requests` block. During implementation, confirm Bifrost v2.0.0 accepts a
@@ -71,44 +71,44 @@
 
 ## Phase 4: CLI flag wiring (launch + deploy)
 
-- [ ] T012 [P] [US1] Add the `--llm-gateway` / `--no-llm-gateway` boolean-pair option to
+- [X] T012 [P] [US1] Add the `--llm-gateway` / `--no-llm-gateway` boolean-pair option to
   `packages/generacy/src/cli/commands/launch/index.ts` and add `llmGateway?: boolean` to
   `LaunchOptions` in `packages/generacy/src/cli/commands/launch/types.ts` (data-model.md CLI options).
-- [ ] T013 [US1] Thread the toggle through `packages/generacy/src/cli/commands/launch/scaffolder.ts`:
+- [X] T013 [US1] Thread the toggle through `packages/generacy/src/cli/commands/launch/scaffolder.ts`:
   call `resolveLlmGatewayToggle({ flag, env, persisted })` (persisted from an existing cluster.yaml
   when discoverable) and pass the resolved boolean into `scaffoldProject`/compose/env/cluster.yaml.
-- [ ] T014 [P] [US1] Add the same `--llm-gateway` / `--no-llm-gateway` option and `llmGateway?: boolean`
+- [X] T014 [P] [US1] Add the same `--llm-gateway` / `--no-llm-gateway` option and `llmGateway?: boolean`
   to `packages/generacy/src/cli/commands/deploy/index.ts` and `deploy/types.ts`.
-- [ ] T015 [US1] Thread the toggle through `packages/generacy/src/cli/commands/deploy/scaffolder.ts`
+- [X] T015 [US1] Thread the toggle through `packages/generacy/src/cli/commands/deploy/scaffolder.ts`
   via the same resolver into `scaffoldBundle`.
 
 ## Phase 5: Tests
 
-- [ ] T016 [P] [US2] Golden disabled-path guard in
+- [X] T016 [P] [US2] Golden disabled-path guard in
   `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`: existing snapshots in
   `__snapshots__/scaffolder.test.ts.snap` must pass **unchanged**, plus an explicit test that
   `llmGateway: undefined` and `llmGateway: false` produce byte-identical compose + `.env` (SC-002).
-- [ ] T017 [US1] Enabled-path compose test in the same file: new snapshot of the gateway-enabled
+- [X] T017 [US1] Enabled-path compose test in the same file: new snapshot of the gateway-enabled
   compose; assert the `llm-gateway` service shape, orchestrator/worker gateway env additions, and
   the `llm-gateway-data` volume (SC-001).
-- [ ] T018 [P] [US1] New `packages/generacy/src/cli/commands/cluster/__tests__/llm-gateway.test.ts`:
+- [X] T018 [P] [US1] New `packages/generacy/src/cli/commands/cluster/__tests__/llm-gateway.test.ts`:
   resolver precedence table (flag/env/persisted/default); token format `^sk-bf-[0-9a-f]{48}$`;
   generate-once (re-scaffold reuses); disabled re-scaffold preserves an existing token.
-- [ ] T019 [US3] In `llm-gateway.test.ts`: `config.json` created from example once and never
+- [X] T019 [US3] In `llm-gateway.test.ts`: `config.json` created from example once and never
   overwritten (mirror `scaffoldClaudeSeed` tests); `.env.local` create-if-absent; nothing emitted
   when disabled (FR-006, FR-007, FR-008).
-- [ ] T020 [US1] Toggle pass-through test in
+- [X] T020 [US1] Toggle pass-through test in
   `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts`: the resolved toggle
   reaches the compose/env scaffolds.
 
 ## Phase 6: Release hygiene + verification
 
-- [ ] T021 [P] Add `.changeset/1202-llm-gateway-scaffolding.md` (repo root): `@generacy-ai/generacy`
+- [X] T021 [P] Add `.changeset/1202-llm-gateway-scaffolding.md` (repo root): `@generacy-ai/generacy`
   **minor** (new capability). Newly-added file (CI gate greps `--diff-filter=A`). Required — the PR
   lands red without it.
-- [ ] T022 Run `pnpm -r build` then package tests (`pnpm --filter @generacy-ai/generacy test`) green
+- [X] T022 Run `pnpm -r build` then package tests (`pnpm --filter @generacy-ai/generacy test`) green
   (SC-005). Rebuild dependency packages before typechecking dependents (CLAUDE.md).
-- [ ] T023 SC-003 compose validity: run `docker compose config` on the gateway-enabled emitted
+- [X] T023 SC-003 compose validity: run `docker compose config` on the gateway-enabled emitted
   output and confirm it succeeds; record the result in the PR.
 - [ ] T024 [US1] PR checklist: include the emitted-stanza-vs-tetrad-compose diff documenting the two
   recorded deltas (network `cluster-network`; token via `.env` interpolation) — plan Sequencing

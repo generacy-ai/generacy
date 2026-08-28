@@ -14,6 +14,7 @@ import {
   scaffoldDockerCompose,
   scaffoldEnvFile,
 } from '../cluster/scaffolder.js';
+import { resolveLlmGatewayToggle } from '../cluster/llm-gateway.js';
 
 /**
  * Generate bootstrap bundle files in a temp directory.
@@ -24,10 +25,18 @@ export function scaffoldBundle(
   activation: ActivationResult,
   cloudUrl: string,
   displayName?: string,
+  llmGatewayFlag?: boolean,
 ): string {
   const tmpDir = mkdtempSync(join(tmpdir(), 'generacy-deploy-'));
   const generacyDir = join(tmpDir, '.generacy');
   mkdirSync(generacyDir);
+
+  // deploy always scaffolds a fresh temp bundle, so there is no persisted
+  // cluster.yaml to default from — the flag and env var are the only inputs.
+  const llmGateway = resolveLlmGatewayToggle({
+    flag: llmGatewayFlag,
+    env: process.env['GENERACY_LLM_GATEWAY_ENABLED'],
+  });
 
   scaffoldClusterJson(generacyDir, {
     cluster_id: activation.clusterId,
@@ -41,6 +50,7 @@ export function scaffoldBundle(
     channel: 'stable',
     workers: 1,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
+    llmGateway,
   });
 
   scaffoldDockerCompose(generacyDir, {
@@ -56,6 +66,7 @@ export function scaffoldBundle(
     workers: 1,
     repoUrl: config.repos?.primary,
     claudeConfigMode: 'volume',
+    llmGateway,
   });
 
   scaffoldEnvFile(generacyDir, {
@@ -70,6 +81,7 @@ export function scaffoldBundle(
     channel: 'stable',
     workers: 1,
     preApprovedDeviceCode: config.preApprovedDeviceCode,
+    llmGateway,
   });
 
   return tmpDir;

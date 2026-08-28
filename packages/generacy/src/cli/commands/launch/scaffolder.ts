@@ -13,6 +13,7 @@ import {
   scaffoldDockerCompose,
   scaffoldEnvFile,
 } from '../cluster/scaffolder.js';
+import { resolveLlmGatewayToggle } from '../cluster/llm-gateway.js';
 
 /**
  * Pre-create ~/.claude.json if it doesn't exist.
@@ -54,6 +55,7 @@ export function scaffoldProject(
   config: LaunchConfig,
   workers: number,
   displayName?: string,
+  llmGatewayFlag?: boolean,
 ): void {
   mkdirSync(projectDir, { recursive: true });
 
@@ -68,6 +70,14 @@ export function scaffoldProject(
 
   mkdirSync(generacyDir);
 
+  // launch scaffolds a fresh .generacy/ (it throws above if one exists), so
+  // there is no persisted cluster.yaml to default from — the flag and env var
+  // are the only inputs here.
+  const llmGateway = resolveLlmGatewayToggle({
+    flag: llmGatewayFlag,
+    env: process.env['GENERACY_LLM_GATEWAY_ENABLED'],
+  });
+
   scaffoldClusterJson(generacyDir, {
     cluster_id: config.clusterId,
     project_id: config.projectId,
@@ -80,6 +90,7 @@ export function scaffoldProject(
     channel: config.channel ?? 'preview',
     workers,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
+    llmGateway,
   });
 
   scaffoldDockerCompose(generacyDir, {
@@ -94,6 +105,7 @@ export function scaffoldProject(
     workers,
     repoUrl: config.repos?.primary,
     claudeConfigMode: 'bind',
+    llmGateway,
   });
 
   scaffoldEnvFile(generacyDir, {
@@ -111,6 +123,7 @@ export function scaffoldProject(
       ? { apiUrl: config.cloud.apiUrl, relayUrl: config.cloud.relayUrl }
       : undefined,
     preApprovedDeviceCode: config.preApprovedDeviceCode,
+    llmGateway,
   });
 
   preCreateClaudeJson();

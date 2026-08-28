@@ -532,6 +532,81 @@ describe('scaffoldDockerCompose', () => {
   });
 });
 
+describe('scaffoldDockerCompose llm-gateway', () => {
+  let dir: string;
+
+  const baseInput = {
+    imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+    clusterId: 'clust_abc',
+    projectId: 'proj_def',
+    projectName: 'todo-list-example',
+    cloudUrl: 'https://api.generacy.ai',
+    variant: 'cluster-base' as const,
+    orgId: 'org_xyz',
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'scaffolder-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // SC-002: llmGateway undefined and false must produce byte-identical compose.
+  it('disabled path: undefined and false compose are byte-identical', () => {
+    const dirUndefined = mkdtempSync(join(tmpdir(), 'scaffolder-undef-'));
+    const dirFalse = mkdtempSync(join(tmpdir(), 'scaffolder-false-'));
+    try {
+      scaffoldDockerCompose(dirUndefined, baseInput);
+      scaffoldDockerCompose(dirFalse, { ...baseInput, llmGateway: false });
+      const a = readFileSync(join(dirUndefined, 'docker-compose.yml'), 'utf-8');
+      const b = readFileSync(join(dirFalse, 'docker-compose.yml'), 'utf-8');
+      expect(a).toBe(b);
+      expect(a).not.toContain('llm-gateway');
+    } finally {
+      rmSync(dirUndefined, { recursive: true, force: true });
+      rmSync(dirFalse, { recursive: true, force: true });
+    }
+  });
+
+  // SC-001: enabled compose gains the service, env wiring, and volume.
+  it('enabled path: emits the llm-gateway service, env wiring, and volume', () => {
+    scaffoldDockerCompose(dir, { ...baseInput, llmGateway: true });
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    const gw = parsed.services['llm-gateway'];
+    expect(gw.image).toBe('maximhq/bifrost:v2.0.0');
+    expect(gw.restart).toBe('unless-stopped');
+    expect(gw.environment).toContain('GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}');
+    expect(gw.env_file).toEqual([{ path: '.env.local', required: false }]);
+    expect(gw.volumes).toContain('llm-gateway-data:/app/data');
+    expect(gw.volumes).toContain('./llm-gateway/config.json:/app/data/config.json:ro');
+    expect(gw.networks).toEqual(['cluster-network']);
+    expect(gw.healthcheck.test).toEqual([
+      'CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/health',
+    ]);
+    expect(gw.healthcheck.start_period).toBe('45s');
+    expect(gw).not.toHaveProperty('ports');
+
+    for (const svc of ['orchestrator', 'worker']) {
+      expect(parsed.services[svc].environment).toContain(
+        'GENERACY_LLM_GATEWAY_URL=http://llm-gateway:8080/anthropic',
+      );
+      expect(parsed.services[svc].environment).toContain(
+        'GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}',
+      );
+    }
+
+    expect(parsed.volumes).toHaveProperty('llm-gateway-data');
+  });
+
+  it('enabled compose is snapshot-stable', () => {
+    scaffoldDockerCompose(dir, { ...baseInput, llmGateway: true });
+    expect(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8')).toMatchSnapshot();
+  });
+});
+
 describe('scaffoldEnvFile', () => {
   let dir: string;
 
@@ -541,6 +616,31 @@ describe('scaffoldEnvFile', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  // SC-002: disabled .env must be byte-identical whether llmGateway is
+  // undefined or false, and identical to the current output (no token line).
+  it('disabled path: undefined and false .env are byte-identical', () => {
+    const dirUndefined = mkdtempSync(join(tmpdir(), 'env-undef-'));
+    const dirFalse = mkdtempSync(join(tmpdir(), 'env-false-'));
+    try {
+      const input = {
+        clusterId: 'c1',
+        projectId: 'p1',
+        orgId: 'o1',
+        cloudUrl: 'https://api.generacy.ai',
+        projectName: 'test',
+      };
+      scaffoldEnvFile(dirUndefined, input);
+      scaffoldEnvFile(dirFalse, { ...input, llmGateway: false });
+      const a = readFileSync(join(dirUndefined, '.env'), 'utf-8');
+      const b = readFileSync(join(dirFalse, '.env'), 'utf-8');
+      expect(a).toBe(b);
+      expect(a).not.toContain('GENERACY_LLM_GATEWAY_TOKEN');
+    } finally {
+      rmSync(dirUndefined, { recursive: true, force: true });
+      rmSync(dirFalse, { recursive: true, force: true });
+    }
   });
 
   it('writes .env with all expected variables', () => {
