@@ -24,6 +24,13 @@ orchestrator:
           plan:
             model: claude-fable-5
             effort: high
+          # #1214: the tasks phase died with autocompact thrashing on the 200K
+          # window (static preamble alone was 151K tokens). CLAUDE.md is trimmed
+          # now, but pin a 1M-context model here so this phase is not sensitive
+          # to future instruction-file growth.
+          tasks:
+            model: "claude-opus-5[1m]"
+            effort: high
 cockpit:
   auto:
     agents:
