@@ -14,8 +14,8 @@ regression it targets stayed live.
 
 The prompt instruction that causes the bloat is being removed in a sibling agency issue. This
 issue is the **engine-side belt-and-suspenders**: even if a prompt regression re-introduces the
-"Update agent context files" instruction, the plan-phase commit must not carry those files, and
-the drift guard must watch something real.
+"Update agent context files" instruction, spec-stage phase commits (`specify`, `clarify`,
+`tasks`, `plan`) must not carry those files, and the drift guard must watch something real.
 
 ## Problem
 
@@ -52,7 +52,8 @@ files) through a worker-produced plan commit.
   untracked agent-context files deleted).
 - [ ] A warning is logged naming the reverted paths.
 - [ ] An implement-phase commit with a dirty `CLAUDE.md` is unchanged (CLAUDE.md still
-  committed) — the revert is scoped to `plan` only.
+  committed) — the revert is scoped to spec-stage phases (`specify`, `clarify`, `tasks`,
+  `plan`); implement-and-later phases are preserved.
 
 ### US2: The drift guard watches a path the worker actually executes
 
@@ -75,11 +76,11 @@ safety.
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | At the plan-phase completion commit, exclude paths matching `EXCLUDED_EXACT_PATHS` from `toStage`. | P1 | Reuse `EXCLUDED_EXACT_PATHS`; do not duplicate the list. |
+| FR-001 | At spec-stage phase completion commits (`specify`, `clarify`, `tasks`, `plan`), exclude paths matching `EXCLUDED_EXACT_PATHS` from `toStage`. | P1 | Reuse `EXCLUDED_EXACT_PATHS`; do not duplicate the list. If the exclusion empties the commit entirely, proceed as a normal `no-changes` outcome (warning still logged) — do not treat as an error (Q3). |
 | FR-002 | Revert the excluded paths in the working tree — `git checkout -- <path>` for tracked files, delete for untracked files — so they don't leak into a later phase's commit or trip dirty-tree checks. | P1 | |
 | FR-003 | Log a warning naming the reverted paths. | P2 | |
-| FR-004 | Scope the exclude-and-revert behavior to the `plan` phase only. | P1 | Implement-phase CLAUDE.md edits can be legitimate durable guidance. |
-| FR-005 | Remove the dead `buildPlanPrompt` grep from `managed-file-disjointness.test.ts` (or repoint it at a path the worker actually executes). | P1 | |
+| FR-004 | Scope the exclude-and-revert behavior to the spec-stage phases (`specify`, `clarify`, `tasks`, `plan`); implement-and-later phases are preserved. | P1 | Implement-phase CLAUDE.md edits can be legitimate durable guidance (Q1). The guard is a staging filter only — files inside commits the agent made directly are out of scope; document that limitation in a code comment beside the filter (Q2). |
+| FR-005 | Remove the dead `buildPlanPrompt` grep from `managed-file-disjointness.test.ts`. Do not add a replacement static guard — the behavioral pr-manager unit tests (SC-001) are the engine-side enforcement (Q4). | P1 | |
 | FR-006 | Update the test file header comment and `specs/899-found-during-cockpit-v1/contracts/merge-tree-invariant.md` to document where the prompt-side and engine-side invariants now live. | P2 | |
 | FR-007 | Retain Layer 2 (merge-tree simulation) of the #899 guard. | P1 | |
 | FR-008 | Update the `CLAUDE.md` pointer paragraph (`CLAUDE.md:5-11`) and `docs/` if they describe the #899 guard. | P3 | |
@@ -92,7 +93,19 @@ safety.
 | SC-001 | New pr-manager unit tests | Pass | Plan-phase revert behavior covered by tests |
 | SC-002 | Existing #1162 sidecar tests | Unchanged & passing | Test suite run |
 | SC-003 | `managed-file-disjointness.test.ts` assertions on `operations/plan.ts` | Zero | Grep the test file |
-| SC-004 | Repo-root agent-context files in a plan-phase commit | Zero | Test asserting commit contents |
+| SC-004 | Repo-root agent-context files in a spec-stage phase commit | Zero | Test asserting commit contents |
+
+## Clarifications
+
+Batch 1 (2026-08-28, answered by @christrudelpw — see `clarifications.md`):
+- **Q1**: Exclude-and-revert applies to all spec-stage phases (`specify`, `clarify`, `tasks`,
+  `plan`), not just `plan`; implement-and-later preserved.
+- **Q2**: Staging filter only; agent-made direct commits are out of scope (limitation
+  documented in a code comment).
+- **Q3**: An exclusion-emptied commit proceeds as a normal `no-changes` outcome with the
+  warning log; not an error.
+- **Q4**: Delete the dead grep with no replacement static guard; behavioral pr-manager unit
+  tests are the engine-side enforcement.
 
 ## Assumptions
 
@@ -105,9 +118,15 @@ safety.
 ## Out of Scope
 
 - Removing the prompt-side instruction from the agency `/plan` command (handled in the sibling
-  agency issue).
-- Reverting or flagging agent-context deltas in non-plan phases (review, validate, PR-prep,
-  ready-for-review, implement) — implement-phase edits are intentionally preserved.
+  agency issue, agency#511).
+- Reverting or flagging agent-context deltas in implement-and-later phases (implement, review,
+  validate, PR-prep, ready-for-review) — implement-phase edits are intentionally preserved.
+- Agent-made direct commits: if a spec-stage agent runs `git commit` itself and includes an
+  agent-context file, the staging filter does not inspect or rewrite that commit. Commit
+  rewriting is materially riskier than declining to stage; the limitation is documented in a
+  code comment beside the filter.
+- A new static Layer-1 guard over `pr-manager.ts` — behavioral unit tests are the engine-side
+  enforcement; the prompt-side pin lives in agency.
 
 ---
 
