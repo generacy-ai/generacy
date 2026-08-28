@@ -8,6 +8,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
 import { getLogger } from '../../utils/logger.js';
+import {
+  generateGatewayToken,
+  readExistingGatewayToken,
+  scaffoldLlmGatewayFiles,
+} from './llm-gateway.js';
 
 export interface ScaffoldClusterJsonInput {
   cluster_id: string;
@@ -21,6 +26,7 @@ export interface ScaffoldClusterYamlInput {
   channel?: 'stable' | 'preview';
   workers?: number;
   variant: 'cluster-base' | 'cluster-microservices';
+  llmGateway?: boolean;
 }
 
 export interface ScaffoldComposeInput {
@@ -36,6 +42,7 @@ export interface ScaffoldComposeInput {
   channel?: 'stable' | 'preview';
   repoUrl?: string;
   claudeConfigMode?: 'bind' | 'volume';
+  llmGateway?: boolean;
 }
 
 export interface ScaffoldEnvInput {
@@ -52,6 +59,7 @@ export interface ScaffoldEnvInput {
   orchestratorPort?: number;
   cloud?: { apiUrl: string; relayUrl: string };
   preApprovedDeviceCode?: string;
+  llmGateway?: boolean;
 }
 
 /**
@@ -111,11 +119,16 @@ export function scaffoldClusterJson(dir: string, input: ScaffoldClusterJsonInput
  */
 export function scaffoldClusterYaml(dir: string, input: ScaffoldClusterYamlInput): void {
   mkdirSync(dir, { recursive: true });
-  const content = {
+  const content: Record<string, unknown> = {
     channel: input.channel ?? 'stable',
     workers: input.workers ?? 1,
     variant: input.variant,
   };
+  // Persist only when enabled — omitting the key keeps existing cluster.yaml
+  // output (and its golden tests) byte-identical.
+  if (input.llmGateway) {
+    content.llmGateway = true;
+  }
   writeFileSync(join(dir, 'cluster.yaml'), stringify(content), 'utf-8');
 }
 
@@ -309,9 +322,52 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
     },
   };
 
+  // Optional llm-gateway (Bifrost) sidecar. All emission is strictly behind the
+  // boolean so the disabled path stays byte-identical (SC-002). Ported from
+  // tetrad-development#109; deltas (cluster-network, token via .env
+  // interpolation) recorded in contracts/llm-gateway-compose.yml.
+  if (input.llmGateway) {
+    const services = compose.services as Record<string, { environment: string[] }>;
+    const gatewayEnv = [
+      'GENERACY_LLM_GATEWAY_URL=http://llm-gateway:8080/anthropic',
+      'GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}',
+    ];
+    services['orchestrator']!.environment.push(...gatewayEnv);
+    services['worker']!.environment.push(...gatewayEnv);
+
+    (compose.services as Record<string, unknown>)['llm-gateway'] = {
+      image: 'maximhq/bifrost:v2.0.0',
+      restart: 'unless-stopped',
+      stop_grace_period: '10s',
+      environment: ['GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}'],
+      env_file: [{ path: '.env.local', required: false }],
+      volumes: [
+        'llm-gateway-data:/app/data',
+        './llm-gateway/config.json:/app/data/config.json:ro',
+      ],
+      healthcheck: {
+        test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/health'],
+        interval: '30s',
+        timeout: '10s',
+        retries: 3,
+        start_period: '45s',
+      },
+      networks: ['cluster-network'],
+    };
+
+    (compose.volumes as Record<string, unknown>)['llm-gateway-data'] = null;
+  }
+
   writeFileSync(join(dir, 'docker-compose.yml'), stringify(compose), 'utf-8');
 
   scaffoldClaudeSeed(dir, claudeConfigMode === 'bind');
+
+  // Gateway config + secrets files (config.example.json, config.json,
+  // .gitignore, .env.local). Enabled path only; create-if-absent for the
+  // operator-editable ones (T009-T011).
+  if (input.llmGateway) {
+    scaffoldLlmGatewayFiles(dir);
+  }
 }
 
 /**
@@ -453,5 +509,25 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
       : []),
   ];
 
-  writeFileSync(join(dir, '.env'), lines.join('\n'), 'utf-8');
+  // LLM gateway token (generate-once). An existing token is always preserved
+  // verbatim — even on a disabled re-scaffold (FR-008) — so re-enabling reuses
+  // it. When enabled and absent, generate one. When disabled and absent, emit
+  // nothing so the disabled path stays byte-identical (SC-002).
+  const envPath = join(dir, '.env');
+  const existingToken = existsSync(envPath)
+    ? readExistingGatewayToken(readFileSync(envPath, 'utf-8'))
+    : undefined;
+  const gatewayToken = existingToken ?? (input.llmGateway ? generateGatewayToken() : undefined);
+  if (gatewayToken) {
+    lines.push(
+      '# LLM gateway (Bifrost sidecar)',
+      '# Cluster-local token Claude Code presents to the gateway; generated once, never',
+      '# rotated by the scaffolder. The sk-bf- prefix is REQUIRED — Bifrost 401s',
+      '# unprefixed Bearer tokens.',
+      `GENERACY_LLM_GATEWAY_TOKEN=${gatewayToken}`,
+      '',
+    );
+  }
+
+  writeFileSync(envPath, lines.join('\n'), 'utf-8');
 }

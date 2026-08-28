@@ -1,0 +1,60 @@
+# Contract: compose additions when llmGateway is enabled.
+# Ported from tetrad-development#109 (.devcontainer/generacy/docker-compose.yml:180-218).
+# Deltas vs tetrad (must be called out in the PR stanza diff):
+#   1. networks: cluster-network (tetrad: generacy-network)
+#   2. GENERACY_LLM_GATEWAY_TOKEN injected via `environment` interpolated from .env
+#      (tetrad: sourced from .env.local) — clarify Q2.
+#   3. GENERACY_LLM_GATEWAY_URL/TOKEN added to orchestrator+worker `environment`
+#      (tetrad: URL lives in committed .env) — FR-003.
+
+services:
+  # --- appended to the existing orchestrator service `environment` list ---
+  orchestrator:
+    environment:
+      - GENERACY_LLM_GATEWAY_URL=http://llm-gateway:8080/anthropic
+      - GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}
+
+  # --- appended to the existing worker service `environment` list ---
+  worker:
+    environment:
+      - GENERACY_LLM_GATEWAY_URL=http://llm-gateway:8080/anthropic
+      - GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}
+
+  # --- new service ---
+  llm-gateway:
+    # Pinned deliberately; bump after re-checking the config schema, which moves
+    # between majors (v2.0.0 added source_of_truth / governance.auth_config).
+    image: maximhq/bifrost:v2.0.0
+    restart: unless-stopped
+    stop_grace_period: 10s
+    environment:
+      # Interpolated from .generacy/.env (scaffolder-generated, sk-bf- prefixed).
+      - GENERACY_LLM_GATEWAY_TOKEN=${GENERACY_LLM_GATEWAY_TOKEN}
+    # Provider API keys live in .env.local (operator-owned, gitignored).
+    env_file:
+      - path: .env.local
+        required: false
+    volumes:
+      # Bifrost refuses to start without a writable APP_DIR (config.db, logs.db).
+      # Named volume inherits the image's 1000:0 ownership; a host bind would not.
+      - llm-gateway-data:/app/data
+      # Provider + virtual-key config, read-only. Holds only env.<VAR> references,
+      # never key material. Merged into config.db on every boot (edit-and-restart
+      # to add a provider or rotate the token). Removals do NOT propagate; do NOT
+      # set source_of_truth: config.json (v2.0.0 crash-loops on unresolved env refs).
+      - ./llm-gateway/config.json:/app/data/config.json:ro
+    healthcheck:
+      # wget ships in the image. Bootstrap runs DB migrations + model-catalog
+      # sync (~10s), hence start_period.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    # Cluster network only, no host port (management UI shares 8080).
+    networks:
+      - cluster-network
+
+# --- appended to the existing top-level volumes map ---
+volumes:
+  llm-gateway-data:

@@ -347,4 +347,42 @@ describe('scaffoldProject', () => {
       /already contains a \.generacy\/ folder/,
     );
   });
+
+  // -------------------------------------------------------------------------
+  // llm-gateway toggle pass-through (T020)
+  // -------------------------------------------------------------------------
+
+  it('the --llm-gateway flag reaches the compose, env, and cluster.yaml scaffolds', () => {
+    const projectDir = join(tempDir, 'gateway-project');
+    scaffoldProject(projectDir, mockConfig, 1, undefined, true);
+
+    const generacyDir = join(projectDir, '.generacy');
+    const compose = parse(readFileSync(join(generacyDir, 'docker-compose.yml'), 'utf-8'));
+    expect(compose.services).toHaveProperty('llm-gateway');
+    expect(compose.volumes).toHaveProperty('llm-gateway-data');
+
+    const env = readFileSync(join(generacyDir, '.env'), 'utf-8');
+    expect(env).toMatch(/GENERACY_LLM_GATEWAY_TOKEN=sk-bf-[0-9a-f]{48}/);
+
+    const clusterYaml = parse(readFileSync(join(generacyDir, 'cluster.yaml'), 'utf-8'));
+    expect(clusterYaml.llmGateway).toBe(true);
+
+    expect(existsSync(join(generacyDir, 'llm-gateway', 'config.json'))).toBe(true);
+    expect(existsSync(join(generacyDir, '.env.local'))).toBe(true);
+  });
+
+  it('without the flag, no gateway artifacts are emitted', () => {
+    const projectDir = join(tempDir, 'no-gateway-project');
+    scaffoldProject(projectDir, mockConfig, 1);
+
+    const generacyDir = join(projectDir, '.generacy');
+    const compose = parse(readFileSync(join(generacyDir, 'docker-compose.yml'), 'utf-8'));
+    expect(compose.services).not.toHaveProperty('llm-gateway');
+
+    const clusterYaml = parse(readFileSync(join(generacyDir, 'cluster.yaml'), 'utf-8'));
+    expect(clusterYaml).not.toHaveProperty('llmGateway');
+
+    expect(existsSync(join(generacyDir, 'llm-gateway'))).toBe(false);
+    expect(existsSync(join(generacyDir, '.env.local'))).toBe(false);
+  });
 });

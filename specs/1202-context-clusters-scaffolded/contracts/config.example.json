@@ -1,0 +1,68 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "client": {
+    "drop_excess_requests": false,
+    "enforce_auth_on_inference": true,
+    "enable_logging": true,
+    "log_retention_days": 7
+  },
+  "providers": {
+    "openrouter": {
+      "keys": [
+        {
+          "name": "openrouter",
+          "value": "env.OPENROUTER_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ]
+    },
+    "openai": {
+      "keys": [
+        {
+          "name": "openai",
+          "value": "env.OPENAI_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ]
+    },
+    "featherless": {
+      "keys": [
+        {
+          "name": "featherless",
+          "value": "env.FEATHERLESS_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://api.featherless.ai"
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "list_models": false,
+          "chat_completion": true,
+          "chat_completion_stream": true
+        }
+      }
+    }
+  },
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "generacy-cluster",
+        "name": "generacy-cluster",
+        "description": "Cluster-local inbound key. Claude Code presents it as ANTHROPIC_AUTH_TOKEN (Authorization: Bearer). The value comes from GENERACY_LLM_GATEWAY_TOKEN in the cluster .env and MUST start with sk-bf- — Bifrost only recognises non-prefixed virtual keys on the x-bf-vk header, which Claude Code never sends. Note: count_tokens is not supported by non-Anthropic upstreams — Claude Code falls back to client-side counting; custom providers scope acceptance via custom_provider_config.allowed_requests.",
+        "value": "env.GENERACY_LLM_GATEWAY_TOKEN",
+        "is_active": true,
+        "provider_configs": [
+          { "provider": "openrouter", "allowed_models": ["*"], "key_ids": ["*"] },
+          { "provider": "openai", "allowed_models": ["*"], "key_ids": ["*"] },
+          { "provider": "featherless", "allowed_models": ["*"], "key_ids": ["*"] }
+        ]
+      }
+    ]
+  }
+}

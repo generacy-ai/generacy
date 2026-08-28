@@ -70,7 +70,7 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
 
   // 7. Scaffold bootstrap bundle
   logger.info('Generating bootstrap bundle...');
-  const bundleDir = scaffoldBundle(launchConfig, activation, cloudUrl, displayName);
+  const bundleDir = scaffoldBundle(launchConfig, activation, cloudUrl, displayName, options.llmGateway);
 
   // 8. Transfer and start (with registry credentials if present)
   const registryCredentials = launchConfig.registryCredentials;
@@ -149,13 +149,15 @@ export function deployCommand(): Command {
     .argument('<target>', 'SSH target: ssh://[user@]host[:port][/path]')
     .option('--timeout <seconds>', 'Timeout for cluster registration in seconds', String(DEFAULT_TIMEOUT_S))
     .option('--name <name>', 'Cluster display name (normalized; falls back to cluster id when omitted)')
+    .option('--llm-gateway', 'Scaffold an optional LLM gateway (Bifrost) sidecar')
+    .option('--no-llm-gateway', 'Disable the LLM gateway sidecar (overrides a persisted toggle)')
     .addOption(
       new Option('--api-url <url>', 'Cloud API URL (overrides GENERACY_API_URL env var)')
     )
     .addOption(
       new Option('--cloud-url <url>', '[deprecated] Use --api-url instead').hideHelp()
     )
-    .action(async (target: string, opts: { timeout?: string; apiUrl?: string; cloudUrl?: string; name?: string }) => {
+    .action(async (target: string, opts: { timeout?: string; apiUrl?: string; cloudUrl?: string; name?: string; llmGateway?: boolean }) => {
       try {
         if (opts.cloudUrl && !opts.apiUrl) {
           console.warn('[deprecated] --cloud-url is deprecated, use --api-url instead');
@@ -165,6 +167,7 @@ export function deployCommand(): Command {
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : DEFAULT_TIMEOUT_S,
           cloudUrl: opts.apiUrl ?? opts.cloudUrl,
           name: opts.name,
+          llmGateway: opts.llmGateway,
         });
 
         console.log(`\nCluster deployed successfully!`);

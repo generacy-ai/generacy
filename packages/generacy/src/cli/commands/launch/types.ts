@@ -14,6 +14,7 @@ export interface LaunchOptions {
   logLevel?: string;
   workers?: number;
   name?: string;
+  llmGateway?: boolean;
 }
 
 /**
