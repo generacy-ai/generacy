@@ -5,7 +5,7 @@ orchestrator:
   agents:
     default:
       provider: claude-code
-      model: claude-opus-5
+      model: claude-opus-4-8
       effort: high
     workflows:
       speckit-feature:
@@ -24,19 +24,12 @@ orchestrator:
           plan:
             model: claude-fable-5
             effort: high
-          # #1214: the tasks phase died with autocompact thrashing on the 200K
-          # window (static preamble alone was 151K tokens). CLAUDE.md is trimmed
-          # now, but pin a 1M-context model here so this phase is not sensitive
-          # to future instruction-file growth.
-          tasks:
-            model: "claude-opus-5[1m]"
-            effort: high
 cockpit:
   auto:
     agents:
       default:   { model: claude-sonnet-5 }               # fallback for any role not listed
       clarifier: { model: claude-fable-5,  effort: high }  # D.1 clarification drafting
-      reviewer:  { model: claude-opus-5,  effort: high }  # D.2 artifact + D.3 PR review
+      reviewer:  { model: claude-opus-4-8,  effort: high }  # D.2 artifact + D.3 PR review
       validator: { model: claude-sonnet-5 }                # D.4 manual-validation summary
-      fixer:     { model: claude-opus-5, effort: high } # D.6 bounded red-checks fixer
-      diagnoser: { model: claude-opus-5, effort: high }               # D.7/D.11 diagnosis
+      fixer:     { model: claude-opus-4-8, effort: high } # D.6 bounded red-checks fixer
+      diagnoser: { model: claude-opus-4-8 }               # D.7/D.11 diagnosis
