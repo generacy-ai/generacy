@@ -59,6 +59,8 @@ export function launchCommand(): Command {
       new Option('--cloud-url <url>', '[deprecated] Use --api-url instead').hideHelp()
     )
     .option('--workers <N>', 'Number of workers to run on this host', parseWorkersFlag)
+    .option('--llm-gateway', 'Scaffold an optional LLM gateway (Bifrost) sidecar')
+    .option('--no-llm-gateway', 'Disable the LLM gateway sidecar (overrides a persisted toggle)')
     .action(async (_opts, cmd) => {
       await launchAction(cmd.opts() as LaunchOptions);
     });
@@ -175,7 +177,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
 
   // ── 6. Scaffold project directory ───────────────────────────────────
   try {
-    scaffoldProject(projectDir, config, workerCount, displayName);
+    scaffoldProject(projectDir, config, workerCount, displayName, opts.llmGateway);
     p.log.success('Project directory created');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

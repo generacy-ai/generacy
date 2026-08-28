@@ -10,6 +10,7 @@ export interface DeployOptions {
   timeout?: number;
   cloudUrl?: string;
   name?: string;
+  llmGateway?: boolean;
 }
 
 export interface DeployResult {
