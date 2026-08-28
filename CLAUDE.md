@@ -9,6 +9,9 @@ plugins.
 
 Per-feature technology, dependency, and integration notes live in
 `specs/<feature>/stack.md` on each feature branch. `/plan` does not update this file.
+Spec-stage phase commits (`specify`/`clarify`/`plan`/`tasks`) exclude and revert repo-root
+agent-context files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`)
+so a prompt regression can never re-bloat them through a worker commit (#1218).
 
 ## Development
 

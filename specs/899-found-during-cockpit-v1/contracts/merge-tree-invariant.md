@@ -9,15 +9,31 @@
 
 This is the T-S4 regression scenario, inverted into a machine-checkable assertion.
 
-## Layer 1: static-grep drift guard
+## Layer 1: static-grep drift guard — REMOVED (#1218)
 
-**Purpose**: catch attempts to add a local shim in this repo that would re-manufacture the conflict class.
+The former Layer 1 static-greped `operations/plan.ts`'s `buildPlanPrompt()` for `CLAUDE.md` /
+`update_agent`. It was removed in #1218 because **cluster workers never execute that wrapper** —
+they run the bare `/plan` slash command installed from agency (`PHASE_TO_COMMAND`,
+`packages/generacy-plugin-claude-code/src/launch/constants.ts`). The grep asserted on dead code,
+so it stayed green for months while the regression it targeted (a `/plan` prompt still saying
+"Update agent context files … Updates CLAUDE.md") ran free. Per #1218 clarification Q4 it was
+deleted with **no replacement static guard** — a behavioral test exercising the real commit path
+is strictly stronger evidence than a grep aimed at the wrong file.
 
-**Assertion**: `packages/workflow-engine/src/actions/builtin/speckit/operations/plan.ts` — specifically its `buildPlanPrompt()` function — contains **no** occurrence of the substrings `CLAUDE.md` or `update_agent` (case-insensitive).
+The invariant now lives in two real enforcement sites:
 
-**Rationale**: The write to `CLAUDE.md` originates upstream (verified in [research.md](../research.md) D3). If someone adds a step to this repo's `plan.ts` prompt that instructs a CLAUDE.md write, the fix regresses locally. Static grep is the cheapest possible detector.
+- **Prompt-side** — pinned in agency (`agency-plugin-spec-kit` tests, sibling issue agency#511):
+  the `/plan` command markdown must not instruct an agent-context-file write.
+- **Engine-side (belt-and-suspenders)** — `PrManager.commitAndPush`
+  (`packages/orchestrator/src/worker/pr-manager.ts`) excludes the four repo-root agent-context
+  files (`EXCLUDED_EXACT_PATHS`) from spec-stage phase commits (`specify`, `clarify`, `plan`,
+  `tasks`) and reverts them in the working tree. Covered by
+  `packages/orchestrator/src/worker/__tests__/pr-manager.agent-context-revert.test.ts` and the
+  client half by
+  `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.revert-paths.test.ts`.
 
-**What this does NOT assert**: it does not assert anything about the upstream `/plan` skill (`~/.claude/commands/plan.md`) or the upstream `update_agent` tool. Those are covered by the companion PR's own tests (see [companion-issue.md](./companion-issue.md)).
+Even if a prompt regression re-introduces the write, the engine-side guard keeps those files out
+of a worker-produced spec-stage commit.
 
 ## Layer 2: merge-tree simulation
 
@@ -61,10 +77,11 @@ This is the T-S4 regression scenario, inverted into a machine-checkable assertio
 
 ## Failure diagnosis
 
-If Layer 1 fails:
-- Someone added a `CLAUDE.md` or `update_agent` reference to `plan.ts`'s prompt code.
-- Likely a well-meaning attempt to bridge the upstream gap manually (Q3→A explicitly rejects this).
-- Fix: revert the `plan.ts` change; let upstream ship the real fix.
+If the engine-side guard regresses (an agent-context file lands in a spec-stage PR):
+- Check whether the *agent* committed the file directly (`git log --name-only`) — that path is
+  out of scope for the staging filter by design (#1218 Q2); the prompt-side fix is agency#511.
+- Otherwise the `PrManager.commitAndPush` exclude-and-revert has regressed — see
+  `pr-manager.agent-context-revert.test.ts`.
 
 If Layer 2 fails with `CONFLICT` in the output:
 - A path other than `specs/<feature>/` is being written by both branches.

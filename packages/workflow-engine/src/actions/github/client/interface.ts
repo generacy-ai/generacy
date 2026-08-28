@@ -466,6 +466,14 @@ export interface GitHubClient {
   discardWorkingTreeChanges(excludePaths?: string[]): Promise<void>;
 
   /**
+   * Revert the given repo-root-relative paths in the working tree and index:
+   * tracked paths are restored to HEAD content; untracked paths (including
+   * staged-new paths, which are unstaged first) are deleted. Paths that are
+   * already clean are no-ops. An empty array is a no-op.
+   */
+  revertPaths(paths: string[]): Promise<void>;
+
+  /**
    * Get list of files with merge conflicts
    */
   getConflictedFiles(): Promise<string[]>;

@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Baseline build so cross-package imports resolve: `pnpm install` then
+- [X] T001 Baseline build so cross-package imports resolve: `pnpm install` then
   `pnpm --filter @generacy-ai/workflow-engine build` (orchestrator resolves `GitHubClient`
   from workflow-engine's built `dist/`; rebuild after every interface change — see
   quickstart.md).
@@ -18,29 +18,29 @@
 ## Phase 2: workflow-engine client — `revertPaths` (US1)
 <!-- Blocks Phase 3: pr-manager calls this method. -->
 
-- [ ] T002 [US1] Add `revertPaths(paths: string[]): Promise<void>` declaration to the
+- [X] T002 [US1] Add `revertPaths(paths: string[]): Promise<void>` declaration to the
   `GitHubClient` interface in
   `packages/workflow-engine/src/actions/github/client/interface.ts`, with the doc comment from
   data-model.md (tracked → restore to HEAD; untracked/staged-new → delete; empty array is a
   no-op). Confirm the interface is re-exported from the package public `index.ts` (drives the
   `minor` bump).
-- [ ] T003 [US1] Implement `revertPaths` in `GhCliGitHubClient`
+- [X] T003 [US1] Implement `revertPaths` in `GhCliGitHubClient`
   (`packages/workflow-engine/src/actions/github/client/gh-cli.ts`) following research.md D5:
   (1) return early on empty; (2) `git reset -q HEAD -- <paths>`; (3) partition via
   `git ls-files -- <paths>`; (4) `git checkout -- <tracked>`; (5) `rm -f` untracked via
   `node:fs/promises`. Throws on git failure (caller treats as non-fatal).
-- [ ] T004 [P] [US1] NEW behavioral test
+- [X] T004 [P] [US1] NEW behavioral test
   `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.revert-paths.test.ts`
   (real temp git repo, following the Layer-2 pattern in `managed-file-disjointness.test.ts`):
   tracked-modified restored; untracked deleted; staged-new unstaged-then-deleted; mixed call;
   empty call is a no-op (SC-001 client half).
-- [ ] T005 [US1] Rebuild workflow-engine (`pnpm --filter @generacy-ai/workflow-engine build`)
+- [X] T005 [US1] Rebuild workflow-engine (`pnpm --filter @generacy-ai/workflow-engine build`)
   so the new `revertPaths` member is visible to orchestrator typechecking/tests.
 
 ## Phase 3: orchestrator pr-manager guard (US1)
 <!-- Phase boundary: Phase 2 must complete (revertPaths must exist on the client). -->
 
-- [ ] T006 [US1] Add the spec-stage exclude-and-revert guard to `commitAndPush` in
+- [X] T006 [US1] Add the spec-stage exclude-and-revert guard to `commitAndPush` in
   `packages/orchestrator/src/worker/pr-manager.ts` (plan.md sketch): derive
   `isSpecStage = PHASE_TO_STAGE[phase] !== 'implementation'` (from `worker/types.ts`); import
   `EXCLUDED_EXACT_PATHS` from `worker/product-diff.ts` (do not duplicate — FR-001); partition
@@ -49,10 +49,10 @@
   `logger.warn` naming the reverted paths (FR-003) and call `this.github.revertPaths(excluded)`
   in its own try/catch (non-fatal — FR-002, D4). An exclusion-emptied commit proceeds as a
   normal `no-changes` outcome (FR-001/Q3).
-- [ ] T007 [US1] Add the Q2 limitation comment beside the filter in `pr-manager.ts`: this is a
+- [X] T007 [US1] Add the Q2 limitation comment beside the filter in `pr-manager.ts`: this is a
   staging filter only — commits the phase agent made directly are pushed as-is; the prompt-side
   pin lives in agency (agency#511) (FR-004).
-- [ ] T008 [P] [US1] NEW test
+- [X] T008 [P] [US1] NEW test
   `packages/orchestrator/src/worker/__tests__/pr-manager.agent-context-revert.test.ts` (mock
   `GitHubClient`, same style as `pr-manager.staging-filter.test.ts`) covering plan.md test plan
   (SC-001/SC-004): plan phase dirty `CLAUDE.md` + `specs/x/stack.md` → only `stack.md`
@@ -66,7 +66,7 @@
 ## Phase 4: Dead #899 Layer-1 guard removal & documentation (US2)
 <!-- Independent of Phases 2-3; can run in parallel with them. -->
 
-- [ ] T009 [P] [US2] Remove the `Layer 1 — static-grep drift guard` describe block (the
+- [X] T009 [P] [US2] Remove the `Layer 1 — static-grep drift guard` describe block (the
   `operations/plan.ts` / `buildPlanPrompt` grep) from
   `packages/workflow-engine/src/actions/builtin/speckit/__tests__/managed-file-disjointness.test.ts`;
   retain Layer 2 (merge-tree simulation) verbatim (FR-005/FR-007). Rewrite the test file header
@@ -74,11 +74,11 @@
   tests, agency#511) and the engine-side invariant is the pr-manager revert + its behavioral
   unit tests (FR-006). Result: zero references to `operations/plan.ts` / `buildPlanPrompt`
   (SC-003).
-- [ ] T010 [P] [US2] Update
+- [X] T010 [P] [US2] Update
   `specs/899-found-during-cockpit-v1/contracts/merge-tree-invariant.md` to re-document where
   each layer of the invariant now lives (prompt-side → agency; engine-side → pr-manager revert
   + behavioral tests; Layer 2 merge-tree simulation retained) (FR-006).
-- [ ] T011 [P] [US2] Update the `CLAUDE.md` pointer paragraph (lines 5–11, "Per-feature
+- [X] T011 [P] [US2] Update the `CLAUDE.md` pointer paragraph (lines 5–11, "Per-feature
   technology notes") with a single line noting spec-stage phase commits exclude/revert repo-root
   agent-context files (FR-008; keep it one line per CLAUDE.md's own rules; no `docs/` hits per
   research.md D7).
@@ -86,10 +86,10 @@
 ## Phase 5: Verification & release plumbing
 <!-- Phase boundary: all code/test/doc edits complete. -->
 
-- [ ] T012 [P] Add NEW changeset `.changeset/1218-agent-context-guard.md` (FR-009 — CI gate):
+- [X] T012 [P] Add NEW changeset `.changeset/1218-agent-context-guard.md` (FR-009 — CI gate):
   `@generacy-ai/workflow-engine: minor` (new public `revertPaths` on `GitHubClient`),
   `@generacy-ai/orchestrator: patch` (defect fix). Body from quickstart.md.
-- [ ] T013 Run the full targeted suite (rebuild workflow-engine first): 
+- [X] T013 Run the full targeted suite (rebuild workflow-engine first): 
   `pnpm --filter @generacy-ai/workflow-engine test -- gh-cli.revert-paths`,
   `pnpm --filter @generacy-ai/workflow-engine test -- managed-file-disjointness`,
   `pnpm --filter @generacy-ai/orchestrator test -- pr-manager`. Confirm SC-001, SC-003, SC-004
