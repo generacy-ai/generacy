@@ -29,13 +29,19 @@ No new label vocabulary and no new persisted state. The sentinel path is
 untouched, so runs that emit `SPECKIT_IMPLEMENT_PARTIAL` behave exactly as
 before.
 
-The pause co-applies implement's own configured gates (on the default
-`speckit-feature` that is `waiting-for:implementation-review`) rather than
-substituting for them, so a story that pauses for manual validation is still
-reviewed. The no-progress guard now records which unit `tasks_remaining` was
-measured in — the sentinel's full unchecked count vs. the safety net's
-automatable-only count — and resets its baseline across a unit change instead
-of comparing incomparable values.
+The pause applies exactly one gate label, `waiting-for:manual-validation`. It
+does not co-apply implement's other configured gates: the resume path strips all
+`waiting-for:*` labels, so a second simultaneously-open gate would be silently
+discarded as soon as either one was answered. As a result a story that takes
+this pause is not additionally held for implementation review; that gap is
+tracked separately.
+
+The no-progress guard now records which unit `tasks_remaining` was measured in —
+the sentinel's full unchecked count vs. the safety net's automatable-only count
+— and keeps a baseline per unit, comparing only same-unit pairs. A single
+baseline reset across unit changes would never fire when the agent alternates
+emitting and not emitting `SPECKIT_IMPLEMENT_PARTIAL` over a stuck remainder,
+leaving the increment re-entry unbounded.
 
 `LabelMonitorService` also clears `waiting-for:*` labels on the `process:`
 requeue path, alongside the `completed:*` / `failed:*` labels it already

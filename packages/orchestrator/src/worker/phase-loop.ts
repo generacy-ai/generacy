@@ -368,7 +368,7 @@ export class PhaseLoop {
 
     // Track last seen tasks_remaining for the implement increment guard.
     // Prevents infinite loops when no progress is made between increments.
-    let lastTasksRemaining: number | undefined;
+    //
     // #1214 (PR #1215 review Finding 2): `tasks_remaining` reaches the guard in
     // TWO different units. The agent's `SPECKIT_IMPLEMENT_PARTIAL` sentinel
     // reports the FULL unchecked count (per agency's `implement.md:220` —
@@ -380,13 +380,21 @@ export class PhaseLoop {
     // reporting `10 unchecked` false-fails as `10 >= 7` on a run that was
     // progressing.
     //
-    // The fix is to compare like with like: record the unit alongside the
-    // value, and when the unit changes, RESET the baseline instead of comparing.
+    // The fix is to compare like with like — but with a baseline PER UNIT, not a
+    // single baseline that resets on every unit change. A single resetting
+    // baseline is unbounded: an agent that alternates emitting / not emitting the
+    // sentinel over a genuinely stuck remainder flips the unit on every
+    // increment, so no pair is ever comparable, the guard never fires, and the
+    // `i--` re-entry below loops forever (there is no other increment cap).
+    // Keeping one baseline per unit means a stall in EITHER unit is caught on the
+    // next same-unit increment, while a progressing alternating run still never
+    // false-fails.
+    //
     // Deliberately NOT fixed by re-deriving the sentinel's count from tasks.md —
     // the sentinel path must not consult the fallback source (SC-007), and doing
     // so would itself false-fail a real run (sentinel 20 → 10 over a tasks.md
     // that still shows 30 unchecked normalizes to 30 >= 30).
-    let lastTasksRemainingUnit: 'sentinel' | 'automatable' | undefined;
+    const lastTasksRemainingByUnit = new Map<'sentinel' | 'automatable', number>();
 
     // Find the starting index in the phase sequence
     const startIndex = sequence.indexOf(context.startPhase);
@@ -1002,7 +1010,6 @@ export class PhaseLoop {
             deps,
             results,
             result,
-            config,
             stage,
             sequence,
             startIndex,
@@ -1030,7 +1037,6 @@ export class PhaseLoop {
             deps,
             results,
             result,
-            config,
             stage,
             sequence,
             startIndex,
@@ -1193,35 +1199,34 @@ export class PhaseLoop {
       if (phase === 'implement' && result.success && result.implementResult?.partial) {
         // #1187: `?? 0` is load-bearing. `tasks_remaining` is optional on the
         // sentinel AND can be absent from a synthesized partial, and the guard's
-        // precondition below is `lastTasksRemaining !== undefined` — an
+        // precondition below is a recorded baseline for this unit — an
         // `undefined` here would make the guard permanently unreachable and
         // `i--` loop forever.
         const tasksRemaining = result.implementResult.tasks_remaining ?? 0;
         // PR #1215 review Finding 2: which unit is this value measured in? See
-        // `lastTasksRemainingUnit` at the top of the loop. The sentinel path is
+        // `lastTasksRemainingByUnit` at the top of the loop. The sentinel path is
         // NOT normalized against tasks.md (SC-007) — the guard compares only
-        // same-unit pairs and resets the baseline across a unit change.
+        // same-unit pairs, but keeps a baseline for EACH unit so an alternating
+        // stall is still caught on the next same-unit increment.
         const tasksRemainingUnit: 'sentinel' | 'automatable' = tasksRemainingSynthesized
           ? 'automatable'
           : 'sentinel';
-        const comparableToBaseline =
-          lastTasksRemaining !== undefined && lastTasksRemainingUnit === tasksRemainingUnit;
-        if (lastTasksRemaining !== undefined && !comparableToBaseline) {
+        const lastTasksRemaining = lastTasksRemainingByUnit.get(tasksRemainingUnit);
+        if (lastTasksRemaining === undefined && lastTasksRemainingByUnit.size > 0) {
           this.logger.info(
             {
               phase,
               issueNumber: context.item.issueNumber,
               tasksRemaining,
               tasksRemainingUnit,
-              lastTasksRemaining,
-              lastTasksRemainingUnit,
+              knownUnits: [...lastTasksRemainingByUnit.entries()],
             },
-            'Implement increment: tasks_remaining unit changed between increments — resetting the no-progress baseline instead of comparing',
+            'Implement increment: first tasks_remaining seen in this unit — recording a per-unit baseline instead of comparing across units',
           );
         }
 
         // Guard: fail if no progress made (prevents infinite loop)
-        if (comparableToBaseline && tasksRemaining >= lastTasksRemaining!) {
+        if (lastTasksRemaining !== undefined && tasksRemaining >= lastTasksRemaining) {
           // #1214: the stalled remainder may be human-gated rather than broken —
           // the agent can emit `SPECKIT_IMPLEMENT_PARTIAL` over a remainder that
           // is entirely manual, which the safety-net block above never sees
@@ -1258,7 +1263,6 @@ export class PhaseLoop {
               deps,
               results,
               result,
-              config,
               stage,
               sequence,
               startIndex,
@@ -1296,8 +1300,7 @@ export class PhaseLoop {
           await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
-        lastTasksRemaining = tasksRemaining;
-        lastTasksRemainingUnit = tasksRemainingUnit;
+        lastTasksRemainingByUnit.set(tasksRemainingUnit, tasksRemaining);
 
         // Commit, push, and ensure PR with a WIP message
         const partialOutcome = await prManager.commitPushAndEnsurePr(phase, {
@@ -1331,8 +1334,7 @@ export class PhaseLoop {
 
       // Reset increment tracking when leaving the implement phase normally
       if (phase !== 'implement') {
-        lastTasksRemaining = undefined;
-        lastTasksRemainingUnit = undefined;
+        lastTasksRemainingByUnit.clear();
       }
 
       // 4. Handle phase failure
@@ -2130,12 +2132,11 @@ export class PhaseLoop {
         // does not re-run (re-test / re-mark-ready / re-wait-CI). This is one of
         // two POST-completion pauses where `completed:<phase>` is granted at the
         // pause — the other is `pauseForManualValidation` (#1214), where
-        // `implement` has likewise finished its automatable work. Note that the
-        // #1214 pause co-applies implement's own gates (PR #1215 review
-        // Finding 1), so `completed:implement` + an un-answered
-        // `waiting-for:implementation-review` is a REACHABLE state; the safety
-        // analysis for it lives on `LabelManager.onGateHit`. Every gate raised by
-        // this loop keeps the #958 FR-008 ordering (granted only after all gates
+        // `implement` has likewise finished its automatable work and the end
+        // state is `completed:implement` + `waiting-for:manual-validation` (that
+        // pause applies exactly one gate; the safety analysis lives on
+        // `LabelManager.onGateHit`). Every gate raised by this loop keeps the
+        // #958 FR-008 ordering (granted only after all gates
         // skip) because their phase has NOT completed. Order matters: onPhaseComplete
         // removes `phase:validate` + adds `completed:validate`, then onGateHit
         // adds the pause pair — end state is completed:validate +
@@ -2445,23 +2446,30 @@ export class PhaseLoop {
    *      end-of-phase commit, so this is the phase's only commit path; an early
    *      gate return without it would drop the increment's work.
    *   2. (Q1=A) `onPhaseComplete('implement')` — grants `completed:implement`.
-   *   3. (Q1=A) `onGateHit('implement', 'waiting-for:manual-validation')`.
-   *   4. `onGateHit` for every OTHER active-and-unsatisfied implement gate.
+   *   3. (Q1=A) `onGateHit('implement', 'waiting-for:manual-validation')` — and
+   *      NOTHING else. See "exactly one gate" below.
    *
    * `completed:implement` IS granted here (via `onPhaseComplete`): the implement
    * phase genuinely finished its automatable work, and the gate resumes at
    * `validate` (`GATE_MAPPING['manual-validation'].resumeFrom`), which only
    * resolves if `completed:implement` exists.
    *
-   * PR #1215 review Finding 1: this pause returns BEFORE the normal post-phase
-   * gate loop (step 6), so every implement-phase gate the workflow configures
-   * would otherwise be silently dropped. On the default flag-OFF
-   * `speckit-feature` that gate is `waiting-for:implementation-review`
-   * (`condition: 'always'`, see `config.ts` gate defaults) — the story would be
-   * validated and merged carrying an unchecked manual task and no review. Those
-   * gates are therefore applied IN ADDITION to `waiting-for:manual-validation`,
-   * never INSTEAD of it: FR-003, US1's acceptance and SC-001/SC-002 all require
-   * the manual-validation label to land on the issue.
+   * Exactly ONE gate label is applied. An earlier revision of this method also
+   * co-applied every other active-and-unsatisfied implement-phase gate (on the
+   * default flag-OFF `speckit-feature` that is
+   * `waiting-for:implementation-review`), because this pause returns BEFORE the
+   * normal post-phase gate loop. That fan-out is unlandable as built and has
+   * been removed: the resume path strips ALL `waiting-for:*` labels
+   * (`label-manager.ts` `onResumeStart` / `resolveResumeRetainSuffixes`, which
+   * retains `implementation-review` only when `ciMergeGateEnabled`), so with two
+   * gates open, answering either one silently discards the other and it is never
+   * re-raised — both resume at `validate`. Do NOT "helpfully" re-add a gate
+   * fan-out here in any shape; sequencing two simultaneously-open gates needs a
+   * resume-path fix first.
+   *
+   * Known, accepted consequence: a story taking this pause on flag-OFF
+   * `speckit-feature` terminates without `waiting-for:implementation-review`
+   * ever being raised. Tracked separately, deliberately not worked around here.
    *
    * PR #1215 review Finding 3: emits `job:paused` + updates the stage comment
    * so a paused story doesn't keep reporting as `status: active`,
@@ -2478,7 +2486,6 @@ export class PhaseLoop {
     deps: PhaseLoopDeps;
     results: PhaseResult[];
     result: PhaseResult;
-    config: WorkerConfig;
     stage: StageType;
     sequence: WorkflowPhase[];
     startIndex: number;
@@ -2492,7 +2499,6 @@ export class PhaseLoop {
       deps,
       results,
       result,
-      config,
       stage,
       sequence,
       startIndex,
@@ -2519,16 +2525,6 @@ export class PhaseLoop {
     }
     if (wipOutcome.prUrl) context.prUrl = wipOutcome.prUrl;
 
-    // Resolve the co-applied implement gates BEFORE mutating labels, so a gate
-    // that keys on label state (the `completed:<gate>` satisfaction check) reads
-    // the pre-pause snapshot rather than the labels this method is about to add.
-    const additionalGateLabels = await this.collectAdditionalImplementGates({
-      phase,
-      context,
-      config,
-      deps,
-    });
-
     // Step 2 (Q1=A): completed:implement FIRST. Ordering is safe against the
     // #958 assumption in `label-manager.ts` `onGateHit` for the same reason as
     // the #1133 ci-green path: `onPhaseComplete` has already removed
@@ -2536,12 +2532,8 @@ export class PhaseLoop {
     // nothing to retract.
     await labelManager.onPhaseComplete('implement');
 
-    const gateLabels = [MANUAL_VALIDATION_GATE_LABEL, ...additionalGateLabels];
-
     // Finding 3: emit `job:paused` and refresh the stage comment so cockpit /
     // cloud dashboards see the pause. Mirrors `pauseForCiReadiness`.
-    // `gateLabel` stays the manual-validation gate — it is the reason this
-    // pause exists; co-applied gates travel in `gateLabels`.
     jobEventEmitter?.('job:paused', {
       jobId: context.jobId,
       workflowName: context.item.workflowName,
@@ -2551,20 +2543,19 @@ export class PhaseLoop {
       status: 'paused',
       currentStep: phase,
       gateLabel: MANUAL_VALIDATION_GATE_LABEL,
-      gateLabels,
     });
 
-    // Steps 3 + 4: manual-validation first (Q1=A), then the co-applied gates.
-    for (const gateLabel of gateLabels) {
-      await labelManager.onGateHit('implement', gateLabel);
-    }
+    // Step 3 (Q1=A): EXACTLY ONE gate label — `waiting-for:manual-validation`.
+    // No other implement-phase gate is co-applied here, deliberately: the resume
+    // path strips ALL `waiting-for:*` labels, so a second open gate would be
+    // silently discarded the moment either one is answered (both resume at
+    // `validate`) and never re-raised. See the method doc comment before adding
+    // anything to this call.
+    await labelManager.onGateHit('implement', MANUAL_VALIDATION_GATE_LABEL);
 
     result.gateHit = {
       gateLabel: MANUAL_VALIDATION_GATE_LABEL,
-      reason:
-        additionalGateLabels.length > 0
-          ? `Manual-validation pause: ${reason} (also raised ${additionalGateLabels.join(', ')})`
-          : `Manual-validation pause: ${reason}`,
+      reason: `Manual-validation pause: ${reason}`,
     };
     const ts = phaseTimestamps.get(phase);
     if (ts) ts.completedAt = new Date().toISOString();
@@ -2577,114 +2568,6 @@ export class PhaseLoop {
     });
 
     return { results, completed: false, lastPhase: phase, gateHit: true };
-  }
-
-  /**
-   * PR #1215 review Finding 1 helper: the implement-phase gates that must be
-   * co-applied with `waiting-for:manual-validation`, because this pause returns
-   * before the normal post-phase gate loop that would otherwise raise them.
-   *
-   * Condition evaluation mirrors the gate loop in `executeLoopInner` step 6
-   * exactly — same activation rules, same side-effects, so no gate fires here
-   * that would not have fired there, and none fires twice (this pause is an
-   * early return; the gate loop never runs for this phase execution):
-   *
-   * - `always` — active. This is flag-OFF `speckit-feature`'s
-   *   `waiting-for:implementation-review`, the gate BLOCKER-3 exists for.
-   * - `on-sibling-review` — active when not every linked sibling PR is approved,
-   *   and flips the siblings ready-for-review first, exactly as the gate loop
-   *   does. Skipping it (as the first fix attempt did) means a multi-repo story
-   *   that pauses for manual validation never flips its sibling PRs ready and
-   *   never raises the gate.
-   * - every other condition — inactive, matching the gate loop:
-   *   `on-merge-conflict` and `on-request` have NO branch in the gate loop's
-   *   condition chain (they are driven by other seams / fixer rounds and always
-   *   leave `gateActive === false` there); `on-questions` is clarify-only;
-   *   `on-remediation-limit` is review-only; and `on-ci-green` is the flag-ON
-   *   relocation of `implementation-review` onto `validate`, so it is never an
-   *   implement gate — under flag-ON `checkGates('implement')` yields only
-   *   `on-sibling-review` / `on-merge-conflict` and this method raises at most
-   *   the sibling gate. That is what keeps the flag-ON `on-ci-green` gate from
-   *   being duplicated here.
-   *
-   * Gates already satisfied (`completed:<suffix>` present) are dropped, mirroring
-   * the gate loop's skip. A label-read failure drops the satisfaction check only
-   * (treats gates as unsatisfied) — the same fail-open direction the rest of this
-   * feature takes: a redundant `waiting-for:` label is recoverable, a silently
-   * skipped review gate is not.
-   */
-  private async collectAdditionalImplementGates(params: {
-    phase: WorkflowPhase;
-    context: WorkerContext;
-    config: WorkerConfig;
-    deps: PhaseLoopDeps;
-  }): Promise<string[]> {
-    const { phase, context, config, deps } = params;
-    const { gateChecker, prManager } = deps;
-    const gates = gateChecker.checkGates('implement', context.item.workflowName, config);
-    if (gates.length === 0) return [];
-
-    let issueLabels: string[] | undefined;
-    const readLabels = async (): Promise<string[]> => {
-      if (issueLabels !== undefined) return issueLabels;
-      try {
-        issueLabels = await context.github.getIssueLabels(
-          context.item.owner,
-          context.item.repo,
-          context.item.issueNumber,
-        );
-      } catch (error) {
-        this.logger.warn(
-          { phase, issueNumber: context.item.issueNumber, error: String(error) },
-          'Manual-validation pause: implement-gate label read failed — treating gates as unsatisfied',
-        );
-        issueLabels = [];
-      }
-      return issueLabels;
-    };
-
-    const selected: string[] = [];
-    for (const gate of gates) {
-      if (gate.gateLabel === MANUAL_VALIDATION_GATE_LABEL) continue;
-
-      let active = false;
-      if (gate.condition === 'always') {
-        active = true;
-      } else if (gate.condition === 'on-sibling-review') {
-        const reviewResult = await checkSiblingReviews(context.linkedPRs, this.logger);
-        active = !reviewResult.allApproved;
-        if (active) {
-          this.logger.info(
-            { phase, gateLabel: gate.gateLabel, statuses: reviewResult.statuses },
-            'Manual-validation pause: gate condition "on-sibling-review" active — not all siblings approved',
-          );
-          await prManager.markSiblingsReadyForReview(context.linkedPRs);
-        }
-      } else {
-        this.logger.debug(
-          { phase, gateLabel: gate.gateLabel, condition: gate.condition },
-          'Manual-validation pause: implement gate condition is not evaluated at this seam — skipping (matches the gate loop)',
-        );
-      }
-      if (!active) continue;
-
-      const completedLabel = `completed:${gate.gateLabel.replace(/^waiting-for:/, '')}`;
-      if ((await readLabels()).includes(completedLabel)) {
-        this.logger.info(
-          { phase, gateLabel: gate.gateLabel, completedLabel },
-          'Manual-validation pause: implement gate already satisfied — not re-raising',
-        );
-        continue;
-      }
-
-      if (selected.includes(gate.gateLabel)) continue;
-      this.logger.info(
-        { phase, gateLabel: gate.gateLabel, condition: gate.condition },
-        'Manual-validation pause: co-applying active implement gate',
-      );
-      selected.push(gate.gateLabel);
-    }
-    return selected;
   }
 
   /**
