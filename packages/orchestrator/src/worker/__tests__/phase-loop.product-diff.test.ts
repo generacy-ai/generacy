@@ -505,3 +505,127 @@ describe('PhaseLoop - phase-start-ref legacy migration + resolve-check (#1112)',
     expect(last.error?.message).toMatch(/product-diff detection failed/);
   });
 });
+
+/**
+ * #1204 — a phase that passes the product-diff guard and THEN pauses must keep
+ * its start ref, so the resume measures from the phase's original anchor.
+ *
+ * Replays christrudelpw/snappoll#8: implement wrote `components/VoteForm.tsx`,
+ * passed the guard, and then the workflow paused on the merge-conflict gate.
+ * The conflict resolver merged `origin/main`, the resume re-entered implement,
+ * the agent correctly found every task done and no-op'd — and the guard, having
+ * re-anchored at the resolver's merge commit, failed a finished implementation
+ * as `no-product-code-changes` twice, escalating to `failed:implement-repeated`.
+ */
+describe('PhaseLoop - phase-start ref survives a post-guard pause (#1204)', () => {
+  const REF_KEY = 'phase-start-ref:generacy-ai:generacy:1107:no-branch:implement';
+  const TASKS_COMMIT = 'a1b2c3d4'; // captured at implement entry, before any work
+  const MERGE_COMMIT = 'e5f60718'; // conflict resolver's merge of origin/main
+
+  /** Each run gets its own loop instance, as a fresh worker process would. */
+  function phaseLoopFor() {
+    return new PhaseLoop(mockLogger);
+  }
+
+  /** Redis stand-in with real storage, so persist/reuse across entries is exercised. */
+  function makeTracker(seed: Record<string, string> = {}) {
+    const store = new Map<string, string>(Object.entries(seed));
+    return {
+      store,
+      getValueRaw: vi.fn(async (k: string) => store.get(k) ?? null),
+      setValueRaw: vi.fn(async (k: string, v: string) => { store.set(k, v); }),
+      clearRaw: vi.fn(async (k: string) => { store.delete(k); }),
+    };
+  }
+
+  /**
+   * Ref-sensitive own-commit diff, mirroring what git actually reports:
+   * from the tasks commit the window spans the implementation; from the
+   * resolver's merge commit it spans only the completion-banner commit.
+   */
+  function makeRefSensitiveGithub(head: string) {
+    const github = makeGithub([]);
+    github.getCurrentCommitSha = vi.fn().mockResolvedValue(head);
+    github.getFilesChangedByOwnCommits = vi.fn(async (startRef: string) =>
+      startRef === TASKS_COMMIT
+        ? ['components/VoteForm.tsx', 'specs/008/conversation-log.jsonl']
+        : ['specs/008/conversation-log.jsonl'],
+    );
+    return github;
+  }
+
+  /**
+   * Arms a gate that activates unconditionally after implement. The gate path
+   * reads current issue labels to check whether the gate is already satisfied;
+   * an empty label set leaves it unsatisfied, so the loop pauses.
+   */
+  function withGate(deps: PhaseLoopDeps, github: any) {
+    github.getIssue = vi.fn().mockResolvedValue({ labels: [] });
+    deps.gateChecker.checkGates = vi.fn().mockReturnValue([
+      { phase: 'implement', gateLabel: 'waiting-for:merge-conflicts', condition: 'always' },
+    ]);
+  }
+
+  it('two-run replay: gate pause then no-op resume does NOT fail as no-product-code-changes', async () => {
+    // One tracker across both runs — the bug is cross-run, so a single-run
+    // assertion cannot see it: run A cleared the ref at guard-pass, and run B
+    // then re-anchored at whatever HEAD it found.
+    const tracker = makeTracker();
+
+    // ---- Run A: implement writes the components, then pauses at the gate ----
+    const depsA = createMockDeps();
+    depsA.phaseTracker = tracker as any;
+    const contextA = createMockContext('implement');
+    contextA.github = makeRefSensitiveGithub(TASKS_COMMIT);
+    withGate(depsA, contextA.github);
+
+    const resultA = await phaseLoopFor().executeLoop(contextA, createConfig(), depsA, [
+      'implement',
+      'validate',
+    ]);
+
+    expect(resultA.gateHit).toBe(true);
+    expect(depsA.labelManager.onPhaseComplete).not.toHaveBeenCalledWith('implement');
+    // The phase did not complete, so its anchor must survive into run B.
+    expect(tracker.store.get(REF_KEY)).toBe(TASKS_COMMIT);
+
+    // ---- Run B: conflict resolved, resume re-enters implement, agent no-ops ----
+    const depsB = createMockDeps();
+    depsB.phaseTracker = tracker as any;
+    const contextB = createMockContext('implement');
+    contextB.github = makeRefSensitiveGithub(MERGE_COMMIT);
+
+    const resultB = await phaseLoopFor().executeLoop(contextB, createConfig(), depsB, [
+      'implement',
+      'validate',
+    ]);
+
+    // Measured from the retained anchor, never re-anchored at the merge commit.
+    expect(contextB.github.getFilesChangedByOwnCommits).toHaveBeenCalledWith(TASKS_COMMIT);
+    expect(contextB.github.getFilesChangedByOwnCommits).not.toHaveBeenCalledWith(MERGE_COMMIT);
+    // The regression: this used to fail as `no-product-code-changes`.
+    const implementResult = resultB.results.find((r) => r.phase === 'implement')!;
+    expect(implementResult.success).toBe(true);
+    expect(implementResult.error).toBeUndefined();
+    expect(depsB.labelManager.onError).not.toHaveBeenCalled();
+    expect(depsB.cliSpawner.runValidatePhase).toHaveBeenCalled();
+  });
+
+  it('retires the ref once implement genuinely completes, so later rework re-anchors', async () => {
+    const phaseLoop = new PhaseLoop(mockLogger);
+    const deps = createMockDeps();
+    const tracker = makeTracker({ [REF_KEY]: TASKS_COMMIT });
+    deps.phaseTracker = tracker as any;
+
+    const context = createMockContext('implement');
+    context.github = makeRefSensitiveGithub(MERGE_COMMIT);
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['implement', 'validate']);
+
+    // No gate fired, so the phase completed — the anchor is retired and a
+    // subsequent rework entry captures a fresh window (a no-op then fails).
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+    expect(tracker.clearRaw).toHaveBeenCalledWith(REF_KEY);
+    expect(tracker.store.has(REF_KEY)).toBe(false);
+  });
+});
