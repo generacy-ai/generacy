@@ -50,6 +50,25 @@ const execFileAsync = promisify(execFile);
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
 
 /**
+ * Redis key holding the #1107 phase-start ref for one (issue, branch, phase).
+ *
+ * Extracted (#1204) so the capture site and BOTH clear sites build it
+ * identically — a drifted key silently re-captures at the wrong commit, which
+ * is exactly the class of bug #1110/#1112 spent two rounds chasing.
+ *
+ * Returns `undefined` for phases that do not run the product-diff guard, so
+ * callers can no-op without repeating the `PHASES_REQUIRING_CHANGES` test.
+ */
+function phaseStartRefKeyFor(
+  item: { owner: string; repo: string; issueNumber: number },
+  branch: string | undefined,
+  phase: WorkflowPhase,
+): string | undefined {
+  if (!PHASES_REQUIRING_CHANGES.has(phase)) return undefined;
+  return `phase-start-ref:${item.owner}:${item.repo}:${item.issueNumber}:${branch ?? 'no-branch'}:${phase}`;
+}
+
+/**
  * #1214: the gate the implement phase pauses on when its remainder is
  * human-gated. Applied by `pauseForManualValidation`, read (as a pre-existing
  * label) by `readManualValidationLabel`.
@@ -565,9 +584,7 @@ export class PhaseLoop {
       let phaseStartRef: string | undefined;
       const phaseStartRefBranch = context.branch ?? 'no-branch';
       const requiresChanges = PHASES_REQUIRING_CHANGES.has(phase);
-      const phaseStartRefKey = requiresChanges
-        ? `phase-start-ref:${context.item.owner}:${context.item.repo}:${context.item.issueNumber}:${phaseStartRefBranch}:${phase}`
-        : undefined;
+      const phaseStartRefKey = phaseStartRefKeyFor(context.item, phaseStartRefBranch, phase);
       // Legacy (pre-#1110) key omits the branch component. Refs written by the
       // pre-#1110 build are never read by the branch-scoped key and would linger
       // to their 7-day TTL, so on a branch-scoped miss we read through to the
@@ -1726,11 +1743,27 @@ export class PhaseLoop {
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
 
-        // Pass: clear the persisted start ref so the next distinct phase entry
-        // re-captures. TTL is the backstop if this clear is skipped.
-        if (phaseStartRefKey !== undefined) {
-          await deps.phaseTracker?.clearRaw(phaseStartRefKey);
-        }
+        // Pass: the ref is NOT cleared here (#1204). Clearing it at guard-pass
+        // was wrong because passing the guard is not the same as finishing the
+        // phase: `implement` can still pause afterwards — the merge-conflict
+        // gate is armed on both `implement` and `validate` (`config.ts`), and
+        // the `manual-validation` pause returns even later. With the ref gone,
+        // the resume re-enters `implement`, captures a fresh ref at whatever
+        // HEAD then is (for a merge-conflict resume that is the resolver's own
+        // merge commit), the agent correctly finds every task already done and
+        // no-ops, and the window sees only the completion-banner commit — so a
+        // finished implementation fails as `no-product-code-changes`, twice in a
+        // row, escalating to `failed:implement-repeated`. Observed on
+        // christrudelpw/snappoll#5 and #8, whose PRs carry the full
+        // implementation.
+        //
+        // The clear now happens at genuine phase completion (step 6b, and the
+        // `manual-validation` pause that also grants `completed:implement`), so
+        // a re-entry BEFORE completion keeps measuring from the phase's original
+        // start ref — spanning the work it already did — while a re-entry AFTER
+        // completion (rework from a review, address-pr-feedback) still captures
+        // a fresh window and still fails a genuine no-op. TTL remains the
+        // backstop if a clear is ever skipped.
       }
 
       // 5c. #958 FR-009 safety-net + FR-010 parse-failure reporting.
@@ -2215,6 +2248,11 @@ export class PhaseLoop {
         await labelManager.onPhaseExecutedWithoutCompletion(phase);
       } else {
         await labelManager.onPhaseComplete(phase);
+        // #1204: the phase is genuinely complete (guard passed AND every gate
+        // skipped), so retire its start ref — the next entry is new work and
+        // must be measured on a fresh window. Paired with the deliberate
+        // non-clear at the step-5b pass; see the comment there.
+        await this.clearPhaseStartRef(context, deps, phase);
       }
 
       // 7. Record phase completion time
@@ -2532,6 +2570,12 @@ export class PhaseLoop {
     // nothing to retract.
     await labelManager.onPhaseComplete('implement');
 
+    // #1204: this pause is POST-completion — `completed:implement` is granted
+    // above and the gate resumes at `validate`, so implement's start ref is
+    // retired here for the same reason as step 6b. Kept in step with that site;
+    // if implement ever does re-enter, it measures a fresh window.
+    await this.clearPhaseStartRef(context, deps, 'implement');
+
     // Finding 3: emit `job:paused` and refresh the stage comment so cockpit /
     // cloud dashboards see the pause. Mirrors `pauseForCiReadiness`.
     jobEventEmitter?.('job:paused', {
@@ -2568,6 +2612,35 @@ export class PhaseLoop {
     });
 
     return { results, completed: false, lastPhase: phase, gateHit: true };
+  }
+
+  /**
+   * Retire the #1107 phase-start ref for a phase that has genuinely COMPLETED
+   * (#1204), so its next entry re-captures a fresh diff window.
+   *
+   * Deliberately NOT called when the phase merely passed the product-diff guard:
+   * a phase can pass the guard and then pause (merge-conflict gate), and the
+   * resume re-enters the same phase — which must keep measuring from the
+   * original start ref or it reports its own finished work as
+   * `no-product-code-changes`. Best-effort: a Redis failure must never change a
+   * phase outcome, and the key's TTL is the backstop.
+   */
+  private async clearPhaseStartRef(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    phase: WorkflowPhase,
+  ): Promise<void> {
+    if (!deps.phaseTracker) return;
+    const key = phaseStartRefKeyFor(context.item, context.branch, phase);
+    if (key === undefined) return;
+    try {
+      await deps.phaseTracker.clearRaw(key);
+    } catch (error) {
+      this.logger.warn(
+        { key, error: String(error) },
+        'Failed to clear phase-start ref on phase completion — continuing (TTL is the backstop)',
+      );
+    }
   }
 
   /**
