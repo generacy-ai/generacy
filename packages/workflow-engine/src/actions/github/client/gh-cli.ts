@@ -15,6 +15,7 @@ import type {
 } from './interface.js';
 import type {
   Issue,
+  IssueRefState,
   PullRequest,
   Comment,
   Label,
@@ -29,7 +30,7 @@ import type {
   CiConclusion,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
-import { writeFile, unlink } from 'node:fs/promises';
+import { writeFile, unlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -177,6 +178,46 @@ export class GhCliGitHubClient implements GitHubClient {
       } : undefined,
       created_at: data['createdAt'] as string,
       updated_at: data['updatedAt'] as string,
+    };
+  }
+
+  async getIssueRefState(owner: string, repo: string, number: number): Promise<IssueRefState> {
+    const result = await this.executeGh([
+      'api', `repos/${owner}/${repo}/issues/${number}`,
+      '--jq', '{state, state_reason, pull_request: .pull_request != null}',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to get issue ref state for ${owner}/${repo}#${number}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Record<string, unknown> | null;
+    if (!data) {
+      throw new Error(`Failed to parse issue ref state for ${owner}/${repo}#${number}`);
+    }
+
+    const state = (data['state'] as string)?.toLowerCase() as 'open' | 'closed';
+    const stateReason = (data['state_reason'] as string | null) ?? null;
+    const isPullRequest = data['pull_request'] === true;
+
+    let merged: boolean | null = null;
+    if (isPullRequest) {
+      const prResult = await this.executeGh([
+        'api', `repos/${owner}/${repo}/pulls/${number}`,
+        '--jq', '.merged',
+      ]);
+      if (prResult.exitCode !== 0) {
+        throw new Error(`Failed to get PR merged state for ${owner}/${repo}#${number}: ${prResult.stderr}`);
+      }
+      const prData = parseJSONSafe(prResult.stdout);
+      merged = prData === true || (typeof prData === 'string' && prData.trim() === 'true');
+    }
+
+    return {
+      state,
+      stateReason: stateReason as IssueRefState['stateReason'],
+      isPullRequest,
+      merged,
     };
   }
 
@@ -1555,6 +1596,43 @@ export class GhCliGitHubClient implements GitHubClient {
     const clean = await executeCommand('git', cleanArgs, { cwd: this.workdir });
     if (clean.exitCode !== 0) {
       throw new Error(`Failed to clean working tree: ${clean.stderr}`);
+    }
+  }
+
+  async revertPaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+
+    // Unstage first so a staged-*new* path (agent ran `git add` on a file absent
+    // from HEAD) becomes plain untracked, and the index matches HEAD for these
+    // paths — after which `git ls-files` cleanly partitions tracked vs untracked.
+    const reset = await executeCommand('git', ['reset', '-q', 'HEAD', '--', ...paths], {
+      cwd: this.workdir,
+    });
+    if (reset.exitCode !== 0) {
+      throw new Error(`Failed to unstage paths for revert: ${reset.stderr}`);
+    }
+
+    // Listed ⇒ tracked in HEAD; unlisted ⇒ untracked. A bare
+    // `git checkout -- <untracked>` errors with "pathspec did not match", so the
+    // two sets must be handled separately.
+    const ls = await executeCommand('git', ['ls-files', '--', ...paths], { cwd: this.workdir });
+    if (ls.exitCode !== 0) {
+      throw new Error(`Failed to list tracked paths for revert: ${ls.stderr}`);
+    }
+    const tracked = new Set(ls.stdout.split('\n').filter((f) => f));
+
+    if (tracked.size > 0) {
+      const checkout = await executeCommand('git', ['checkout', '--', ...tracked], {
+        cwd: this.workdir,
+      });
+      if (checkout.exitCode !== 0) {
+        throw new Error(`Failed to restore tracked paths: ${checkout.stderr}`);
+      }
+    }
+
+    for (const path of paths) {
+      if (tracked.has(path)) continue;
+      await rm(join(this.workdir, path), { force: true });
     }
   }
 

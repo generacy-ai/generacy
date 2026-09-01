@@ -107,6 +107,7 @@ describe('getClusterContext', () => {
       channel: 'stable',
       workers: 1,
       variant: 'cluster-base',
+      llmGateway: false,
     });
     expect(ctx.clusterIdentity).not.toBeNull();
     expect(ctx.projectName).toBe('clst_123');
@@ -198,6 +199,7 @@ describe('getClusterContext', () => {
       channel: 'stable',
       workers: 1,
       variant: 'cluster-base',
+      llmGateway: false,
     });
   });
 });

@@ -21,6 +21,7 @@ import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
 import { MergeConflictMonitorService } from './services/merge-conflict-monitor-service.js';
 import { ClarificationAnswerMonitorService } from './services/clarification-answer-monitor-service.js';
+import { DependencyMonitorService } from './services/dependency-monitor-service.js';
 import { BaseAdvanceMonitorService } from './services/base-advance-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
@@ -503,6 +504,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
   let mergeConflictMonitorService: MergeConflictMonitorService | null = null;
   let clarificationAnswerMonitorService: ClarificationAnswerMonitorService | null = null;
+  let dependencyMonitorService: DependencyMonitorService | null = null;
   let baseAdvanceMonitorService: BaseAdvanceMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
@@ -576,6 +578,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAppCredentialId,
         config.smee.channelUrl != null,
         { maxRunDurationMs: config.dispatch.maxRunDurationMs }, // #1054
+      );
+
+      dependencyMonitorService = new DependencyMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
       );
     }
 
@@ -1176,6 +1186,13 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      // #1211: re-arms dependency-blocked implement phases when all refs close.
+      if (dependencyMonitorService) {
+        dependencyMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Dependency monitor polling failed');
+        });
+      }
+
       if (baseAdvanceMonitorService) {
         baseAdvanceMonitorService.startPolling().catch((error) => {
           server.log.error({ err: error }, 'Base-advance monitor polling failed');
@@ -1261,6 +1278,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (clarificationAnswerMonitorService) {
             clarificationAnswerMonitorService.stopPolling();
+          }
+          if (dependencyMonitorService) {
+            dependencyMonitorService.stopPolling();
           }
           if (baseAdvanceMonitorService) {
             await baseAdvanceMonitorService.stopPolling();

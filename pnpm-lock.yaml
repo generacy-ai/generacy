@@ -222,6 +222,9 @@ importers:
       '@generacy-ai/config':
         specifier: workspace:*
         version: link:../config
+      '@generacy-ai/generacy-plugin-claude-code':
+        specifier: workspace:*
+        version: link:../generacy-plugin-claude-code
       '@generacy-ai/orchestrator':
         specifier: workspace:*
         version: link:../orchestrator

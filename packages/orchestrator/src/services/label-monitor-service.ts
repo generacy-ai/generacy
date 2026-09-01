@@ -459,14 +459,30 @@ export class LabelMonitorService {
     // Remove trigger label, agent:error, and all completed:* labels from previous runs.
     // Without clearing completed:* labels, requeued issues skip already-labeled phases
     // even if the prior run failed mid-implementation.
+    //
+    // #1214 (PR #1215 review Finding 4): `waiting-for:*` labels are cleared here
+    // too. A `process:` requeue is an explicit fresh start — it already discards
+    // every `completed:*` / `failed:*` marker — but until now a gate label from
+    // the previous run survived it, because the `waiting-for:*` strip lived only
+    // on the `continue` resume path (`LabelManager.onResumeStart`). A stale
+    // `waiting-for:manual-validation` then made the next implement completion
+    // pause immediately on a gate no human had asked for. Stripping the gate
+    // labels at the requeue boundary is the correct layer for this: it keeps
+    // the label authoritative wherever it IS present (#1214 Q4=A) instead of
+    // asking the phase loop to second-guess it against tasks.md.
+    // `agent:paused` is deliberately NOT added to this list — it is overwritten
+    // by the `agent:in-progress` add below and has never gated a phase.
     try {
       // Reuse issue data from description fetch if available, otherwise re-fetch
       const issue = fetchedIssue ?? await this.createClient(undefined, this.tokenProvider).getIssue(owner, repo, issueNumber);
-      const completedLabels = issue.labels
+      const staleRunLabels = issue.labels
         .map(l => typeof l === 'string' ? l : l.name)
-        .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX) || name.startsWith(FAILED_LABEL_PREFIX));
+        .filter(name =>
+          name.startsWith(COMPLETED_LABEL_PREFIX)
+          || name.startsWith(FAILED_LABEL_PREFIX)
+          || name.startsWith(WAITING_FOR_LABEL_PREFIX));
 
-      const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
+      const labelsToRemove = [event.labelName, 'agent:error', ...staleRunLabels];
       const client = this.createClient(undefined, this.tokenProvider);
       await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
       await client.addLabels(owner, repo, issueNumber, [

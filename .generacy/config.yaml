@@ -10,19 +10,25 @@ orchestrator:
     workflows:
       speckit-feature:
         phases:
+          clarify:
+            model: claude-fable-5
+            effort: high
           plan:
-            model: claude-opus-4-8
+            model: claude-fable-5
             effort: high
       speckit-bugfix:
         phases:
+          clarify:
+            model: claude-fable-5
+            effort: high
           plan:
-            model: claude-opus-4-8
+            model: claude-fable-5
             effort: high
 cockpit:
   auto:
     agents:
       default:   { model: claude-sonnet-5 }               # fallback for any role not listed
-      clarifier: { model: claude-opus-4-8,  effort: high }  # D.1 clarification drafting
+      clarifier: { model: claude-fable-5,  effort: high }  # D.1 clarification drafting
       reviewer:  { model: claude-opus-4-8,  effort: high }  # D.2 artifact + D.3 PR review
       validator: { model: claude-sonnet-5 }                # D.4 manual-validation summary
       fixer:     { model: claude-opus-4-8, effort: high } # D.6 bounded red-checks fixer

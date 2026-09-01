@@ -267,6 +267,7 @@ export type {
   Comment,
   CreateReviewComment,
   CreateReviewInput,
+  IssueRefState,
   PullRequestFile,
   Review,
   ReviewEvent,

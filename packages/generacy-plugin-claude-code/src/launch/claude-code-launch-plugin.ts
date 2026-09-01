@@ -10,16 +10,34 @@ import type {
   InvokeIntent,
 } from './types.js';
 import { PHASE_TO_COMMAND, PTY_WRAPPER } from './constants.js';
+import { resolveRoute, resolveGatewayConfigDir, assertGatewayProvisioned } from './route.js';
 
 /**
  * Structurally compatible with orchestrator's LaunchSpec.
  * Defined locally to avoid circular dependency between packages.
+ *
+ * `route` is additive (width subtyping keeps the plugin assignable to the
+ * orchestrator's `AgentLaunchPlugin`). It is deliberately typed as the literal
+ * `'gateway'` — the subscription route never stamps it, so it cannot be set on
+ * a subscription launch.
  */
 interface LaunchSpec {
   command: string;
   args: string[];
   env?: Record<string, string>;
   stdioProfile?: string;
+  route?: 'gateway';
+}
+
+/**
+ * Options for constructing a {@link ClaudeCodeLaunchPlugin}.
+ */
+export interface ClaudeCodeLaunchPluginOptions {
+  /**
+   * Override the gateway config dir. Falls back to
+   * `GENERACY_CLAUDE_GATEWAY_CONFIG_DIR`, then the built-in default.
+   */
+  gatewayConfigDir?: string;
 }
 
 /**
@@ -53,6 +71,26 @@ export class ClaudeCodeLaunchPlugin {
   readonly pluginId = 'claude-code';
   readonly provider = 'claude-code';
   readonly supportedKinds = ['phase', 'pr-feedback', 'merge-conflict', 'review', 'remediate', 'conversation-turn', 'invoke'] as const;
+
+  private readonly gatewayConfigDir: string;
+
+  constructor(options?: ClaudeCodeLaunchPluginOptions) {
+    this.gatewayConfigDir = resolveGatewayConfigDir(options?.gatewayConfigDir);
+  }
+
+  /**
+   * Apply the model-derived route to a builder's base spec.
+   *
+   * Subscription route → the base spec unchanged (no `env`, no `route`), so
+   * pre-change launches stay byte-identical. Gateway route → asserts the
+   * gateway config dir is provisioned, then injects `CLAUDE_CONFIG_DIR` and
+   * stamps `route: 'gateway'`.
+   */
+  private applyRoute(spec: LaunchSpec, model?: string): LaunchSpec {
+    if (resolveRoute(model) === 'subscription') return spec;
+    assertGatewayProvisioned(model!, this.gatewayConfigDir);
+    return { ...spec, env: { CLAUDE_CONFIG_DIR: this.gatewayConfigDir }, route: 'gateway' };
+  }
 
   /**
    * Whether the installed CLI supports a delivery mechanism for reasoning effort.
@@ -154,11 +192,11 @@ export class ClaudeCodeLaunchPlugin {
     const command = PHASE_TO_COMMAND[intent.phase];
     args.push(`${command} ${intent.prompt}`);
 
-    return {
+    return this.applyRoute({
       command: 'claude',
       args,
       stdioProfile: 'default',
-    };
+    }, intent.model);
   }
 
   private buildPrFeedbackLaunch(intent: PrFeedbackIntent): LaunchSpec {
@@ -179,11 +217,11 @@ export class ClaudeCodeLaunchPlugin {
 
     args.push(intent.prompt);
 
-    return {
+    return this.applyRoute({
       command: 'claude',
       args,
       stdioProfile: 'default',
-    };
+    }, intent.model);
   }
 
   private buildMergeConflictLaunch(intent: MergeConflictIntent): LaunchSpec {
@@ -207,11 +245,11 @@ export class ClaudeCodeLaunchPlugin {
 
     args.push(intent.prompt);
 
-    return {
+    return this.applyRoute({
       command: 'claude',
       args,
       stdioProfile: 'default',
-    };
+    }, intent.model);
   }
 
   private buildReviewLaunch(intent: ReviewIntent): LaunchSpec {
@@ -237,11 +275,11 @@ export class ClaudeCodeLaunchPlugin {
 
     args.push(intent.prompt);
 
-    return {
+    return this.applyRoute({
       command: 'claude',
       args,
       stdioProfile: 'default',
-    };
+    }, intent.model);
   }
 
   private buildRemediateLaunch(intent: RemediateIntent): LaunchSpec {
@@ -266,11 +304,11 @@ export class ClaudeCodeLaunchPlugin {
 
     args.push(intent.prompt);
 
-    return {
+    return this.applyRoute({
       command: 'claude',
       args,
       stdioProfile: 'default',
-    };
+    }, intent.model);
   }
 
   private buildInvokeLaunch(intent: InvokeIntent): LaunchSpec {
@@ -305,10 +343,10 @@ export class ClaudeCodeLaunchPlugin {
       claudeArgs.push('--effort', intent.effort);
     }
 
-    return {
+    return this.applyRoute({
       command: 'python3',
       args: ['-u', '-c', PTY_WRAPPER, ...claudeArgs],
       stdioProfile: 'interactive',
-    };
+    }, intent.model);
   }
 }

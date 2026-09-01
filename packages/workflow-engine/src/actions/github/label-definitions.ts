@@ -42,6 +42,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:children-complete', color: 'FBCA04', description: 'Waiting for child issues to complete' },
   { name: 'waiting-for:epic-approval', color: 'FBCA04', description: 'Epic rollup PR awaiting approval' },
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
+  { name: 'waiting-for:dependency-limit', color: 'FBCA04', description: 'Dependency-block cycle cap reached; awaiting operator' },
   { name: 'waiting-for:merge-conflicts', color: 'FBCA04', description: 'Base-merge conflict. See stage comment for the manual remedy.' },
   { name: 'waiting-for:remediation-limit', color: 'FBCA04', description: 'Review↔remediate cap reached; awaiting operator' },
   { name: 'waiting-for:ci', color: 'FBCA04', description: 'Waiting for CI to go green on the ready PR (#1133)' },
@@ -68,6 +69,8 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:ci', color: '0E8A16', description: 'CI merge-readiness gate satisfied (#1133)' },
   { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
+  { name: 'completed:dependencies', color: '0E8A16', description: 'Dependencies resolved — re-arming' },
+  { name: 'completed:dependency-limit', color: '0E8A16', description: 'Dependency-limit gate satisfied by operator' },
 
   // Failed phase labels
   { name: 'failed:specify', color: 'D73A4A', description: 'Phase specify failed' },

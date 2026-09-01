@@ -241,6 +241,29 @@ describe('MergeConflictHandler — SC-003 model + effort threading (#1095)', () 
     expect(req.intent.effort).toBeUndefined();
   });
 
+  it('FR-007: emits a pre-launch log line carrying the resolved route', async () => {
+    const config: WorkerConfig = {
+      workspaceDir: '/tmp/workspace',
+      phaseTimeoutMs: 60_000,
+      shutdownGracePeriodMs: 5_000,
+      validateCommand: 'echo validate',
+      gates: {},
+    } as WorkerConfig;
+
+    const { launcher, launch } = makeLauncher(0);
+    const handler = new MergeConflictHandler(config, logger, launcher);
+    await handler.handle(createItem(), '/tmp/checkout').catch(() => undefined);
+
+    const spawnLog = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[1] === 'MergeConflictHandler: spawning agent CLI for conflict resolution',
+    );
+    expect(spawnLog).toBeDefined();
+    // No configured model → subscription route; the field is present verbatim.
+    expect(spawnLog![0]).toMatchObject({ route: 'subscription' });
+    // Launch options are unchanged (no route threaded into the launcher).
+    expect(launch.mock.calls[0]![0]).not.toHaveProperty('route');
+  });
+
   it('FR-008: workflowName "unknown" degrades cleanly — picks up agents.default when set', async () => {
     const config: WorkerConfig = {
       workspaceDir: '/tmp/workspace',

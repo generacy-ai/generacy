@@ -1,24 +1,27 @@
 /**
- * Managed-file disjointness regression tests for issue #899.
+ * Managed-file disjointness regression test for issue #899.
  *
- * Two layers:
- *   Layer 1 — static-grep drift guard: plan.ts's buildPlanPrompt() must not
- *     mention CLAUDE.md or update_agent. Catches local-shim regressions.
- *   Layer 2 — merge-tree simulation: two sibling branches that each write
- *     specs/<feature>/stack.md must merge cleanly, and the merge diff must
- *     never mention CLAUDE.md. Proves the disjointness invariant.
+ * Layer 2 — merge-tree simulation: two sibling branches that each write
+ * specs/<feature>/stack.md must merge cleanly, and the merge diff must never
+ * mention CLAUDE.md. Proves the disjointness invariant end-to-end.
+ *
+ * The former Layer 1 (a static grep of the local plan-operation prompt builder)
+ * was removed in #1218: cluster workers never execute that wrapper — they run the
+ * bare `/plan` slash command installed from agency — so the grep stayed green
+ * while the regression it targeted ran free. The invariant now lives in two real
+ * enforcement sites:
+ *   - prompt-side: pinned in agency (`agency-plugin-spec-kit` tests, agency#511).
+ *   - engine-side: `PrManager.commitAndPush` excludes and reverts repo-root
+ *     agent-context files from spec-stage commits, covered by
+ *     `orchestrator/src/worker/__tests__/pr-manager.agent-context-revert.test.ts`.
  *
  * See specs/899-found-during-cockpit-v1/contracts/merge-tree-invariant.md.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -80,18 +83,6 @@ describe('managed-file disjointness (issue #899)', () => {
 
       expect(output).not.toMatch(/CONFLICT/);
       expect(output).not.toMatch(/CLAUDE\.md/);
-    });
-  });
-
-  describe('Layer 1 — static-grep drift guard', () => {
-    it('plan.ts prompt does not mention CLAUDE.md or update_agent (drift guard)', async () => {
-      const planTs = resolve(__dirname, '..', 'operations', 'plan.ts');
-      const source = await readFile(planTs, 'utf8');
-      const match = source.match(/function buildPlanPrompt[\s\S]+?^}/m);
-      expect(match, 'expected to locate buildPlanPrompt in plan.ts').not.toBeNull();
-      const region = match![0];
-      expect(region).not.toMatch(/CLAUDE\.md/i);
-      expect(region).not.toMatch(/update_agent/i);
     });
   });
 });

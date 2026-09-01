@@ -7,8 +7,12 @@ import type { WorkerContext } from './types.js';
  * Result of evaluating a workflow's `tasks.md` as the fallback source of truth
  * for whether the implement phase actually finished (#1187).
  *
- * - `incomplete` — one or more unchecked task lines remain; the engine
- *   synthesizes a partial `implementResult` to re-enter implement.
+ * - `incomplete` — unchecked task lines remain and at least one of them is
+ *   automatable; the engine synthesizes a partial `implementResult` (from the
+ *   `automatable` count only) to re-enter implement.
+ * - `manual-only` — unchecked task lines remain but every one of them
+ *   classifies manual (#1214); re-entry cannot make progress, so the engine
+ *   pauses on `waiting-for:manual-validation` instead.
  * - `complete` — zero unchecked task lines (all checked OR no task lines at
  *   all); the phase advances exactly as today.
  * - `unreadable` — the fallback source could not be resolved/read (missing or
@@ -16,7 +20,15 @@ import type { WorkerContext } from './types.js';
  *   (fail-open) and the reason is logged.
  */
 export type TasksMdEvaluation =
-  | { kind: 'incomplete'; unchecked: number; checked: number; total: number }
+  | {
+      kind: 'incomplete';
+      unchecked: number;
+      automatable: number;
+      manual: number;
+      checked: number;
+      total: number;
+    }
+  | { kind: 'manual-only'; unchecked: number; manual: number; checked: number; total: number }
   | { kind: 'complete'; unchecked: 0; checked: number; total: number }
   | { kind: 'unreadable'; reason: string };
 
@@ -39,6 +51,53 @@ const HEADING_TASK = /^#{1,6}[ \t]+T\d+(?![-–—]\s*T?\d)\b/;
 const HEADING_DONE = /^#{1,6}[ \t]+T\d+[ \t]+\[DONE\]/;
 
 /**
+ * Tier 1 manual detector (#1214, Q3=A): the literal bracketed `[manual]` token,
+ * case-insensitive, anywhere in the task text. Deliberately position-lenient —
+ * the field evidence (Painworth/ai-lawfirm#2714) puts the marker at line end —
+ * which is the opposite discipline from {@link HEADING_DONE}. The marker only
+ * classifies an already-unchecked task; it never affects checked/unchecked
+ * counting, so `### T001 [DONE] Verify flow [manual]` is checked, full stop.
+ */
+const MANUAL_MARKER = /\[manual\]/i;
+
+/**
+ * Tier 2 manual detector (#1214, Q2=B): whole-word `manual` / `manually` /
+ * `hand-test`, case-insensitive. Runs only when Tier 1 does not match, and only
+ * against the first {@link MANUAL_KEYWORD_WINDOW_WORDS} words of the task text
+ * — the strict-positional discipline of {@link HEADING_DONE} — so mid-sentence
+ * noun uses ("rewrite the entire user manual section") do not classify manual.
+ * Whole-word means `manuals` does not match.
+ */
+const MANUAL_KEYWORDS = /\b(?:manual|manually|hand-test)\b/i;
+
+/** Keyword window: manual intent is stated up front ("Manually verify …"). */
+const MANUAL_KEYWORD_WINDOW_WORDS = 4;
+
+/**
+ * Prefixes stripped to obtain the **task text** — the prose a task author
+ * writes, with the grammar's bookkeeping (checkbox, task ID, `[DONE]`) removed
+ * so the Tier 2 window starts at the same place in both grammars.
+ */
+const CHECKBOX_TASK_PREFIX = /^[ \t]*[-*+] \[( |x|X)\][ \t]*(?:T\d+[ \t]+)?/;
+const HEADING_TASK_PREFIX = /^#{1,6}[ \t]+T\d+[ \t]*(?:\[DONE\][ \t]*)?/;
+
+/**
+ * Pure per-line manual classifier (#1214). Applied only to lines the counter has
+ * already recognized as **unchecked** tasks — a checked manual task is simply
+ * checked (FR-005/006).
+ */
+function classifiesManual(line: string, taskPrefix: RegExp): boolean {
+  const taskText = line.replace(taskPrefix, '');
+  if (MANUAL_MARKER.test(taskText)) return true;
+  const window = taskText
+    .trim()
+    .split(/\s+/)
+    .slice(0, MANUAL_KEYWORD_WINDOW_WORDS)
+    .join(' ');
+  return MANUAL_KEYWORDS.test(window);
+}
+
+/**
  * Pure task counter over `tasks.md` content, recognizing both task grammars the
  * implement prompt emits:
  *
@@ -51,20 +110,27 @@ const HEADING_DONE = /^#{1,6}[ \t]+T\d+[ \t]+\[DONE\]/;
  * (byte-identical checkbox behavior, FR-004); otherwise it is tested against the
  * heading grammar. Both grammars increment the same counters, so mixed-grammar
  * files sum (FR-003). Non-matching lines are ignored. Idempotent, no I/O.
+ *
+ * `manual` (#1214) counts the subset of **unchecked** tasks that
+ * {@link classifiesManual} recognizes. It is additive: `unchecked`, `checked`
+ * and `total` are byte-identical to #1187.
  */
 export function countTasks(content: string): {
   unchecked: number;
   checked: number;
   total: number;
+  manual: number;
 } {
   let unchecked = 0;
   let checked = 0;
+  let manual = 0;
 
   for (const line of content.split('\n')) {
     const match = CHECKBOX_LINE.exec(line);
     if (match !== null) {
       if (match[1] === ' ') {
         unchecked += 1;
+        if (classifiesManual(line, CHECKBOX_TASK_PREFIX)) manual += 1;
       } else {
         checked += 1;
       }
@@ -76,11 +142,12 @@ export function countTasks(content: string): {
         checked += 1;
       } else {
         unchecked += 1;
+        if (classifiesManual(line, HEADING_TASK_PREFIX)) manual += 1;
       }
     }
   }
 
-  return { unchecked, checked, total: unchecked + checked };
+  return { unchecked, checked, total: unchecked + checked, manual };
 }
 
 /**
@@ -122,9 +189,13 @@ export function evaluateTasksMd(context: WorkerContext): TasksMdEvaluation {
     return { kind: 'unreadable', reason: `tasks.md not readable: ${String(error)}` };
   }
 
-  const { unchecked, checked, total } = countTasks(content);
+  const { unchecked, checked, total, manual } = countTasks(content);
+  const automatable = unchecked - manual;
+  if (unchecked > 0 && automatable === 0) {
+    return { kind: 'manual-only', unchecked, manual, checked, total };
+  }
   if (unchecked > 0) {
-    return { kind: 'incomplete', unchecked, checked, total };
+    return { kind: 'incomplete', unchecked, automatable, manual, checked, total };
   }
   return { kind: 'complete', unchecked: 0, checked, total };
 }

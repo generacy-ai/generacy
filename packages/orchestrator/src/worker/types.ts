@@ -180,6 +180,8 @@ export interface ImplementPartialResult {
   tasks_completed?: number;
   tasks_remaining?: number;
   tasks_total?: number;
+  /** Raw refs from `SPECKIT_IMPLEMENT_BLOCKED` sentinel (#1211). */
+  blocked_on?: string[];
 }
 
 /**
@@ -300,6 +302,12 @@ export interface CliSpawnOptions {
    * `agent.model.transition` log line on same-provider model change.
    */
   previousModel?: string;
+  /**
+   * #1199: resolved launch route (`subscription` | `gateway`) for this phase.
+   * Logged verbatim by the spawner; typed `string` (not the plugin union) so
+   * this module stays free of a plugin import — the spawner never branches on it.
+   */
+  route?: string;
 }
 
 /**

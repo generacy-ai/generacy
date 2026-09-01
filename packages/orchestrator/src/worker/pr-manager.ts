@@ -1,10 +1,11 @@
 import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import { resolveIssueBranch, simpleGit } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger, CommitResult } from './types.js';
+import { PHASE_TO_STAGE } from './types.js';
 import { parsePRUrl } from './linked-pr-url-parser.js';
 import { evaluatePushGuard, type PushGuardDecision } from './push-guard.js';
 import { defaultRemoteBranchExists } from './repo-checkout.js';
-import { isEngineSidecar, isCollapsedEngineStateDir } from './product-diff.js';
+import { isEngineSidecar, isCollapsedEngineStateDir, EXCLUDED_EXACT_PATHS } from './product-diff.js';
 import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js';
 
 /**
@@ -149,9 +150,31 @@ export class PrManager {
       // the sidecar filter, and staging it would commit every sidecar at once.
       const status = await this.github.getStatus();
       const { staged = [], unstaged = [], untracked = [] } = status;
-      const toStage = [...new Set([...staged, ...unstaged, ...untracked])].filter(
+      const candidates = [...new Set([...staged, ...unstaged, ...untracked])].filter(
         (p) => !isEngineSidecar(p) && !isCollapsedEngineStateDir(p),
       );
+
+      // #1218 FR-001/FR-004: at spec-stage phase completions (specify, clarify,
+      // plan, tasks) repo-root agent-context files (`EXCLUDED_EXACT_PATHS`, the
+      // #1107 single source of truth — not duplicated here) must never ride into
+      // the commit, even if a prompt regression re-introduces an "Update agent
+      // context files" step. `PHASE_TO_STAGE[phase] !== 'implementation'` yields
+      // exactly the four spec-stage phases and auto-follows the phase vocabulary:
+      // a future spec-stage phase inherits the guard, while implement-and-later
+      // are preserved (an implement-phase CLAUDE.md edit can be durable guidance).
+      //
+      // Limitation (Q2): this is a *staging* filter only. Files inside commits the
+      // phase agent made directly are out of scope — declining to stage is far
+      // safer than rewriting an existing commit. The prompt-side pin that stops
+      // the agent writing these files at all lives in agency (agency#511).
+      const isSpecStage = PHASE_TO_STAGE[phase] !== 'implementation';
+      const excluded = isSpecStage
+        ? candidates.filter((p) => EXCLUDED_EXACT_PATHS.includes(p))
+        : [];
+      const toStage = isSpecStage
+        ? candidates.filter((p) => !EXCLUDED_EXACT_PATHS.includes(p))
+        : candidates;
+
       if (toStage.length > 0) {
         // Stage first so untracked members of `toStage` are known to git before
         // the pathspec commit (a bare `git commit -- <untracked>` would fail).
@@ -165,6 +188,27 @@ export class PrManager {
           'Committed phase changes',
         );
         committed = true;
+      }
+
+      // #1218 FR-002/FR-003: revert the excluded agent-context files in the
+      // working tree so they neither leak into a later phase's commit nor trip a
+      // dirty-tree check. Runs AFTER the product commit, in its own try/catch, so
+      // a revert failure can never lose the product work (D4). The warning fires
+      // whenever excluded paths were found dirty — including the exclusion-emptied
+      // case, which proceeds as a normal `no-changes` outcome (Q3), not an error.
+      if (excluded.length > 0) {
+        this.logger.warn(
+          { phase, reverted: excluded },
+          'Reverted agent-context files from spec-stage commit',
+        );
+        try {
+          await this.github.revertPaths(excluded);
+        } catch (error) {
+          this.logger.warn(
+            { phase, reverted: excluded, error: String(error) },
+            'Failed to revert agent-context files from spec-stage commit (non-fatal)',
+          );
+        }
       }
 
       // Check for unpushed commits (the phase may have committed directly)

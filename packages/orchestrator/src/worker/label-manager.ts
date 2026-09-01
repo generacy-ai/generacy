@@ -104,7 +104,7 @@ export interface ResumeStartOptions {
  * consumes `completed:remediation-limit` (resets the counter AND removes the
  * label itself), so stripping it here would discard the operator's answer.
  */
-export const DEFAULT_RESUME_RETAIN_SUFFIXES: readonly string[] = ['remediation-limit'];
+export const DEFAULT_RESUME_RETAIN_SUFFIXES: readonly string[] = ['remediation-limit', 'dependency-limit'];
 
 /**
  * Compute the resume-strip retain set from worker config. Rule:
@@ -285,11 +285,38 @@ export class LabelManager {
   async onGateHit(phase: WorkflowPhase, gateLabel: string): Promise<void> {
     const phaseLabel = `phase:${phase}`;
     // #958 FR-008 — `completed:<phase>` is applied AFTER the gate check in
-    // phase-loop.ts, so it is never present when this handler runs. Do NOT
-    // add it back to `removeLabels` — the paired T011 reorder ensures the
-    // label was never granted; a retract call here would be dead code, and
-    // future readers seeing "why isn't it removing completed?" should read
-    // this comment before re-adding it.
+    // phase-loop.ts for every gate raised by the normal post-phase gate loop,
+    // so it is not present when this handler runs on that path. Do NOT add it
+    // back to `removeLabels` — the paired T011 reorder ensures the label was
+    // never granted; a retract call here would be dead code, and future readers
+    // seeing "why isn't it removing completed?" should read this comment before
+    // re-adding it.
+    //
+    // Two POST-completion pauses are documented exceptions, and BOTH are safe
+    // without a retract branch:
+    //   1. #1133 `on-ci-green` — `validate` genuinely finished, so
+    //      `completed:validate` is granted at the pause.
+    //   2. #1214 `pauseForManualValidation` — `implement` genuinely finished its
+    //      automatable work, so `completed:implement` is granted at the pause.
+    //      That means this handler CAN run with `completed:implement` already
+    //      present. Exactly one gate is applied there
+    //      (`waiting-for:manual-validation`), i.e. the Q1=A shape:
+    //      `completed:implement` + `waiting-for:manual-validation`.
+    //
+    // Why (2) still needs no retract: this handler only ever removes
+    // `phase:<phase>` and adds `waiting-for:<gate>` + `agent:paused`.
+    // `onPhaseComplete` has already removed `phase:implement`, so `removeLabels`
+    // is a no-op, and nothing here reads or contradicts `completed:implement`.
+    // The #958 hazard the ordering guards against is a label-derived resume
+    // resolving PAST an open gate:
+    //   - `continue` (the gate was answered): `GATE_MAPPING` sends
+    //     `manual-validation` to `resumeFrom: 'validate'`, which is exactly
+    //     where `completed:implement` would have resolved to anyway.
+    //   - `process` (operator-forced requeue): `resolveFromProcess` would indeed
+    //     resolve to `validate` and skip the open gate — but a `process` requeue
+    //     is an explicit restart that now strips both the `completed:*` markers
+    //     AND the `waiting-for:*` gate labels (see `LabelMonitorService`), so
+    //     there is no open gate left to skip.
     await this.retryWithBackoff(async () => {
       await this.ensureRepoLabelsExist();
 

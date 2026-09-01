@@ -34,6 +34,7 @@ export const ClusterYamlSchema = z.object({
   workers: z.number().int().positive().default(1),
   variant: z.enum(['cluster-base', 'cluster-microservices']).default('cluster-base'),
   appConfig: AppConfigSchema.optional(),
+  llmGateway: z.boolean().default(false),
 });
 
 export type ClusterYaml = z.infer<typeof ClusterYamlSchema>;
