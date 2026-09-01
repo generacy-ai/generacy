@@ -1,5 +1,149 @@
 # Changelog
 
+## 0.13.3
+
+### Patch Changes
+
+- cd4f062: Route-aware CLI-session invalidation + transition logging (#1199).
+
+  The phase loop already dropped the CLI session on a **provider** change; it now
+  also tracks the launch **route** (`'subscription' | 'gateway'`, derived from the
+  resolved model via `resolveRoute` in `@generacy-ai/generacy-plugin-claude-code`).
+  When the route flips between phases — even with an unchanged provider — the
+  session is invalidated (crossing the CLI config-dir boundary) and an
+  `agent.route.transition` line is logged with `{ phase, prevRoute, nextRoute,
+prevModel, nextModel }`. A simultaneous provider + route change logs both lines
+  and drops the session once; the first CLI phase (`undefined → route`) only
+  initializes the tracker (no line, no drop).
+
+  The resolved route is also surfaced verbatim in the spawn/launch log payloads of
+  the phase spawner and the four direct callers (PR-feedback, review, remediate,
+  merge-conflict). No new public exports, no new label vocabulary, and no change to
+  launch options — `route` is a log/session-tracking field only.
+
+- df3e00f: Stop implement failing as `no-product-code-changes` after a mid-phase pause (#1204).
+
+  The #1107 phase-scoped product-diff guard retired its Redis `phase-start-ref`
+  the moment the guard _passed_. Passing the guard is not the same as finishing
+  the phase: `implement` can still pause afterwards — the merge-conflict gate is
+  armed on both `implement` and `validate`, and the `manual-validation` pause
+  returns later still. With the anchor already gone, the resume re-entered
+  `implement`, captured a fresh ref at whatever HEAD it found (for a
+  merge-conflict resume, the resolver's own merge commit), the agent correctly
+  found every task done and no-op'd, and the window saw only the
+  completion-banner commit — so a finished implementation failed as
+  `no-product-code-changes`, twice in a row, escalating to
+  `failed:implement-repeated`.
+
+  The clear now happens at genuine phase completion (step 6b, plus the
+  `manual-validation` pause that also grants `completed:implement`), via a new
+  `clearPhaseStartRef` helper. A re-entry _before_ completion keeps measuring
+  from the phase's original anchor and so spans the work it already did; a
+  re-entry _after_ completion (review rework, address-pr-feedback) still captures
+  a fresh window, so a genuine no-op still fails. The key is now built by a
+  shared `phaseStartRefKeyFor` so the capture site and both clear sites cannot
+  drift. The failure path is untouched — SC-004 (`own-diff empty even though
+baseRef...HEAD carries product files`) still fails, so the cumulative window
+  still cannot satisfy the guard.
+
+- 3f2a026: Engine-native pause/resume for implement phases blocked on sibling issues (#1211).
+
+  Before this change, an implement agent that correctly declined to write code —
+  because a clarify answer told it to wait for a sibling issue to merge — hit the
+  no-progress guard and was reported as `failed:implement` + `agent:error`. The
+  `waiting-for:dependencies` label existed in the vocabulary but nothing read or
+  applied it. Every dependency block therefore cost an operator a mute, a manual
+  watch, and a `cockpit resume` — and each forced requeue rebased onto a moved
+  `develop`, generating conflict escalations of its own.
+
+  The implement agent can now emit a `SPECKIT_IMPLEMENT_BLOCKED: {"on": [...]}`
+  sentinel. The phase loop commits WIP, posts a `<!-- generacy-dependency-block -->`
+  marker comment carrying the canonical refs, and applies
+  `waiting-for:dependencies` via the normal gate path — a deliberate pause, not a
+  failure. A new `DependencyMonitorService` polls each blocked issue's refs and,
+  once all are closed, posts a re-arm comment, applies `completed:dependencies`,
+  and enqueues a `continue`. Refs closed as `not planned`, or PRs closed without
+  merging, are flagged with ⚠ in the re-arm comment; the resumed agent re-verifies
+  and can re-emit the sentinel if it is genuinely still blocked.
+
+  Runaway blocks are capped: three block cycles per grant escalate to
+  `waiting-for:dependency-limit` with a limit comment, and three consecutive
+  failures reading a ref post one escalation comment. Neither ever fails open —
+  the gate stays held.
+
+  - `workflow-engine` (minor): new label vocabulary (`completed:dependencies`,
+    `waiting-for:dependency-limit`, `completed:dependency-limit`) and a new public
+    `GitHubClient.getIssueRefState()` returning `state` / `state_reason` /
+    `isPullRequest` / `merged`, plus the `IssueRefState` type.
+  - `orchestrator` (patch): blocked-branch handling in the phase loop, the
+    `SPECKIT_IMPLEMENT_BLOCKED` sentinel parse, `dependency-block` helpers, the new
+    monitor service, and the `dependencies` / `dependency-limit` gate entries. No
+    new public exports.
+  - `cockpit` (patch): both new gates added to `WAITING_PIPELINE_ORDER`. The gate
+    vocabulary derives from `WORKFLOW_LABELS`, so `cockpit advance --gate
+dependencies` and `--gate dependency-limit` work with no CLI change.
+
+  The path is inert unless the agent emits the sentinel; no feature flag, and no
+  change to existing PARTIAL handling or the no-progress guard.
+
+- 82543bc: Make the tasks.md safety net manual-task aware (#1214).
+
+  The #1187 safety net treated every unchecked task in `tasks.md` as automatable
+  and re-entered implement over it. Manual-verification tasks (browser checks,
+  deploy checklists) stay unchecked by design, so the second pass made no
+  progress and the no-progress guard failed complete-and-green stories with
+  `failed:implement` + `failed:implement-repeated`.
+
+  `countTasks` now also counts the **manual** subset of unchecked tasks, using
+  two detectors: a position-lenient `[manual]` marker, and whole-word
+  `manual` / `manually` / `hand-test` within the first four words of the task
+  text. `unchecked` / `checked` / `total` are unchanged. `TasksMdEvaluation`
+  gains a `manual-only` variant, and its `incomplete` variant carries the
+  `automatable` / `manual` split.
+
+  The phase loop pauses on the existing `waiting-for:manual-validation` gate —
+  granting `completed:implement` first so the gate's `resumeFrom: 'validate'`
+  resolves — whenever the gate label is already on the issue or every remaining
+  unchecked task classifies manual. Mixed remainders still re-enter, but the
+  synthesized `tasks_remaining` counts automatable tasks only. The no-progress
+  guard performs the same check before escalating, covering the case where the
+  agent emitted `SPECKIT_IMPLEMENT_PARTIAL` over a purely manual remainder.
+
+  No new label vocabulary and no new persisted state. The sentinel path is
+  untouched, so runs that emit `SPECKIT_IMPLEMENT_PARTIAL` behave exactly as
+  before.
+
+  The pause applies exactly one gate label, `waiting-for:manual-validation`. It
+  does not co-apply implement's other configured gates: the resume path strips all
+  `waiting-for:*` labels, so a second simultaneously-open gate would be silently
+  discarded as soon as either one was answered. As a result a story that takes
+  this pause is not additionally held for implementation review; that gap is
+  tracked separately.
+
+  The no-progress guard now records which unit `tasks_remaining` was measured in —
+  the sentinel's full unchecked count vs. the safety net's automatable-only count
+  — and keeps a baseline per unit, comparing only same-unit pairs. A single
+  baseline reset across unit changes would never fire when the agent alternates
+  emitting and not emitting `SPECKIT_IMPLEMENT_PARTIAL` over a stuck remainder,
+  leaving the increment re-entry unbounded.
+
+  `LabelMonitorService` also clears `waiting-for:*` labels on the `process:`
+  requeue path, alongside the `completed:*` / `failed:*` labels it already
+  cleared, so a gate label from a previous run cannot survive an explicit
+  restart.
+
+- bbd6ff6: Spec-stage phase commits (`specify`/`clarify`/`plan`/`tasks`) now exclude and revert repo-root
+  agent-context files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`),
+  so a prompt regression can never re-bloat them through a worker-produced commit. Adds
+  `GitHubClient.revertPaths()`. Also removes the dead #899 Layer-1 static-grep drift guard (it
+  watched a code path cluster workers never execute).
+- Updated dependencies [ea367b0]
+- Updated dependencies [3f2a026]
+- Updated dependencies [bbd6ff6]
+  - @generacy-ai/generacy-plugin-claude-code@0.7.0
+  - @generacy-ai/workflow-engine@0.8.0
+  - @generacy-ai/cockpit@0.9.1
+
 ## 0.13.2
 
 ### Patch Changes

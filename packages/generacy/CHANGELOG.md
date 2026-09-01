@@ -1,5 +1,46 @@
 # @generacy-ai/generacy
 
+## 0.11.0
+
+### Minor Changes
+
+- 318a7e7: Gateway-route validate warning + doctor `llm-gateway` check (#1200).
+
+  `generacy validate` now emits a warning when a config entry explicitly sets a
+  `model` that resolves to the LLM gateway route (one containing `/`) while
+  `GENERACY_LLM_GATEWAY_URL` is unset in the environment — the model would not
+  route anywhere at spawn time. Warnings walk the orchestrator agent tiers
+  (`default`, workflow defaults, phases) plus the tolerant `cockpit.auto.agents.*`
+  block, name the exact config path, and stay on the warnings-only channel
+  (exit code 0).
+
+  `generacy doctor` gains an `llm-gateway` check (category `services`, P1): it
+  skips when `GENERACY_LLM_GATEWAY_URL` is unset, fails fast without fetching when
+  the URL is set but `GENERACY_LLM_GATEWAY_TOKEN` is missing, and otherwise probes
+  `GET /v1/models` (falling back to a single-token `POST /v1/messages` on 404/405)
+  with a 2s per-request timeout to confirm the gateway is reachable and
+  authenticated.
+
+- 148534c: Add an opt-in LLM gateway (Bifrost) sidecar to scaffolded clusters (#1202). A
+  `--llm-gateway` / `--no-llm-gateway` flag (or `GENERACY_LLM_GATEWAY_ENABLED=true`)
+  on `launch` and `deploy` emits an `llm-gateway` compose service, a generate-once
+  `sk-bf-` token in `.env`, `llm-gateway/config.example.json` + create-if-absent
+  `config.json`, and a commented `.env.local`. The toggle persists as
+  `llmGateway: true` in `cluster.yaml`; disabled output stays byte-identical.
+
+### Patch Changes
+
+- Updated dependencies [ea367b0]
+- Updated dependencies [cd4f062]
+- Updated dependencies [df3e00f]
+- Updated dependencies [3f2a026]
+- Updated dependencies [82543bc]
+- Updated dependencies [bbd6ff6]
+  - @generacy-ai/generacy-plugin-claude-code@0.7.0
+  - @generacy-ai/orchestrator@0.13.3
+  - @generacy-ai/workflow-engine@0.8.0
+  - @generacy-ai/cockpit@0.9.1
+
 ## 0.10.3
 
 ### Patch Changes
