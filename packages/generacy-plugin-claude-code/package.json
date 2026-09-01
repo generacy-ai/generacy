@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/generacy-plugin-claude-code",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Claude Code agent platform plugin for Generacy - invokes Claude Code agents in isolated Docker containers",
   "type": "module",
   "main": "./dist/index.js",
