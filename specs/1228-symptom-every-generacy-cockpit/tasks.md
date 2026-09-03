@@ -12,7 +12,7 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
 
 ## Phase 1: Foundation
 
-- [ ] T001 [FND] Extend `FsFacade` in `doorbell/answers-file-source.ts` with the optional
+- [X] T001 [FND] Extend `FsFacade` in `doorbell/answers-file-source.ts` with the optional
       write surface the cursor store needs: `mkdir(path, { recursive })`, `readFile(path)`,
       `writeFile(path, data)`, `rename(from, to)`. Keep them **optional** members so existing
       read-only fakes in `__tests__/` stay valid. Wire the real `node:fs/promises`-backed
@@ -21,7 +21,7 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
 
 ## Phase 2: New modules (parallelizable — distinct new files)
 
-- [ ] T002 [P] [US2] Implement `EpicRefSetHolder` in new file `doorbell/ref-set-holder.ts`
+- [X] T002 [P] [US2] Implement `EpicRefSetHolder` in new file `doorbell/ref-set-holder.ts`
       per `contracts/epic-ref-set-holder.md`:
         - Constructor opts `{ epicRef, gh, logger, resolve?=resolveEpic, missRefreshMinIntervalMs=30_000, now? }`.
         - `get current(): RefSetView | null` / `get resolved(): ResolvedEpic | null`
@@ -34,7 +34,7 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
       Import `resolveEpic`/`buildRefSet`/`RefSetView`/`ResolvedEpic` from the same sources
       `smee-source.ts` uses (`@generacy-ai/cockpit`, `doorbell/webhook-to-event.ts`).
 
-- [ ] T003 [P] [US1] Implement `AnswersCursorStore` in new file
+- [X] T003 [P] [US1] Implement `AnswersCursorStore` in new file
       `doorbell/answers-cursor-store.ts` per `contracts/answers-cursor-store.md` and
       `data-model.md` § AnswersCursor:
         - `AnswersCursorSchema` (zod): `{ version: z.literal(1), ino, offset, updatedAt }`.
@@ -50,7 +50,7 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
 
 ## Phase 3: Core integration
 
-- [ ] T004 [US2] In `doorbell/smee-source.ts`, delegate ref-set ownership to
+- [X] T004 [US2] In `doorbell/smee-source.ts`, delegate ref-set ownership to
       `EpicRefSetHolder`: replace the private `refSet`/`currentResolved` fields with reads of
       `holder.current`/`holder.resolved`; accept the holder as a constructor/option input;
       the startup blocking resolve calls `holder.refresh()` and still propagates failure
@@ -58,7 +58,7 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
       `holder.refresh()`. Keep all debounce/timer logic in the smee source — only the
       resolve/store moves. `onRefSetRefreshFailure` semantics unchanged.
 
-- [ ] T005 [US2] [US3] In `doorbell/answers-file-source.ts`, replace `processLine()` step (c)
+- [X] T005 [US2] [US3] In `doorbell/answers-file-source.ts`, replace `processLine()` step (c)
       owner/repo compare with the ref-set membership test (`data-model.md` § Per-line
       pipeline step c″): parse issue-ref via `parseIssueRefFromGateKey`; non-issue target
       bypasses scoping and emits; membership key `owner/repo#number` lowercased against
@@ -69,14 +69,14 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
       `refSetHolder?`/`replayWindowMs?`/`cursorStore?` (+ `cursorDir?` test seam) to
       `AnswersFileSourceOptions`.
 
-- [ ] T006 [US4] In `doorbell/answers-file-source.ts`, add the recency-window pre-filter
+- [X] T006 [US4] In `doorbell/answers-file-source.ts`, add the recency-window pre-filter
       (step c′) to the **replay branches only** (fresh/stale cursor, rotation, truncation):
       drop lines whose `answeredAt < now - replayWindowMs` (default 86_400_000) with an
       `info` "window drop" log, evaluated **before** the ref-set test so out-of-window lines
       never trigger a miss refresh. Never applied to resumed-cursor tailing. Keep
       `DEFAULT_REPLAY_LINE_CAP` as a backstop.
 
-- [ ] T007 [US1] In `doorbell/answers-file-source.ts`, make `lastKnownIno`/`lastKnownSize`
+- [X] T007 [US1] In `doorbell/answers-file-source.ts`, make `lastKnownIno`/`lastKnownSize`
       cursor-backed via `AnswersCursorStore`. On first file discovery, apply the state table
       (`data-model.md` § validation/staleness): resume `[offset, size)` with no replay/window
       when `cursor.ino === stat.ino && cursor.offset <= stat.size`; otherwise fresh-cursor
@@ -86,7 +86,7 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
       line (emitted after awaited `onEvent` resolves; window/foreign/malformed drops too);
       `flush()` at replay drain and in `stop()`.
 
-- [ ] T008 [US1] [US2] [US4] In `doorbell.ts` (`runDoorbell`), wire it together: construct one
+- [X] T008 [US1] [US2] [US4] In `doorbell.ts` (`runDoorbell`), wire it together: construct one
       `EpicRefSetHolder` per run when `deps.gh` is present and pass it to both the tailer
       (`refSetHolder`) and `SmeeDoorbellSource`; construct the `AnswersCursorStore` (keyed by
       epic scope, cursor dir derived from the answers-file dirname) and pass it to the tailer;
@@ -96,26 +96,26 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
 
 ## Phase 4: Tests (FR-008 — write after the modules they exercise exist)
 
-- [ ] T009 [P] [US2] New `doorbell/__tests__/ref-set-holder.test.ts`: first-resolve populates
+- [X] T009 [P] [US2] New `doorbell/__tests__/ref-set-holder.test.ts`: first-resolve populates
       `current`; failed refresh after first success retains the previous set (never null);
       `refreshOnMiss()` throttle (≤1 resolve per 30s); single-flight coalescing; unknown ref
       still foreign after refresh → caller drops.
 
-- [ ] T010 [P] [US1] New `doorbell/__tests__/answers-cursor-store.test.ts`: load/advance/flush
+- [X] T010 [P] [US1] New `doorbell/__tests__/answers-cursor-store.test.ts`: load/advance/flush
       round-trip; atomic rename (no partial reads); corrupt/invalid/wrong-version file → null;
       monotonic-within-ino; new ino resets offset; lazy `cursors/` mkdir at first flush; write
       failure warns and does not throw.
 
-- [ ] T011 [US4] Extend `doorbell/__tests__/answers-file-source.replay.test.ts`: fresh-cursor
+- [X] T011 [US4] Extend `doorbell/__tests__/answers-file-source.replay.test.ts`: fresh-cursor
       byte-0 replay bounded by recency window AND ref-set scope; window drops logged `info`;
       replay-line-cap backstop still applies.
 
-- [ ] T012 [US1] Extend `doorbell/__tests__/answers-file-source.tail.test.ts`: resumed cursor
+- [X] T012 [US1] Extend `doorbell/__tests__/answers-file-source.tail.test.ts`: resumed cursor
       emits only bytes past `offset` with no window; fully-consumed file → zero events on
       restart; rotation (ino change) and truncation (size shrink) → window-bounded replay with
       cursor rewritten for the new ino.
 
-- [ ] T013 [US2] [US3] Extend `doorbell/__tests__/answers-file-source.unit.test.ts`: same-repo
+- [X] T013 [US2] [US3] Extend `doorbell/__tests__/answers-file-source.unit.test.ts`: same-repo
       foreign-epic answer dropped + `info` with `gateId`; cross-repo in-scope child emitted
       (#1111 regression); unknown ref → `refreshOnMiss()` → late-created child emitted after
       refresh; no-holder (harness) mode keeps legacy owner/repo compare; non-issue gateKey
@@ -123,13 +123,13 @@ All paths are under `packages/generacy/src/cli/commands/cockpit/` unless stated 
 
 ## Phase 5: Docs, contract, changeset, cleanup
 
-- [ ] T014 [P] [US1] [US2] Update the contract
+- [X] T014 [P] [US1] [US2] Update the contract
       `specs/1023-part-cockpit-remote-gates/contracts/answers-file-source.md` (FR-007) to
       describe epic-ref-set scoping (replacing the owner/repo compare), the persisted
       consumed cursor, the recency window on replay branches, and the revised state table.
       Update the doorbell docs referenced there to match.
 
-- [ ] T015 [P] Add a **newly created** changeset file
+- [X] T015 [P] Add a **newly created** changeset file
       `.changeset/1228-doorbell-answer-replay-scope.md` — `patch` bump for
       `@generacy-ai/generacy` (defect fix; the only package with non-test `src/` changes).
       Required by the CLAUDE.md changeset CI gate.

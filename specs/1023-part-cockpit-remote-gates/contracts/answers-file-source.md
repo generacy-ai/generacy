@@ -4,7 +4,19 @@
 
 ## Purpose
 
-A doorbell wake source that tails `/workspaces/.generacy/cockpit/answers.ndjson`, filters by the bound `epicRef`, validates each line, and delivers `GateAnswerEvent`s to a caller-supplied sink. Peer of `SmeeDoorbellSource` — same DI shape, same lifecycle, same log seam.
+A doorbell wake source that tails `/workspaces/.generacy/cockpit/answers.ndjson`, scopes each
+line to the bound epic's resolved **ref set** (epic + children, cross-repo included), validates
+each line, and delivers `GateAnswerEvent`s to a caller-supplied sink. Peer of
+`SmeeDoorbellSource` — same DI shape, same lifecycle, same log seam.
+
+The consumed byte position is **persisted** per epic scope (`AnswersCursorStore`), so a doorbell
+restart resumes from the last consumed byte instead of replaying from byte 0. When no valid
+cursor exists (fresh/stale cursor, rotation, truncation), the tailer replays from byte 0 bounded
+by an `answeredAt` recency window **and** the ref-set scope.
+
+Updated for #1228 — see the FR-004..006 (persisted cursor) and FR-001..003 (ref-set scoping)
+sections below. Harness mode (constructed without a ref-set holder) retains the legacy
+owner/repo string compare.
 
 ## Public Interface
 
@@ -32,9 +44,23 @@ export class AnswersFileSource {
 |---|---|---|
 | `waiting-for-dir` | Parent dir absent at `start()` | Dir appears → `waiting-for-file`; `stop()` → `stopped` |
 | `waiting-for-file` | Dir present, file absent | File appears → `replaying`; dir removed → `waiting-for-dir`; `stop()` → `stopped` |
-| `replaying` | File present, tailing not yet started | Replay drains (or cap hit) → `tailing`; file rotated mid-replay → re-enter `replaying`; `stop()` → `stopped` |
-| `tailing` | Replay drained, live-tail active | Rotation/truncation → `replaying`; file/dir removed → `waiting-for-file` / `waiting-for-dir`; `stop()` → `stopped` |
-| `stopped` | `stop()` called | Terminal |
+| `replaying` | File present, no valid cursor (fresh/stale/rotation/truncation) — replay from byte 0, window + scope applied | Replay drains (or cap hit) → `tailing`; file rotated mid-replay → re-enter `replaying`; `stop()` → `stopped` |
+| `tailing` | Replay drained OR resumed from persisted cursor (`[offset, size)`, no window, no replay) — live-tail active | Rotation/truncation → `replaying`; file/dir removed → `waiting-for-file` / `waiting-for-dir`; `stop()` → `stopped` |
+| `stopped` | `stop()` called (flushes cursor) | Terminal |
+
+### First-discovery / cursor state table
+
+Evaluated once when the file is first discovered (`lastKnownIno == null`):
+
+| Cursor state | Condition | Action |
+|---|---|---|
+| Valid resume | `cursor.ino === stat.ino && cursor.offset <= stat.size` | Resume tail from `[offset, size)` — **no replay, no window**, ref-set scope still applies |
+| Fresh (no cursor) | `load()` → null (missing/unreadable/invalid/wrong-version) | Replay from byte 0, window + ref-set scope |
+| Stale ino | `cursor.ino !== stat.ino` | Replay from byte 0, window + ref-set scope; rewrite cursor for the new ino |
+| Stale offset | `cursor.offset > stat.size` (truncation since last run) | Replay from byte 0, window + ref-set scope; rewrite cursor |
+
+The cursor is advanced positionally to `lineEndByte` after **every** processed line — including
+window/foreign/malformed drops — and flushed at replay drain and in `stop()`.
 
 ## FR / Q Mapping
 
@@ -44,12 +70,18 @@ export class AnswersFileSource {
 | Wait for file before tailing | Spec §Scope "handle file-not-yet-existing" |
 | Startup replay of pre-existing content | Spec §Scope "replay of lines not yet acked on doorbell start" |
 | Cap startup replay at last 10 000 lines + `warn` naming skipped range | Q5 → C |
-| Filter by bound `epicRef` before emit | Q1 → C |
-| Log cross-epic drops at `info` with `gateId` | Q1 → C |
+| Scope by bound epic's resolved **ref set** (epic + children, cross-repo) before emit | #1228 FR-001..003 |
+| On unknown ref, throttled re-resolve (`refreshOnMiss`, ≤1/30s) before dropping | #1228 FR-002 |
+| Cross-repo epic children now emitted (previously dropped by owner/repo compare) | #1228 FR-003 (closes #1111) |
+| Harness mode (no ref-set holder) keeps legacy case-insensitive owner/repo compare | #1228 FR-003 |
+| Non-issue gateKey target bypasses scoping and emits | #1228 FR-001 |
+| Log cross-epic drops at `info` with `gateId`, `scope`, bound `epicRef` | Q1 → C / #1228 |
+| Persist consumed `{ino, offset}` per epic scope; resume from cursor on restart | #1228 FR-004..006 |
+| Recency-window pre-filter on **replay branches only** (default 24 h) | #1228 FR-005 |
 | Skip malformed lines + `warn` via injected logger | Q4 → A |
 | Interleave freely with smee events (no drain barrier) | Q3 → A |
-| No `mkdir` of parent dir | Q2 → B |
-| Handle rotation (inode change) + truncation (size shrink) | Spec §Scope "rotation/truncation" |
+| No `mkdir` of parent dir (cursor store lazily `mkdir`s only its `cursors/` subdir) | Q2 → B |
+| Handle rotation (inode change) + truncation (size shrink), now window-bounded | Spec §Scope "rotation/truncation" |
 
 ## Emit Contract
 
@@ -73,8 +105,11 @@ All log lines go through the injected `logger`. No direct `process.stderr.write`
 | Situation | Level | Fields |
 |---|---|---|
 | Malformed line skipped | `warn` | file path, byte offset at line start, extractable `gateId` (best-effort) |
-| Cross-epic line dropped | `info` | file path, byte offset, `gateId`, source `scope`, bound `epicRef` |
+| Cross-epic line dropped (out of ref set after `refreshOnMiss`) | `info` | file path, byte offset, `gateId`, source `scope`, bound `epicRef` |
+| Out-of-window line dropped on replay | `info` | file path, byte offset, `gateId`, `answeredAt` |
 | Replay-cap truncation on startup | `warn` | file path, `[skippedFromByte, skippedToByte]`, skipped line count |
+| Cursor persist failure | `warn` | cursor path, error (never throws) |
+| Invalid `COCKPIT_ANSWERS_REPLAY_WINDOW_MS` (in caller) | `warn` | raw value, default applied |
 | Rotation detected | `info` | file path, old ino, new ino |
 | Truncation detected (ino same, size dropped) | `info` | file path, ino, old size, new size |
 | Directory absent at start | `info` | parent dir path, "waiting" |
@@ -89,6 +124,15 @@ All non-deterministic surfaces are injectable:
 - `useFsWatch: false` — disables `fs.watch`; tailer relies only on `pollIntervalMs`. Used by the deterministic replay test.
 - `pollIntervalMs` — small values (e.g., 10 ms) in tests to keep suites fast.
 - `replayLineCap` — small caps (e.g., 5) in tests to force the truncation branch without needing 10 000 lines.
+- `refSetHolder` — an `EpicRefSetHolder` supplying `current.issues` (the resolved ref set) and
+  `refreshOnMiss()`. Omit it to exercise legacy harness-mode owner/repo scoping.
+- `cursorStore` — an `AnswersCursorStore` for `load`/`advance`/`flush`. The default store uses the
+  injected `fs`; a read-only `fs` façade (no write methods) makes `load()` return null and
+  `advance`/`flush` no-op, preserving the byte-0 replay behavior in existing unit tests.
+- `cursorDir` — overrides the cursor directory (default `<dirname(answersFilePath)>/cursors`) so
+  tests can point the store at a scratch path.
+- `replayWindowMs` — the recency window for replay branches (default 86 400 000 ms). Small values
+  in tests force the window-drop branch deterministically alongside injected `now`.
 
 ## Non-Goals
 

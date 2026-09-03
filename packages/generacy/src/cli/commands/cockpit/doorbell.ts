@@ -37,7 +37,14 @@ import { resolveWebhookTargets } from './doorbell/webhook-target-resolver.js';
 import { SourceSelector, type SourceMode } from './doorbell/source-selector.js';
 import { SmeeDoorbellSource } from './doorbell/smee-source.js';
 import { runStartupRetry } from './doorbell/startup-retry.js';
-import { AnswersFileSource } from './doorbell/answers-file-source.js';
+import {
+  AnswersFileSource,
+  nodeFsFacade,
+  DEFAULT_ANSWERS_FILE_PATH,
+  DEFAULT_REPLAY_WINDOW_MS,
+} from './doorbell/answers-file-source.js';
+import { AnswersCursorStore } from './doorbell/answers-cursor-store.js';
+import { EpicRefSetHolder } from './doorbell/ref-set-holder.js';
 import type { GateAnswerEvent } from './watch/gate-answer.js';
 
 export interface DoorbellOptions {
@@ -232,10 +239,33 @@ interface RunSmeeModeInput {
   selector: SourceSelector;
   stop: () => void;
   retryAbortSignal: AbortSignal;
+  /** Shared ref-set oracle (null in harness / no-gh mode). */
+  refSetHolder: EpicRefSetHolder | null;
 }
 
 interface RunSmeeModeHandle {
   source: SmeeDoorbellSource;
+}
+
+/**
+ * Parse `COCKPIT_ANSWERS_REPLAY_WINDOW_MS` into the tailer's recency window.
+ * A positive integer wins; anything else (unset, non-numeric, non-positive)
+ * falls back to the 24 h default, warning on an explicitly-invalid value.
+ */
+function parseReplayWindowMs(
+  env: NodeJS.ProcessEnv,
+  logger: { warn: (msg: string) => void },
+): number {
+  const raw = env['COCKPIT_ANSWERS_REPLAY_WINDOW_MS'];
+  if (raw == null || raw.trim() === '') return DEFAULT_REPLAY_WINDOW_MS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    logger.warn(
+      `cockpit doorbell: answers file: invalid COCKPIT_ANSWERS_REPLAY_WINDOW_MS="${raw}"; using default ${DEFAULT_REPLAY_WINDOW_MS}`,
+    );
+    return DEFAULT_REPLAY_WINDOW_MS;
+  }
+  return n;
 }
 
 async function runSmeeMode(
@@ -271,6 +301,7 @@ async function runSmeeMode(
     onSseBytes: () => input.selector.onSseBytes(),
   };
   if (input.deps.runner != null) sourceOptions.runner = input.deps.runner;
+  if (input.refSetHolder != null) sourceOptions.refSetHolder = input.refSetHolder;
 
   const source =
     input.deps.smeeSourceFactory != null
@@ -389,6 +420,26 @@ export async function runDoorbell(
     return 0;
   }
 
+  // Shared ref-set oracle: one resolve feeds both the smee source
+  // (webhook-debounce + safety-net triggers) and the answers tailer
+  // (unknown-ref miss triggers). Only constructed when a gh wrapper is present;
+  // harness mode (no gh) keeps the tailer's legacy owner/repo scoping.
+  const refSetHolder: EpicRefSetHolder | null =
+    deps.gh != null
+      ? new EpicRefSetHolder({ epicRef: form.ref, gh: deps.gh, logger })
+      : null;
+
+  // Persisted consumed-position cursor, keyed by epic scope with the cursor dir
+  // derived from the answers-file dirname. Wired with the real fs façade so the
+  // store can actually read/write (a store without write methods is a no-op).
+  const answersReplayWindowMs = parseReplayWindowMs(deps.env ?? process.env, logger);
+  const answersCursorStore = new AnswersCursorStore({
+    answersFilePath: deps.answersFilePath ?? DEFAULT_ANSWERS_FILE_PATH,
+    epicRef: form.ref,
+    logger,
+    fs: nodeFsFacade,
+  });
+
   // Answers-file tailer — peer wake source that runs concurrently with
   // whichever primary source `source-selector` picks. Bound to the same
   // epicRef as the doorbell; writes gate-answer events to stdout and emits
@@ -434,8 +485,11 @@ export async function runDoorbell(
       epicRef: form.ref,
       onEvent: answersOnEvent,
       logger,
+      replayWindowMs: answersReplayWindowMs,
+      cursorStore: answersCursorStore,
     };
     if (deps.answersFilePath != null) tailerOptions.filePath = deps.answersFilePath;
+    if (refSetHolder != null) tailerOptions.refSetHolder = refSetHolder;
     answersTailer =
       deps.answersFileSourceFactory != null
         ? deps.answersFileSourceFactory(tailerOptions)
@@ -581,6 +635,7 @@ export async function runDoorbell(
       selector,
       stop,
       retryAbortSignal: retryAbortController.signal,
+      refSetHolder,
     });
     if (handle == null) return 'transient-fail';
     if ('kind' in handle && handle.kind === 'permanent-exit') return 'permanent-exit';

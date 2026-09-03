@@ -9,6 +9,8 @@ import {
 import { CockpitStreamEventSchema } from '../../watch/stream-event.js';
 import { lineForEvent } from '../subscribe.js';
 import type { GateAnswerEvent } from '../../watch/gate-answer.js';
+import { EpicRefSetHolder } from '../ref-set-holder.js';
+import type { GhWrapper, ResolvedEpic } from '@generacy-ai/cockpit';
 
 /**
  * In-memory fs façade for pure unit coverage. Backed by a single string of
@@ -616,5 +618,145 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
 
     const event = onEvent.mock.calls[0]![0] as GateAnswerEvent;
     expect(event.ts).toBe(new Date(nowValue).toISOString());
+  });
+});
+
+/**
+ * Ref-set-scoped filtering (FR-001..003). With an `EpicRefSetHolder`, scoping
+ * is membership in the resolved ref set — same-repo answers whose issue is NOT
+ * in the tree are dropped, and cross-repo children that ARE in the tree emit
+ * (the #1111 regression). Without a holder the legacy owner/repo compare above
+ * still applies.
+ */
+function resolvedWith(
+  epicRepo: string,
+  epicNumber: number,
+  childRefs: Array<{ repo: string; number: number }>,
+): ResolvedEpic {
+  return {
+    epic: { repo: epicRepo, number: epicNumber },
+    parsed: { phases: [], adhocRefs: [], allRefs: childRefs, warnings: [] },
+    repos: Array.from(new Set([epicRepo, ...childRefs.map((r) => r.repo)])).sort(),
+    bodyHash: 'x',
+  };
+}
+
+function makeHolder(
+  resolveImpl: () => Promise<ResolvedEpic>,
+): { holder: EpicRefSetHolder; resolve: ReturnType<typeof vi.fn> } {
+  const resolve = vi.fn(resolveImpl);
+  const holder = new EpicRefSetHolder({
+    epicRef: 'owner/repo#5',
+    gh: {} as GhWrapper,
+    logger: makeLogger(),
+    resolve: resolve as never,
+    now: () => 0,
+  });
+  return { holder, resolve };
+}
+
+describe('AnswersFileSource — ref-set scoping (with holder)', () => {
+  it('same-repo answer whose issue is NOT in the ref set is dropped + info(gateId)', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'owner/repo#99:clarification:x' }));
+    const { holder } = makeHolder(async () =>
+      resolvedWith('owner/repo', 5, [{ repo: 'owner/repo', number: 42 }]),
+    );
+    await holder.refresh();
+
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger, refSetHolder: holder }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    const drop = logger.info.mock.calls
+      .map((c) => c[0] as string)
+      .find((m) => m.includes('cross-epic drop'));
+    expect(drop).toBeDefined();
+    expect(drop).toMatch(/gateId=g1/);
+    expect(drop).toMatch(/scope=owner\/repo#99/);
+    expect(drop).toMatch(/boundEpic=owner\/repo#5/);
+  });
+
+  it('cross-repo in-scope child is emitted (#1111 regression)', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'other/child#7:implementation-review:z' }));
+    const { holder } = makeHolder(async () =>
+      resolvedWith('owner/repo', 5, [{ repo: 'other/child', number: 7 }]),
+    );
+    await holder.refresh();
+
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger, refSetHolder: holder }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const drops = logger.info.mock.calls
+      .map((c) => c[0] as string)
+      .filter((m) => m.includes('cross-epic drop'));
+    expect(drops).toHaveLength(0);
+  });
+
+  it('unknown ref triggers refreshOnMiss(); a late-created child emits after refresh', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'owner/repo#42:clarification:x' }));
+    // Holder never pre-resolved: current is null, so the first membership check
+    // misses and the tailer calls refreshOnMiss(), which resolves the tree that
+    // now contains the late-created child.
+    const { holder, resolve } = makeHolder(async () =>
+      resolvedWith('owner/repo', 5, [{ repo: 'owner/repo', number: 42 }]),
+    );
+
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, refSetHolder: holder }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('non-issue gateKey target still emits even with a holder', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'tracking-thread-7:filing:draft-9' }));
+    const { holder, resolve } = makeHolder(async () =>
+      resolvedWith('owner/repo', 5, []),
+    );
+    await holder.refresh();
+
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, refSetHolder: holder }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    // Non-issue target bypasses scoping — no miss refresh beyond the pre-resolve.
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('no-holder (harness) mode keeps the legacy same-repo emit', async () => {
+    const mem = makeMemFs();
+    // Same repo, issue not in any tree — legacy compare emits (repo matches).
+    mem.setContent(goodLine({ gateKey: 'owner/repo#99:clarification:x' }));
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
   });
 });

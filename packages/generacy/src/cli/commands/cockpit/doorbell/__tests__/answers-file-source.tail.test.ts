@@ -4,7 +4,7 @@
  * and truncation behave naturally.
  */
 import { describe, expect, it, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, appendFile, rm, truncate, stat, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, appendFile, rm, truncate, stat, rename, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
 import { AnswersFileSource } from '../answers-file-source.js';
@@ -270,6 +270,116 @@ describe('AnswersFileSource — truncation', () => {
       const truncMsg = infoMsgs.find((m) => m.includes('truncation'));
       expect(truncMsg).toBeDefined();
       expect(truncMsg).toMatch(new RegExp(`ino=${Number(beforeIno)}`));
+    } finally {
+      await src.stop();
+    }
+  });
+});
+
+describe('AnswersFileSource — persisted cursor resume (US1)', () => {
+  const cursorPath = (parent: string): string =>
+    join(parent, 'cursors', 'owner__repo__5.json');
+
+  async function makeSrc(
+    filePath: string,
+    events: GateAnswerEvent[],
+  ): Promise<AnswersFileSource> {
+    return new AnswersFileSource({
+      epicRef: 'owner/repo#5',
+      filePath,
+      onEvent: async (e) => {
+        events.push(e);
+      },
+      logger: makeLogger(),
+      useFsWatch: false,
+      pollIntervalMs: 100,
+    });
+  }
+
+  it('a restart with a fully-consumed cursor emits zero events; a later append emits only the new line', async () => {
+    const root = await tempRoot();
+    const parent = join(root, 'cockpit');
+    const filePath = join(parent, 'answers.ndjson');
+    await mkdir(parent, { recursive: true });
+    await writeFile(
+      filePath,
+      goodLine({ gateId: 'g1' }) + goodLine({ gateId: 'g2', deliveryId: 'd2' }),
+    );
+
+    // First run consumes both lines and persists the cursor on stop().
+    const firstEvents: GateAnswerEvent[] = [];
+    const first = await makeSrc(filePath, firstEvents);
+    await first.start();
+    await waitFor(() => firstEvents.length, (n) => n >= 2);
+    await first.stop();
+
+    // The cursor now points at the end of the file.
+    const persisted = JSON.parse(await readFile(cursorPath(parent), 'utf-8'));
+    const fileSize = (await stat(filePath)).size;
+    expect(persisted.offset).toBe(fileSize);
+    expect(persisted.ino).toBe(Number((await stat(filePath)).ino));
+
+    // Second run resumes from the cursor: no replay, zero events.
+    const secondEvents: GateAnswerEvent[] = [];
+    const second = await makeSrc(filePath, secondEvents);
+    await second.start();
+    try {
+      expect(second.getState()).toBe('tailing');
+      await new Promise((r) => setTimeout(r, 250));
+      expect(secondEvents).toHaveLength(0);
+
+      // Only bytes past the cursor are tailed.
+      await appendFile(filePath, goodLine({ gateId: 'g3', deliveryId: 'd3' }));
+      await waitFor(() => secondEvents.length, (n) => n >= 1);
+      expect(secondEvents.map((e) => e.gateId)).toEqual(['g3']);
+    } finally {
+      await second.stop();
+    }
+  });
+
+  it('rotation (new inode) after a resume re-enters replay and rewrites the cursor for the new inode', async () => {
+    const root = await tempRoot();
+    const parent = join(root, 'cockpit');
+    const filePath = join(parent, 'answers.ndjson');
+    await mkdir(parent, { recursive: true });
+    await writeFile(filePath, goodLine({ gateId: 'g1' }));
+
+    const firstEvents: GateAnswerEvent[] = [];
+    const first = await makeSrc(filePath, firstEvents);
+    await first.start();
+    await waitFor(() => firstEvents.length, (n) => n >= 1);
+    await first.stop();
+    const oldIno = Number((await stat(filePath)).ino);
+
+    // Restart, then rotate the file (fresh inode via rename-over).
+    const events: GateAnswerEvent[] = [];
+    const src = await makeSrc(filePath, events);
+    await src.start();
+    try {
+      // Resume → no replay of g1.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(events).toHaveLength(0);
+
+      const tmpPath = join(parent, 'answers.ndjson.new');
+      await writeFile(tmpPath, goodLine({ gateId: 'g-after' }));
+      await rename(tmpPath, filePath);
+      const newIno = Number((await stat(filePath)).ino);
+      expect(newIno).not.toBe(oldIno);
+
+      await waitFor(() => events.length, (n) => n >= 1);
+      expect(events.map((e) => e.gateId)).toEqual(['g-after']);
+
+      // Cursor rewritten for the new inode.
+      await waitFor(
+        async () => {
+          try {
+            return JSON.parse(await readFile(cursorPath(parent), 'utf-8')).ino as number;
+          } catch {
+            return -1;
+          }
+        },
+        (ino) => ino === newIno,
+      );
     } finally {
       await src.stop();
     }
