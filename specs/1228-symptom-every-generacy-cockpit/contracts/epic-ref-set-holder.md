@@ -35,9 +35,16 @@ export class EpicRefSetHolder {
   /** Throttled resolve for the tailer's unknown-ref path. If a resolve ran within
    *  missRefreshMinIntervalMs, returns immediately without resolving. Never throws;
    *  failures warn and retain the previous set. Concurrent calls share one
-   *  in-flight resolve. */
-  refreshOnMiss(): Promise<void>;
+   *  in-flight resolve. The returned outcome tells the caller whether the set it
+   *  is about to read is AUTHORITATIVE for a permanent-drop decision. */
+  refreshOnMiss(): Promise<MissRefreshOutcome>;
 }
+
+export type MissRefreshOutcome =
+  | 'resolved'         // a resolve ran and succeeded — authoritative
+  | 'throttled'        // no resolve ran; last attempt SUCCEEDED in-window — authoritative
+  | 'throttled-stale'  // no resolve ran; last attempt FAILED — NOT authoritative
+  | 'failed';          // a resolve ran and threw; previous set (if any) retained
 ```
 
 ## Guarantees
@@ -60,8 +67,21 @@ export class EpicRefSetHolder {
   unchanged); debounced webhook and safety-net refreshes call `holder.refresh()`.
   `onRefSetRefreshFailure` semantics unchanged.
 - **AnswersFileSource**: reads `holder.current` for the scope test; on an unknown
-  issue-ref awaits `holder.refreshOnMiss()` and re-checks once; drops (+`info` log) only
-  if still foreign. When constructed **without** a holder (hermetic harness mode,
+  issue-ref awaits `holder.refreshOnMiss()` and re-checks once. The re-check's disposition
+  depends on the outcome, because advance-on-emit makes a wrong drop permanent:
+  - set present + `resolved` / `throttled` / `failed` ⇒ drop (+`info` log). The
+    re-resolve duty of FR-002 is discharged (or the set is provably fresh).
+  - set present + `throttled-stale` ⇒ **defer** the line: leave the cursor un-advanced
+    and retry on the next tick. No authoritative re-resolve has happened, so a
+    late-created child would otherwise be lost. Self-limiting — the throttle window
+    expires within `missRefreshMinIntervalMs`.
+  - **no set at all** (the oracle has never resolved successfully — startup 403 / rate
+    limit) ⇒ **fail open** to the legacy case-insensitive owner/repo compare, with a
+    `warn`. Testing membership against a null set rejects every answer *including the
+    bound epic's own*, so the pre-#1228 repo-granular scope is strictly better than
+    dropping blind.
+
+  When constructed **without** a holder (hermetic harness mode,
   `COCKPIT_DOORBELL_HARNESS=1`, no gh), the tailer applies the legacy case-insensitive
   owner/repo compare instead — see research.md D3.
 

@@ -111,17 +111,48 @@ describe('EpicRefSetHolder', () => {
       now: () => clock,
     });
 
-    await holder.refreshOnMiss();
+    expect(await holder.refreshOnMiss()).toBe('resolved');
     expect(resolve).toHaveBeenCalledTimes(1);
 
-    // Within the window → no resolve.
+    // Within the window → no resolve. The armed window came from a SUCCESSFUL
+    // resolve, so the set is fresh and the outcome is authoritative.
     clock += 10_000;
-    await holder.refreshOnMiss();
+    expect(await holder.refreshOnMiss()).toBe('throttled');
     expect(resolve).toHaveBeenCalledTimes(1);
 
     // Past the window → resolves again.
     clock += 25_000;
-    await holder.refreshOnMiss();
+    expect(await holder.refreshOnMiss()).toBe('resolved');
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshOnMiss() reports throttled-stale when the armed window came from a FAILED resolve', async () => {
+    let clock = 1_000_000;
+    const resolve = vi.fn(async () => {
+      throw new Error('rate limited');
+    });
+    const holder = new EpicRefSetHolder({
+      epicRef: 'owner/repo#5',
+      gh,
+      logger: makeLogger(),
+      resolve: resolve as never,
+      missRefreshMinIntervalMs: 30_000,
+      now: () => clock,
+    });
+
+    expect(await holder.refreshOnMiss()).toBe('failed');
+    expect(resolve).toHaveBeenCalledTimes(1);
+
+    // Inside the window the throttle suppresses the retry, but the set is NOT
+    // authoritative — the only attempt failed. Callers must not treat a miss
+    // here as proof the ref is foreign.
+    clock += 10_000;
+    expect(await holder.refreshOnMiss()).toBe('throttled-stale');
+    expect(resolve).toHaveBeenCalledTimes(1);
+
+    // Self-limiting: once the window expires a real attempt happens again.
+    clock += 25_000;
+    expect(await holder.refreshOnMiss()).toBe('failed');
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 
@@ -137,7 +168,7 @@ describe('EpicRefSetHolder', () => {
       resolve: resolve as never,
     });
 
-    await expect(holder.refreshOnMiss()).resolves.toBeUndefined();
+    await expect(holder.refreshOnMiss()).resolves.toBe('failed');
     expect(holder.current).toBeNull();
     expect(logger.warn).toHaveBeenCalled();
   });

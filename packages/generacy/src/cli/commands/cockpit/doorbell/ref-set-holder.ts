@@ -16,6 +16,31 @@ import type { RefSetView } from './webhook-to-event.js';
 
 export const DEFAULT_MISS_REFRESH_MIN_INTERVAL_MS = 30_000;
 
+/**
+ * What a `refreshOnMiss()` call actually did — and, crucially, whether the ref
+ * set the caller is about to read is **authoritative** for a permanent-drop
+ * decision (FR-002: drop only if still foreign *after* a re-resolve).
+ *
+ * - `resolved` — a resolve ran (or an in-flight one completed) and succeeded.
+ *   Authoritative.
+ * - `throttled` — no resolve ran, but the most recent attempt SUCCEEDED inside
+ *   the throttle window. That is exactly why the throttle exists: the set is
+ *   fresh. Authoritative.
+ * - `throttled-stale` — no resolve ran AND the most recent attempt FAILED. The
+ *   throttle window is armed by a resolve that left the set stale, so a miss
+ *   here proves nothing. NOT authoritative — the caller should retry rather
+ *   than drop. Self-limiting: the window expires within
+ *   `missRefreshMinIntervalMs`, after which the next call resolves or fails.
+ * - `failed` — a resolve ran and threw (rate limit, 403, network). The previous
+ *   set (if any) is retained. The re-resolve duty was discharged, so the caller
+ *   may decide; with no previous set at all the caller must fail open.
+ */
+export type MissRefreshOutcome =
+  | 'resolved'
+  | 'throttled'
+  | 'throttled-stale'
+  | 'failed';
+
 export interface EpicRefSetHolderOptions {
   /** Epic ref in "owner/repo#number" form. */
   epicRef: string;
@@ -47,6 +72,8 @@ export class EpicRefSetHolder {
   private currentRefSet: RefSetView | null = null;
   private currentResolved: ResolvedEpic | null = null;
   private lastRefreshAt: number | null = null;
+  /** Whether the most recent completed resolve attempt threw. */
+  private lastAttemptFailed = false;
   private inFlight: Promise<void> | null = null;
 
   constructor(options: EpicRefSetHolderOptions) {
@@ -101,31 +128,35 @@ export class EpicRefSetHolder {
 
   /**
    * Throttled resolve for the tailer's unknown-ref path. If a resolve ran
-   * within `missRefreshMinIntervalMs`, returns without resolving. Never throws;
-   * failures warn and retain the previous set. Concurrent calls share one
-   * in-flight resolve.
+   * within `missRefreshMinIntervalMs`, returns `'throttled'` WITHOUT resolving —
+   * the caller must not then treat the (unchanged, possibly stale) ref set as
+   * authoritative. Never throws; failures warn, retain the previous set and
+   * return `'failed'`. Concurrent calls share one in-flight resolve.
    */
-  async refreshOnMiss(): Promise<void> {
+  async refreshOnMiss(): Promise<MissRefreshOutcome> {
     if (this.inFlight != null) {
       try {
         await this.inFlight;
+        return 'resolved';
       } catch {
         /* never throws — previous set retained */
+        return 'failed';
       }
-      return;
     }
     if (
       this.lastRefreshAt != null &&
       this.now() - this.lastRefreshAt < this.missRefreshMinIntervalMs
     ) {
-      return;
+      return this.lastAttemptFailed ? 'throttled-stale' : 'throttled';
     }
     const p = this.doResolve();
     this.inFlight = p;
     try {
       await p;
+      return 'resolved';
     } catch {
       // Never throws — failure warned inside doResolve, previous set retained.
+      return 'failed';
     } finally {
       if (this.inFlight === p) this.inFlight = null;
     }
@@ -143,7 +174,9 @@ export class EpicRefSetHolder {
       });
       this.currentResolved = resolved;
       this.currentRefSet = buildRefSet(resolved);
+      this.lastAttemptFailed = false;
     } catch (err) {
+      this.lastAttemptFailed = true;
       this.logger.warn(
         `cockpit doorbell: ref-set refresh failed: ${
           err instanceof Error ? err.message : String(err)

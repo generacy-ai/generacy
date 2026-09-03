@@ -471,8 +471,18 @@ describe('Cockpit gates integration', () => {
       expect(emitted).toMatchObject({ type: 'gate-answer', gateId: GID_S2 });
     });
 
-    // S4 — Restart replay of unacked answers exactly once (FR-007).
-    it('S4 — doorbell kill+restart mid-flow re-emits the unacked answer exactly once', async () => {
+    // S4 — Restart resumes from the persisted cursor instead of replaying.
+    //
+    // SUPERSEDED CONTRACT. #1024 FR-007 specified "restart re-emits the still
+    // unacked answer" because the tailer had no consumed-position at all and
+    // replayed from byte 0 on every start. generacy#1228 made that the reported
+    // bug (a doorbell restart re-fired the entire answers backlog) and replaced
+    // it with a persisted `{ino, offset}` cursor advanced on emit (spec #1228
+    // clarify Q2 → at-most-once; SC-002: "Events re-emitted on doorbell restart
+    // after consuming: 0"). So the assertion is inverted here on purpose: the
+    // already-emitted answer must NOT come back, while the tailer must still be
+    // live for whatever lands after the restart.
+    it('S4 — doorbell kill+restart resumes from the cursor: no re-emit, later answers still surface', async () => {
       const answer = answerLineFixture({ deliveryId: 'dlv_s4', gateId: GID_S4 });
       await ctx.peer.sendApiRequest('POST', '/cockpit/answers', answer);
       await ctx.doorbell!.waitForEvent(
@@ -484,14 +494,27 @@ describe('Cockpit gates integration', () => {
         ).length;
       expect(emitsFor()).toBe(1);
 
-      // Restart: the doorbell re-reads the answers file from head (position
-      // model Q1 → B) and re-emits the still-unacked line — exactly once.
+      // Restart: the cursor was flushed on stop(), so the consumed line is not
+      // replayed (SC-001/SC-002).
       await ctx.doorbell!.restart(1500);
-      await waitFor(() => emitsFor() === 2, 6000, 'restart did not re-emit the unacked answer');
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(emitsFor()).toBe(1);
 
-      // And it does NOT re-emit a third time.
+      // …and the resumed tailer is not wedged: an answer written after the
+      // restart still surfaces, exactly once.
+      const post = answerLineFixture({ deliveryId: 'dlv_s4_post', gateId: GID_S4 });
+      await ctx.peer.sendApiRequest('POST', '/cockpit/answers', post);
+      await ctx.doorbell!.waitForEvent(
+        (e) => e.type === 'gate-answer' && e['deliveryId'] === 'dlv_s4_post',
+        6000,
+      );
       await new Promise((r) => setTimeout(r, 400));
-      expect(emitsFor()).toBe(2);
+      expect(
+        ctx.doorbell!.events.filter(
+          (e) => e.type === 'gate-answer' && e['deliveryId'] === 'dlv_s4_post',
+        ),
+      ).toHaveLength(1);
+      expect(emitsFor()).toBe(1);
     });
 
     // S5 — deliveryId dedup end-to-end (FR-008).

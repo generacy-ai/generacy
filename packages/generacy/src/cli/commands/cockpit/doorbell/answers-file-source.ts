@@ -14,7 +14,10 @@ import {
   type GateAnswerLine,
 } from '../watch/gate-answer.js';
 import { AnswersCursorStore } from './answers-cursor-store.js';
-import type { EpicRefSetHolder } from './ref-set-holder.js';
+import type {
+  EpicRefSetHolder,
+  MissRefreshOutcome,
+} from './ref-set-holder.js';
 
 export const DEFAULT_ANSWERS_FILE_PATH = '/workspaces/.generacy/cockpit/answers.ndjson';
 export const DEFAULT_REPLAY_LINE_CAP = 10_000;
@@ -101,6 +104,20 @@ export interface AnswersFileSourceOptions {
   /** Test seam: override the cursor directory when deriving a default store. */
   cursorDir?: string;
 }
+
+/**
+ * What one line's pass through `processLine()` did.
+ *
+ * - `consumed` — the line reached a terminal decision (emitted, or deliberately
+ *   dropped as malformed / out-of-window / out-of-scope). The cursor may
+ *   advance past it.
+ * - `deferred` — the line was NOT consumed: the emit sink rejected, `stop()`
+ *   raced the emit, or the scope oracle could not be re-resolved (throttled) so
+ *   FR-002's "drop only if still foreign after re-resolve" is unsatisfied. The
+ *   cursor must NOT advance; the reader stops the current pass and re-reads
+ *   from this line on the next tick.
+ */
+type LineOutcome = 'consumed' | 'deferred';
 
 export type TailerMode =
   | 'waiting-for-dir'
@@ -244,6 +261,13 @@ export class AnswersFileSource {
   private fsWatchAbort: AbortController | null = null;
   private tickInFlight = false;
   private pendingTick = false;
+  /**
+   * A replay that was cut short by a deferred line leaves the rest of the
+   * window-bounded region unread. The follow-up tail must keep applying the
+   * recency window over those same bytes, or a deferral would smuggle ancient
+   * answers past it.
+   */
+  private replayWindowPending = false;
 
   constructor(options: AnswersFileSourceOptions) {
     if (!EPIC_REF_REGEX.test(options.epicRef)) {
@@ -413,7 +437,7 @@ export class AnswersFileSource {
       this.logger.info?.(
         `cockpit doorbell: answers file: rotation file=${this.filePath} oldIno=${this.lastKnownIno} newIno=${fileStat.ino}`,
       );
-      await this.doReplay(fileStat.ino);
+      await this.doReplay(fileStat.ino, true);
       return;
     }
 
@@ -421,7 +445,7 @@ export class AnswersFileSource {
       this.logger.info?.(
         `cockpit doorbell: answers file: truncation file=${this.filePath} ino=${fileStat.ino} oldSize=${this.lastKnownSize} newSize=${fileStat.size}`,
       );
-      await this.doReplay(fileStat.ino);
+      await this.doReplay(fileStat.ino, true);
       return;
     }
 
@@ -510,13 +534,19 @@ export class AnswersFileSource {
       }
       return;
     }
-    await this.doReplay(fileStat.ino);
+    await this.doReplay(fileStat.ino, true);
   }
 
-  private async doReplay(ino: number): Promise<void> {
+  private async doReplay(ino: number, applyWindow: boolean): Promise<void> {
     this.mode = 'replaying';
     this.lastKnownIno = ino;
     this.lastKnownSize = 0;
+    // Every replay restarts consumption at byte 0. Rotation is covered by the
+    // ino change, but an in-place truncation keeps the SAME ino, so the store's
+    // monotonic-within-ino guard would swallow every advance below the old
+    // high-water mark and persist a stale offset over a smaller file. Reset it
+    // explicitly — contracts/answers-cursor-store.md: truncation ⇒ rewrite.
+    this.cursorStore.reset(ino, 0);
 
     let totalLines = 0;
     if (this.replayLineCap !== Infinity) {
@@ -528,9 +558,11 @@ export class AnswersFileSource {
         ? 0
         : Math.max(0, totalLines - this.replayLineCap);
 
-    const { nextConsumedByte, lastSkippedEndByte } = await this.emitFromHead(
-      skipFirst,
-    );
+    const { nextConsumedByte, lastSkippedEndByte, deferred } =
+      await this.emitFromHead(skipFirst, applyWindow);
+    // A deferred line cut the replay short; the follow-up tail must keep the
+    // window over the bytes the replay never reached.
+    this.replayWindowPending = deferred && applyWindow;
     if (skipFirst > 0) {
       const skippedTo = lastSkippedEndByte ?? 0;
       this.logger.warn(
@@ -548,11 +580,14 @@ export class AnswersFileSource {
 
   private async doTail(newSize: number): Promise<void> {
     if (newSize <= this.lastKnownSize) return;
-    const { nextConsumedByte } = await this.readAndEmitRange(
+    const applyWindow = this.replayWindowPending;
+    const { nextConsumedByte, deferred } = await this.readAndEmitRange(
       this.lastKnownSize,
       newSize,
+      applyWindow,
     );
     this.lastKnownSize = nextConsumedByte;
+    if (!deferred) this.replayWindowPending = false;
   }
 
   /**
@@ -591,7 +626,12 @@ export class AnswersFileSource {
 
   private async emitFromHead(
     skipFirst: number,
-  ): Promise<{ nextConsumedByte: number; lastSkippedEndByte: number | null }> {
+    applyWindow: boolean,
+  ): Promise<{
+    nextConsumedByte: number;
+    lastSkippedEndByte: number | null;
+    deferred: boolean;
+  }> {
     const handle = await this.fs.open(this.filePath, 'r');
     const chunk = Buffer.alloc(READ_CHUNK_SIZE);
     let filePos = 0;
@@ -625,12 +665,26 @@ export class AnswersFileSource {
           if (lineIndex < skipFirst) {
             lastSkippedEndByte = lineEndByte;
           } else {
-            await this.processLine(lineBuf.toString('utf-8'), byteOffset, true);
+            const outcome = await this.processLine(
+              lineBuf.toString('utf-8'),
+              byteOffset,
+              applyWindow,
+            );
+            if (outcome === 'deferred') {
+              // Not consumed: leave the cursor short of this line so the next
+              // tick re-reads it (FR-004 — the cursor advances on emit).
+              return {
+                nextConsumedByte: byteOffset,
+                lastSkippedEndByte,
+                deferred: true,
+              };
+            }
             this.advanceCursor(lineEndByte);
             if (!this.running) {
               return {
                 nextConsumedByte: lineEndByte,
                 lastSkippedEndByte,
+                deferred: false,
               };
             }
           }
@@ -645,6 +699,7 @@ export class AnswersFileSource {
       return {
         nextConsumedByte: leftoverStartByte,
         lastSkippedEndByte,
+        deferred: false,
       };
     } finally {
       try {
@@ -658,7 +713,8 @@ export class AnswersFileSource {
   private async readAndEmitRange(
     fromByte: number,
     toByte: number,
-  ): Promise<{ nextConsumedByte: number }> {
+    applyWindow: boolean,
+  ): Promise<{ nextConsumedByte: number; deferred: boolean }> {
     const handle = await this.fs.open(this.filePath, 'r');
     const chunk = Buffer.alloc(READ_CHUNK_SIZE);
     let filePos = fromByte;
@@ -689,10 +745,19 @@ export class AnswersFileSource {
           const lineBuf = combined.subarray(searchFrom, idx);
           const byteOffset = leftoverStartByte + searchFrom;
           const lineEndByte = byteOffset + lineBuf.length + 1;
-          await this.processLine(lineBuf.toString('utf-8'), byteOffset, false);
+          const outcome = await this.processLine(
+            lineBuf.toString('utf-8'),
+            byteOffset,
+            applyWindow,
+          );
+          if (outcome === 'deferred') {
+            // Not consumed: hold the cursor at this line's first byte so the
+            // next tick re-reads it instead of silently losing it.
+            return { nextConsumedByte: byteOffset, deferred: true };
+          }
           this.advanceCursor(lineEndByte);
           if (!this.running) {
-            return { nextConsumedByte: lineEndByte };
+            return { nextConsumedByte: lineEndByte, deferred: false };
           }
           searchFrom = idx + 1;
         }
@@ -701,7 +766,7 @@ export class AnswersFileSource {
         leftoverStartByte = leftoverStartByte + searchFrom;
         filePos += bytesRead;
       }
-      return { nextConsumedByte: leftoverStartByte };
+      return { nextConsumedByte: leftoverStartByte, deferred: false };
     } finally {
       try {
         await handle.close();
@@ -715,8 +780,8 @@ export class AnswersFileSource {
     line: string,
     byteOffset: number,
     applyWindow: boolean,
-  ): Promise<void> {
-    if (!this.running) return;
+  ): Promise<LineOutcome> {
+    if (!this.running) return 'deferred';
 
     // (a) JSON.parse
     let raw: unknown;
@@ -728,7 +793,7 @@ export class AnswersFileSource {
       this.logger.warn(
         `cockpit doorbell: answers file: malformed line (not JSON) file=${this.filePath} byteOffset=${byteOffset}${gateSuffix}`,
       );
-      return;
+      return 'consumed';
     }
 
     // (b) Schema validation
@@ -739,7 +804,7 @@ export class AnswersFileSource {
       this.logger.warn(
         `cockpit doorbell: answers file: malformed line (schema) file=${this.filePath} byteOffset=${byteOffset}${gateSuffix}`,
       );
-      return;
+      return 'consumed';
     }
     const gateLine: GateAnswerLine = parsed.data;
 
@@ -755,7 +820,7 @@ export class AnswersFileSource {
         this.logger.info?.(
           `cockpit doorbell: answers file: window drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} answeredAt=${gateLine.answeredAt}`,
         );
-        return;
+        return 'consumed';
       }
     }
 
@@ -771,28 +836,61 @@ export class AnswersFileSource {
     // against the bound epic applies.
     const gateScope = parseIssueRefFromGateKey(gateLine.gateKey);
     if (gateScope != null) {
-      if (this.holder != null) {
-        const key = `${gateScope.owner.toLowerCase()}/${gateScope.repo.toLowerCase()}#${gateScope.number}`;
-        let inScope = this.holder.current?.issues.has(key) ?? false;
-        if (!inScope) {
-          await this.holder.refreshOnMiss();
-          if (!this.running) return;
-          inScope = this.holder.current?.issues.has(key) ?? false;
-        }
-        if (!inScope) {
-          this.logger.info?.(
-            `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
-          );
-          return;
-        }
-      } else if (
-        gateScope.owner.toLowerCase() !== this.epicScope.owner.toLowerCase() ||
-        gateScope.repo.toLowerCase() !== this.epicScope.repo.toLowerCase()
-      ) {
+      const dropLog = (): void => {
         this.logger.info?.(
           `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
         );
-        return;
+      };
+      if (this.holder != null) {
+        const key = `${gateScope.owner.toLowerCase()}/${gateScope.repo.toLowerCase()}#${gateScope.number}`;
+        let refSet = this.holder.current;
+        let inScope = refSet?.issues.has(key) ?? false;
+        let missOutcome: MissRefreshOutcome | null = null;
+        if (!inScope) {
+          missOutcome = await this.holder.refreshOnMiss();
+          if (!this.running) return 'deferred';
+          refSet = this.holder.current;
+          inScope = refSet?.issues.has(key) ?? false;
+        }
+        if (!inScope) {
+          if (refSet == null) {
+            // FAIL-OPEN. The scope oracle has NEVER resolved successfully — a
+            // GitHub 403/rate-limit or network failure at startup is routine on
+            // a shared account. `holder.current` is null for EVERY answer, so
+            // the membership test rejects the bound epic's own answers too;
+            // combined with advance-on-emit that is permanent, silent loss of
+            // every answer for as long as GitHub is unhappy. Degrade to the
+            // pre-holder owner/repo compare (the shipped behaviour before
+            // #1228) rather than dropping blind.
+            this.logger.warn(
+              `cockpit doorbell: answers file: scope oracle unresolved — falling back to owner/repo scope file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} boundEpic=${this.epicRef}`,
+            );
+            if (this.isForeignRepo(gateScope)) {
+              dropLog();
+              return 'consumed';
+            }
+          } else if (missOutcome === 'throttled-stale') {
+            // FR-002: drop only if still foreign AFTER a re-resolve. Here the
+            // throttle window was armed by a resolve that FAILED, so no
+            // authoritative re-resolve has happened and a late-created child
+            // would be dropped permanently (advance-on-emit makes that
+            // unrecoverable). Defer instead — the next tick retries and the
+            // window expires within ~30 s, after which the miss resolves or
+            // fails for real and a decision is made. A `throttled` outcome
+            // (window armed by a SUCCESSFUL resolve) is authoritative and still
+            // drops immediately, so a foreign backlog cannot stall the tailer.
+            this.logger.info?.(
+              `cockpit doorbell: answers file: scope miss deferred (refresh throttled) file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
+            );
+            return 'deferred';
+          } else {
+            dropLog();
+            return 'consumed';
+          }
+        }
+      } else if (this.isForeignRepo(gateScope)) {
+        dropLog();
+        return 'consumed';
       }
     }
 
@@ -806,8 +904,10 @@ export class AnswersFileSource {
       line: gateLine,
     };
 
-    // (e) Emit
-    if (!this.running) return;
+    // (e) Emit. FR-004 defines the cursor as advancing ON EMIT — so a line the
+    // sink rejected, or one `stop()` raced before the emit, is NOT consumed and
+    // must not move the cursor past it.
+    if (!this.running) return 'deferred';
     try {
       await this.onEvent(event);
     } catch (err) {
@@ -816,6 +916,21 @@ export class AnswersFileSource {
           err instanceof Error ? err.message : String(err)
         }`,
       );
+      return 'deferred';
     }
+    return 'consumed';
+  }
+
+  /**
+   * Legacy (pre-#1228) scope test: case-insensitive owner/repo compare against
+   * the bound epic. Still the rule in harness mode (no `gh`, nothing to
+   * resolve) and the fail-open fallback when the ref-set oracle has never
+   * resolved.
+   */
+  private isForeignRepo(gateScope: { owner: string; repo: string }): boolean {
+    return (
+      gateScope.owner.toLowerCase() !== this.epicScope.owner.toLowerCase() ||
+      gateScope.repo.toLowerCase() !== this.epicScope.repo.toLowerCase()
+    );
   }
 }

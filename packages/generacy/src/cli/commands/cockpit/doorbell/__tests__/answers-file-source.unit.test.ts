@@ -92,6 +92,19 @@ function makeLogger(): {
   return { warn: vi.fn(), info: vi.fn() };
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 2000,
+): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`waitForCondition timed out after ${timeoutMs}ms`);
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 function baseOptions(
   overrides: Partial<AnswersFileSourceOptions> = {},
 ): AnswersFileSourceOptions {
@@ -744,6 +757,129 @@ describe('AnswersFileSource — ref-set scoping (with holder)', () => {
     expect(onEvent).toHaveBeenCalledTimes(1);
     // Non-issue target bypasses scoping — no miss refresh beyond the pre-resolve.
     expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('scope oracle that has NEVER resolved fails OPEN — the bound epic\'s own answer still emits', async () => {
+    // Regression: `holder.current` is null after a startup resolve failure
+    // (GitHub 403 / rate limit is routine on a shared account). The membership
+    // test `holder.current?.issues.has(key) ?? false` is then false for EVERY
+    // answer — including the bound epic's own — so all of them were dropped as
+    // "cross-epic" while the cursor advanced past them: permanent, silent loss.
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'owner/repo#5:clarification:x' }));
+    const { holder, resolve } = makeHolder(async () => {
+      throw new Error('HTTP 403: API rate limit exceeded');
+    });
+    // Startup resolve fails; the holder has no set at all.
+    await expect(holder.refresh()).rejects.toThrow(/rate limit/);
+    expect(holder.current).toBeNull();
+
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger, refSetHolder: holder }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalled();
+    const warn = logger.warn.mock.calls
+      .map((c) => c[0] as string)
+      .find((m) => m.includes('scope oracle unresolved'));
+    expect(warn).toBeDefined();
+    expect(warn).toMatch(/gateId=g1/);
+    // Never silently dropped.
+    expect(
+      logger.info.mock.calls
+        .map((c) => c[0] as string)
+        .some((m) => m.includes('cross-epic drop')),
+    ).toBe(false);
+  });
+
+  it('fail-open still drops a genuinely foreign repo (degrades to owner/repo, not to "emit everything")', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'other/elsewhere#7:clarification:x' }));
+    const { holder } = makeHolder(async () => {
+      throw new Error('HTTP 403: API rate limit exceeded');
+    });
+    await expect(holder.refresh()).rejects.toThrow();
+
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger, refSetHolder: holder }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(
+      logger.info.mock.calls
+        .map((c) => c[0] as string)
+        .some((m) => m.includes('cross-epic drop')),
+    ).toBe(true);
+  });
+
+  it('a miss inside a throttle window armed by a FAILED resolve defers instead of dropping', async () => {
+    // FR-002: drop only if still foreign AFTER a re-resolve. When the throttle
+    // window was armed by a resolve that threw, no authoritative re-resolve has
+    // happened — dropping there is permanent loss of a late-created child.
+    let clock = 0;
+    let known: Array<{ repo: string; number: number }> = [];
+    let failNext = true;
+    const resolve = vi.fn(async () => {
+      if (failNext) throw new Error('HTTP 403: API rate limit exceeded');
+      return resolvedWith('owner/repo', 5, known);
+    });
+    const holder = new EpicRefSetHolder({
+      epicRef: 'owner/repo#5',
+      gh: {} as GhWrapper,
+      logger: makeLogger(),
+      resolve: resolve as never,
+      missRefreshMinIntervalMs: 30_000,
+      now: () => clock,
+    });
+    // One successful resolve so the holder HAS a set (so this exercises the
+    // throttled-stale path, not the fail-open path)…
+    failNext = false;
+    await holder.refresh();
+    expect(holder.current).not.toBeNull();
+    // …then a failing miss-refresh arms the throttle window with a stale set.
+    failNext = true;
+    clock += 60_000;
+    expect(await holder.refreshOnMiss()).toBe('failed');
+
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ gateKey: 'owner/repo#99:clarification:x' }));
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger, refSetHolder: holder }),
+    );
+    await src.start();
+
+    // Deferred: neither emitted nor dropped while the stale throttle holds.
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(
+      logger.info.mock.calls
+        .map((c) => c[0] as string)
+        .some((m) => m.includes('cross-epic drop')),
+    ).toBe(false);
+    expect(
+      logger.info.mock.calls
+        .map((c) => c[0] as string)
+        .some((m) => m.includes('scope miss deferred')),
+    ).toBe(true);
+
+    // Once the window expires and the ref set resolves with the late-created
+    // child, the retained line emits rather than having been lost.
+    clock += 60_000;
+    failNext = false;
+    known = [{ repo: 'owner/repo', number: 99 }];
+    await waitForCondition(() => onEvent.mock.calls.length > 0, 2000);
+    await src.stop();
+    expect(onEvent).toHaveBeenCalledTimes(1);
   });
 
   it('no-holder (harness) mode keeps the legacy same-repo emit', async () => {

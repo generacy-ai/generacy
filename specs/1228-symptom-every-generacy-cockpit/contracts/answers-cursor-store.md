@@ -26,8 +26,14 @@ export class AnswersCursorStore {
    *  Never throws. */
   load(): Promise<{ ino: number; offset: number } | null>;
 
-  /** Update the in-memory cursor; schedules a debounced persist. Synchronous. */
+  /** Update the in-memory cursor; schedules a debounced persist. Synchronous.
+   *  Monotonic within an ino — see Guarantee 5. */
   advance(ino: number, offset: number): void;
+
+  /** Unconditionally rewrite the in-memory cursor (bypassing the monotonic
+   *  guard) and schedule a persist. Called at the head of EVERY replay branch
+   *  with `(ino, 0)` — see Guarantee 5. */
+  reset(ino: number, offset: number): void;
 
   /** Force-persist the in-memory cursor now (atomic tmp+rename). Used at replay
    *  drain and stop(). Failures are logged at warn, never thrown. */
@@ -49,8 +55,16 @@ export class AnswersCursorStore {
 4. **Fail-open reads, fail-quiet writes**: an unreadable/invalid cursor is `null` (fresh
    cursor path); a failed write warns and leaves the in-memory cursor authoritative for
    the process lifetime. Persistence failure must never stop the tailer.
-5. **Monotonic within an ino**: `advance()` with the same `ino` never persists a smaller
-   `offset` than already recorded in memory. A new `ino` resets the offset.
+5. **Monotonic within an ino, resettable at replay**: `advance()` with the same `ino`
+   never persists a smaller `offset` than already recorded in memory, and a new `ino`
+   resets the offset. That guard alone is NOT sufficient for **in-place truncation**,
+   which keeps the same `ino`: without an explicit rewrite the guard swallows every
+   advance below the pre-truncation high-water mark, `flush()` writes the stale (larger)
+   offset back over a now-smaller file, and the next start takes the resume branch and
+   skips every answer under that byte permanently. `AnswersFileSource` therefore calls
+   `reset(ino, 0)` at the head of every replay branch (fresh/stale cursor, rotation,
+   truncation), which is what makes the first-discovery `cursor.offset > stat.size` row
+   below actually *rewrite* the cursor.
 6. **Loss window**: at most `flushDebounceMs` of advances (plus an unflushed stop on
    crash) may be lost — acceptable per clarify Q2: re-emission is handled by the
    session's `superseded` acks; genuinely lost emits are recoverable via the cloud

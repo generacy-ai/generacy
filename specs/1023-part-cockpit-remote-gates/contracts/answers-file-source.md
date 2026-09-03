@@ -59,8 +59,32 @@ Evaluated once when the file is first discovered (`lastKnownIno == null`):
 | Stale ino | `cursor.ino !== stat.ino` | Replay from byte 0, window + ref-set scope; rewrite cursor for the new ino |
 | Stale offset | `cursor.offset > stat.size` (truncation since last run) | Replay from byte 0, window + ref-set scope; rewrite cursor |
 
-The cursor is advanced positionally to `lineEndByte` after **every** processed line — including
-window/foreign/malformed drops — and flushed at replay drain and in `stop()`.
+The cursor is advanced positionally to `lineEndByte` after every **consumed** line — a line
+that reached a terminal decision, which includes window/foreign/malformed drops — and is
+flushed at replay drain and in `stop()`. Every replay branch first calls
+`cursorStore.reset(ino, 0)`: an in-place truncation keeps the same ino, so the store's
+monotonic-within-ino guard would otherwise swallow the lowered offset and persist a stale
+one over a smaller file (see `1228…/contracts/answers-cursor-store.md` Guarantee 5).
+
+A line is **not** consumed — the cursor stays short of it and the reader stops the pass so
+the next tick re-reads it — when:
+
+| Deferral | Why |
+|---|---|
+| The awaited `onEvent` sink rejected | FR-004 defines the cursor as advancing *on emit*; advancing past a rejected emit is a silent, permanent single-answer loss |
+| `stop()` raced the emit (`running` went false mid-line) | Same — the line was never emitted |
+| The ref-set miss could not be re-resolved (`refreshOnMiss()` → `throttled-stale`) | FR-002 requires a re-resolve *before* dropping; a throttle window armed by a **failed** resolve has not provided one |
+
+Deferral is self-limiting: sink rejections retry every poll interval and the stale-throttle
+window expires within `missRefreshMinIntervalMs` (~30 s), after which the miss resolves or
+fails for real and a terminal decision is made. A `throttled` outcome whose window was armed
+by a *successful* resolve is authoritative and drops immediately, so a foreign backlog cannot
+stall the tailer.
+
+When the ref-set oracle has **never** resolved successfully (`holder.current === null` —
+a startup GitHub 403 / rate limit), the scope test **fails open** to the legacy
+case-insensitive owner/repo compare with a `warn`, because a null set rejects every answer
+including the bound epic's own.
 
 ## FR / Q Mapping
 
@@ -109,6 +133,9 @@ All log lines go through the injected `logger`. No direct `process.stderr.write`
 | Out-of-window line dropped on replay | `info` | file path, byte offset, `gateId`, `answeredAt` |
 | Replay-cap truncation on startup | `warn` | file path, `[skippedFromByte, skippedToByte]`, skipped line count |
 | Cursor persist failure | `warn` | cursor path, error (never throws) |
+| Scope miss deferred (`throttled-stale`) | `info` | file path, byte offset, `gateId`, source `scope`, bound `epicRef` |
+| Scope oracle never resolved — fail-open to owner/repo | `warn` | file path, byte offset, `gateId`, bound `epicRef` |
+| `onEvent` sink rejected (line deferred, not consumed) | `warn` | file path, byte offset, `gateId`, error |
 | Invalid `COCKPIT_ANSWERS_REPLAY_WINDOW_MS` (in caller) | `warn` | raw value, default applied |
 | Rotation detected | `info` | file path, old ino, new ino |
 | Truncation detected (ino same, size dropped) | `info` | file path, ino, old size, new size |

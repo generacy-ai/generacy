@@ -116,6 +116,25 @@ export class AnswersCursorStore {
   }
 
   /**
+   * Unconditionally rewrite the in-memory cursor (bypassing `advance()`'s
+   * monotonic-within-ino guard) and schedule a persist.
+   *
+   * Every replay branch restarts consumption from byte 0. Rotation is safe
+   * under `advance()` because the inode changes, but an **in-place truncation**
+   * keeps the SAME inode: without this reset the monotonic guard swallows every
+   * advance below the pre-truncation high-water mark, `flush()` rewrites the
+   * stale (too-high) offset over a now-tiny file, and the next start takes the
+   * resume branch and skips every answer under that byte — permanently, with no
+   * convergence. `contracts/answers-cursor-store.md` requires the
+   * `cursor.offset > stat.size` (truncation) row to **rewrite** the cursor;
+   * this is that rewrite.
+   */
+  reset(ino: number, offset: number): void {
+    this.inMemory = { ino, offset };
+    this.scheduleFlush();
+  }
+
+  /**
    * Force-persist the in-memory cursor now (atomic tmp+rename). Used at replay
    * drain and stop(). Failures are logged at warn, never thrown.
    */
