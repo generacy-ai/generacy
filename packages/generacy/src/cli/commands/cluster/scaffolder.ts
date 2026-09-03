@@ -142,6 +142,20 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   const claudeConfigMode = input.claudeConfigMode ?? 'bind';
   const variant = input.variant;
 
+  // Docker-in-Docker. Only the cluster-microservices image ships docker-ce and
+  // the `node ALL=(root) NOPASSWD: /usr/bin/dockerd` sudoers rule, so only that
+  // variant can honour ENABLE_DIND. cluster-base has no dockerd at all — it
+  // bakes a DOCKER_HOST pointing at the mounted host socket and must stay
+  // unprivileged, so gating on the variant is load-bearing, not cosmetic.
+  //
+  // Without these keys the cluster-microservices entrypoint hits the early
+  // return in setup-docker-dind.sh and never starts dockerd — silently, with
+  // nothing in the logs — leaving `docker` in every container reporting a
+  // missing /var/run/docker.sock. Mirrors the reference compose at
+  // cluster-microservices/.devcontainer/generacy/docker-compose.yml; these two
+  // have silently diverged before (#1226).
+  const enableDind = variant === 'cluster-microservices';
+
   // Claude account config is mounted READ-ONLY as a seed, never as the live
   // file. Every container copies it to ~/.claude.json on first start (see the
   // cluster-base entrypoints) and writes only to its private copy.
@@ -232,6 +246,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       orchestrator: {
         image: input.imageTag,
         command: '/usr/local/bin/entrypoint-orchestrator.sh',
+        ...(enableDind ? { privileged: true } : {}),
         restart: 'unless-stopped',
         ports: orchestratorPorts,
         volumes: orchestratorVolumes,
@@ -243,6 +258,11 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           `CLUSTER_VARIANT=${variant}`,
           'GENERACY_INITIAL_WORKERS=${WORKER_COUNT}',
           'GENERACY_CLUSTER_ROLE=orchestrator',
+          // DOCKER_CONTEXT steers the docker CLI only. Worker-container
+          // management is unaffected: DockerEngineClient reads DOCKER_HOST and
+          // falls back to /var/run/docker-host.sock, so the orchestrator keeps
+          // scaling workers on the host daemon, not into its own DinD.
+          ...(enableDind ? ['ENABLE_DIND=true', 'DOCKER_CONTEXT=host'] : []),
         ],
         env_file: envFile,
         healthcheck: {
@@ -262,6 +282,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       worker: {
         image: input.imageTag,
         command: '/usr/local/bin/entrypoint-worker.sh',
+        ...(enableDind ? { privileged: true } : {}),
         restart: 'unless-stopped',
         deploy: {
           replicas: '${WORKER_COUNT:-1}',
@@ -275,6 +296,9 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           `DEPLOYMENT_MODE=${deploymentMode}`,
           `CLUSTER_VARIANT=${variant}`,
           'GENERACY_CLUSTER_ROLE=worker',
+          // No docker-host.sock on workers by design — a worker's DinD is its
+          // own, so its default context is the only daemon it can reach.
+          ...(enableDind ? ['ENABLE_DIND=true'] : []),
         ],
         env_file: envFile,
         healthcheck: {

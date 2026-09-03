@@ -282,6 +282,44 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.worker.stop_grace_period).toBe('30s');
   });
 
+  // Docker-in-Docker (#1226). The scaffolded compose used to omit privileged /
+  // ENABLE_DIND entirely, so every UI- and CLI-launched cluster-microservices
+  // cluster ran with dockerd never started and no log line saying so.
+  it('cluster-microservices enables DinD on orchestrator and worker', () => {
+    scaffoldDockerCompose(dir, { ...baseInput, variant: 'cluster-microservices' });
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    expect(parsed.services.orchestrator.privileged).toBe(true);
+    expect(parsed.services.worker.privileged).toBe(true);
+    expect(parsed.services.orchestrator.environment).toContain('ENABLE_DIND=true');
+    expect(parsed.services.worker.environment).toContain('ENABLE_DIND=true');
+  });
+
+  // The orchestrator manages worker containers on the HOST daemon, so its CLI
+  // must default to the host context even though its own DinD is running.
+  it('cluster-microservices points the orchestrator CLI at the host context', () => {
+    scaffoldDockerCompose(dir, { ...baseInput, variant: 'cluster-microservices' });
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    expect(parsed.services.orchestrator.environment).toContain('DOCKER_CONTEXT=host');
+    // Workers get no host socket, so a host context would dangle.
+    expect(parsed.services.worker.environment.join(',')).not.toContain('DOCKER_CONTEXT');
+  });
+
+  // cluster-base ships no docker-ce and no dockerd sudoers rule; it reaches the
+  // host daemon through a DOCKER_HOST baked into the image. Enabling DinD there
+  // would fail at boot and privileged would be an escalation for nothing.
+  it('cluster-base gets neither privileged nor ENABLE_DIND', () => {
+    scaffoldDockerCompose(dir, baseInput);
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    expect(parsed.services.orchestrator).not.toHaveProperty('privileged');
+    expect(parsed.services.worker).not.toHaveProperty('privileged');
+    expect(parsed.services.orchestrator.environment.join(',')).not.toContain('ENABLE_DIND');
+    expect(parsed.services.worker.environment.join(',')).not.toContain('ENABLE_DIND');
+    expect(parsed.services.orchestrator.environment.join(',')).not.toContain('DOCKER_CONTEXT');
+  });
+
   it('includes extra_hosts on orchestrator and worker', () => {
     scaffoldDockerCompose(dir, baseInput);
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
