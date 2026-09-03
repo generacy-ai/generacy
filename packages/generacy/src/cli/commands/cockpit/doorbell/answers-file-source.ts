@@ -831,9 +831,12 @@ export class AnswersFileSource {
     // on gateId. With a ref-set holder, membership is tested against the bound
     // epic's resolved ref set (epic + children, cross-repo included) keyed
     // `owner/repo#number` lowercased; on a miss we re-resolve (throttled) and
-    // re-check before dropping, so a late-created child is not lost. Without a
-    // holder (harness mode), the legacy case-insensitive owner/repo compare
-    // against the bound epic applies.
+    // re-check before dropping, so a late-created child is not lost — and if
+    // that re-resolve was swallowed by a throttle window armed by a FAILED
+    // resolve, the line is deferred rather than dropped. If the oracle has
+    // never resolved at all, the test fails open to the owner/repo compare.
+    // Without a holder (harness mode), that legacy case-insensitive owner/repo
+    // compare against the bound epic is the only rule.
     const gateScope = parseIssueRefFromGateKey(gateLine.gateKey);
     if (gateScope != null) {
       const dropLog = (): void => {
