@@ -24,22 +24,11 @@ import type { SnapshotMap } from './watch/snapshot.js';
 
 interface WatchOptions {
   interval?: string;
-  safetyCap?: string;
   exitOnEpicComplete?: boolean;
 }
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const INTERVAL_FLOOR_MS = 15_000;
-const DEFAULT_SAFETY_CAP = 1000;
-
-function parseIntFlag(name: string, raw: string | undefined, min: number, defaultValue: number): number {
-  if (raw == null) return defaultValue;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < min) {
-    throw new Error(`--${name} must be an integer >= ${min}`);
-  }
-  return n;
-}
 
 function parseIntervalFlag(raw: string | undefined): number {
   if (raw == null) return DEFAULT_INTERVAL_MS;
@@ -96,10 +85,8 @@ export async function runWatch(
   }
 
   let interval: number;
-  let safetyCap: number;
   try {
     interval = deps.intervalOverride ?? parseIntervalFlag(options.interval);
-    safetyCap = parseIntFlag('safety-cap', options.safetyCap, 1, DEFAULT_SAFETY_CAP);
   } catch (err) {
     process.stderr.write(`cockpit watch: ${err instanceof Error ? err.message : String(err)}\n`);
     return 2;
@@ -191,8 +178,6 @@ export async function runWatch(
       const result = await runOnePoll(prev, {
         gh,
         refs: currentResolved.parsed.allRefs,
-        epicOwnerRepo: currentResolved.epic.repo,
-        safetyCap,
         logger,
       });
       for (const event of result.events) {
@@ -249,7 +234,6 @@ export function watchCommand(): Command {
       'Epic ref. Accepts <n>, <owner>/<repo>#<n>, or https://github.com/<owner>/<repo>/issues/<n>.',
     )
     .option('--interval <ms>', `Poll interval in ms (default ${DEFAULT_INTERVAL_MS}, floor ${INTERVAL_FLOOR_MS}).`)
-    .option('--safety-cap <n>', `Warn when per-poll item count exceeds this (default ${DEFAULT_SAFETY_CAP}).`)
     .option('--exit-on-epic-complete', 'Exit 0 after flushing the epic-complete NDJSON line.', false)
     .action(async (epicRef: string, options: WatchOptions) => {
       const runner: CommandRunner = nodeChildProcessRunner;
