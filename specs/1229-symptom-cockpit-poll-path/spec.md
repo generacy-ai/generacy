@@ -55,33 +55,39 @@ ref set,
 ### US2: PR refs are handled correctly and unambiguously
 
 **As a** maintainer of the cockpit watch subsystem,
-**I want** PR refs from an epic body to either be polled through a path that actually returns
-PRs, or the dead PR branch removed with smee-only sourcing documented,
-**So that** the poll path has no silently dead code and PR event sourcing is understood.
+**I want** PR refs from an epic body polled through a path that actually returns PRs,
+**So that** the existing PR-handling branch on the poll path (`buildPrSnapshot`,
+`derivePrLifecycle`, `derivePrChecksNeeded`) comes alive and PR lifecycle/checks events
+reach `cockpit_await_events`, `cockpit status`, and the doorbell aggregate.
 
-**Acceptance Criteria**:
-- [ ] The resolution for PR refs (poll them properly vs. remove the branch + document
-      smee-only sourcing) is decided in `/clarify` and reflected in code + docs.
-- [ ] No dead PR-handling branch is left undocumented on the poll path.
+**Acceptance Criteria** *(resolved in clarify Q1: option A — poll PRs properly)*:
+- [ ] The poll query returns PR refs listed in the epic body (exact-lookup form, which
+      returns both issues and PRs), keeping the existing PR branch alive.
+- [ ] No dead PR-handling branch remains on the poll path.
 
 ### US3: No regression in GitHub API budget
 
 **As an** operator whose cockpit is already the rate-limit hot spot (generacy#970),
-**I want** the fix to add no GitHub API calls per poll cycle,
+**I want** the fix to add no per-repo search/list GitHub API calls per poll cycle,
 **So that** scoping correctness does not trade off against rate-limit exhaustion.
 
-**Acceptance Criteria**:
-- [ ] The number of GitHub API calls per poll cycle does not increase relative to current
-      behavior.
+**Acceptance Criteria** *(resolved in clarify Q3: option A — budget freeze applies to
+search/list calls)*:
+- [ ] The number of per-repo search/list API calls per poll cycle does not increase relative
+      to current behavior (one aliased GraphQL exact-lookup call per repo replaces paginated
+      REST search).
+- [ ] Per-PR calls gated by `derivePrChecksNeeded` / `derivePrLifecycle` are acceptable —
+      they are the intended, bounded cost of working PR polling, pinned by the existing
+      GraphQL budget integration test.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Snapshots and events MUST be restricted to the epic's resolved ref set; an out-of-scope issue returned by search MUST NOT produce a snapshot or event. | P1 | Structural enforcement (post-filter `curr`, non-free-text query, or both). |
+| FR-001 | Snapshots and events MUST be restricted to the epic's resolved ref set, enforced by BOTH an exact-lookup query (batched aliased GraphQL `issueOrPullRequest(number:)` per repo, reusing the `buildTier1FollowupQuery` pattern) AND a defensive post-filter of `curr` keyed by `repo#number` against the resolved ref set. | P1 | Clarify Q2: option C. The post-filter also covers `status.ts:83`, which builds the same free-text query. |
 | FR-002 | An in-scope issue that transitions MUST still emit its event. | P1 | No false negatives from the new filter. |
-| FR-003 | The PR-ref handling on the poll path MUST be resolved: either PR refs are polled through a path that returns PRs, or the PR branch is removed and smee-only PR-event sourcing is documented. | P1 | Decision deferred to `/clarify`. |
-| FR-004 | The fix MUST NOT increase the number of GitHub API calls per poll cycle. | P1 | generacy#970 — poll path is rate-limit hot spot. |
+| FR-003 | PR refs from the epic body MUST be polled through a query form that returns PRs (exact-lookup), keeping the existing PR branch (`buildPrSnapshot`, `derivePrLifecycle`, `derivePrChecksNeeded`) alive. | P1 | Clarify Q1: option A. The poll path is the sole feed for `cockpit_await_events` — there is no smee input under `mcp/`. |
+| FR-004 | The fix MUST NOT increase the number of per-repo search/list GitHub API calls per poll cycle. Per-PR calls gated by `derivePrChecksNeeded` are acceptable as the bounded cost of working PR polling. | P1 | Clarify Q3: option A. generacy#970 — poll path is rate-limit hot spot; existing budget test pins the gated per-PR cost. |
 | FR-005 | A test MUST prove out-of-scope search results are dropped; a test MUST prove an in-scope issue is emitted; a test MUST cover the chosen PR-ref resolution. | P1 | Query-only fixes require the out-of-scope drop test specifically. |
 
 ## Success Criteria
@@ -90,8 +96,8 @@ PRs, or the dead PR branch removed with smee-only sourcing documented,
 |----|--------|--------|-------------|
 | SC-001 | Out-of-scope issues emitted per poll cycle | 0 | Unit test with a search result that matches only on free text; assert no event. |
 | SC-002 | In-scope transition events preserved | 100% | Unit test asserting a genuine in-scope transition still emits. |
-| SC-003 | GitHub API calls per poll cycle | ≤ current baseline | Compare call count in poll cycle before/after. |
-| SC-004 | Dead code on poll path | 0 undocumented dead branches | Code review + docs reflecting PR-ref resolution. |
+| SC-003 | Per-repo search/list API calls per poll cycle | ≤ current baseline | Compare per-repo search/list call count before/after; gated per-PR calls excluded (bounded by the existing GraphQL budget integration test). |
+| SC-004 | Dead code on poll path | 0 dead branches | Code review: PR branch is exercised by the exact-lookup query. |
 
 ## Assumptions
 
