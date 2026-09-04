@@ -192,6 +192,14 @@ export const DIFF_TRUNCATION_MARKER = '\n... [diff truncated at 256 KiB] ...\n';
 
 export interface GhWrapper {
   listIssues(query: string, options?: ListIssuesOptions): Promise<Issue[]>;
+  /**
+   * Batched exact lookup of issue/PR refs by number via aliased GraphQL
+   * `issueOrPullRequest(number:)`. Returns both issues and PRs mapped into the
+   * `Issue` shape. Nonexistent numbers are silently absent (NOT_FOUND
+   * tolerated); any other GraphQL/transport error throws. Empty `numbers`
+   * resolves [] without a subprocess call. Chunks at ≤100 numbers per call.
+   */
+  batchLookupIssuesOrPrs(repo: string, numbers: number[]): Promise<Issue[]>;
   getIssue(repo: string, number: number): Promise<Issue>;
   addLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   removeLabels(repo: string, issue: number, labels: string[]): Promise<void>;
@@ -327,6 +335,55 @@ const Tier1FollowupResponseSchema = z.object({
   }),
 });
 
+// #1229 — per-node shape returned by the batched `issueOrPullRequest` lookup.
+// Discriminated on `__typename`; PRs carry no `stateReason` (the query omits it).
+const BatchLookupLabelsSchema = z.object({
+  nodes: z.array(z.object({ name: z.string() })),
+});
+
+const BatchLookupAuthorSchema = z
+  .object({ login: z.string() })
+  .passthrough()
+  .nullable()
+  .optional();
+
+const BatchLookupNodeSchema = z
+  .discriminatedUnion('__typename', [
+    z.object({
+      __typename: z.literal('Issue'),
+      number: z.number().int(),
+      title: z.string(),
+      url: z.string(),
+      state: z.string(),
+      stateReason: z.string().nullable().optional(),
+      body: z.string().nullable().optional(),
+      createdAt: z.string().optional(),
+      author: BatchLookupAuthorSchema,
+      labels: BatchLookupLabelsSchema,
+    }),
+    z.object({
+      __typename: z.literal('PullRequest'),
+      number: z.number().int(),
+      title: z.string(),
+      url: z.string(),
+      state: z.string(),
+      body: z.string().nullable().optional(),
+      createdAt: z.string().optional(),
+      author: BatchLookupAuthorSchema,
+      labels: BatchLookupLabelsSchema,
+    }),
+  ])
+  .nullable();
+
+const BatchLookupResponseSchema = z.object({
+  data: z.object({
+    repository: z.object({}).catchall(BatchLookupNodeSchema),
+  }),
+  errors: z
+    .array(z.object({ type: z.string().optional() }).passthrough())
+    .optional(),
+});
+
 // FR-006 — return shape of getPullRequestGraphqlDetail.
 const PrGraphqlDetailSchema = z.object({
   data: z.object({
@@ -422,6 +479,77 @@ function buildTier1FollowupQuery(numbers: number[]): string {
 ${selections}
   }
 }`;
+}
+
+// #1229 — dynamic aliased builder for the batched exact-lookup query.
+// One `rN: issueOrPullRequest(number: N)` alias per number with the shared
+// __typename + Issue/PullRequest inline-fragment selection. Numbers are
+// zod/parse-derived integers from the epic body; injection surface is zero.
+// See contracts/batch-lookup-graphql.md.
+function buildBatchLookupQuery(numbers: number[]): string {
+  const selections = numbers
+    .map(
+      (n, i) =>
+        `    r${i}: issueOrPullRequest(number: ${n}) {
+      __typename
+      ... on Issue {
+        number title url state stateReason body createdAt
+        author { login }
+        labels(first: 100) { nodes { name } }
+      }
+      ... on PullRequest {
+        number title url state body createdAt
+        author { login }
+        labels(first: 100) { nodes { name } }
+      }
+    }`,
+    )
+    .join('\n');
+  return `query CockpitBatchLookup($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+${selections}
+  }
+}`;
+}
+
+// #1229 — GraphQL aliased-lookup chunk size (GitHub caps aliased selections).
+const BATCH_LOOKUP_CHUNK_SIZE = 100;
+
+function chunkNumbers(numbers: number[], size: number): number[][] {
+  const chunks: number[][] = [];
+  for (let i = 0; i < numbers.length; i += size) {
+    chunks.push(numbers.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function mapBatchLookupNode(
+  node: NonNullable<z.infer<typeof BatchLookupNodeSchema>>,
+): Issue {
+  const author =
+    node.author?.login != null ? { login: node.author.login } : undefined;
+  const base = {
+    number: node.number,
+    title: node.title,
+    url: node.url,
+    body: node.body ?? '',
+    createdAt: node.createdAt ?? '',
+    labels: node.labels.nodes.map((n) => n.name),
+    ...(author != null ? { author } : {}),
+  };
+  if (node.__typename === 'PullRequest') {
+    // MERGED and CLOSED both surface as 'CLOSED'; PRs carry no stateReason.
+    return {
+      ...base,
+      state: node.state.toUpperCase() === 'OPEN' ? 'OPEN' : 'CLOSED',
+      stateReason: null,
+    };
+  }
+  return {
+    ...base,
+    state: normalizeIssueState(node.state),
+    stateReason: normalizeStateReason(node.stateReason),
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -899,6 +1027,75 @@ export class GhCliWrapper implements GhWrapper {
       return this.cache.getOrFetch(`getIssue:${repo}#${number}`, doFetch);
     }
     return doFetch();
+  }
+
+  async batchLookupIssuesOrPrs(repo: string, numbers: number[]): Promise<Issue[]> {
+    if (numbers.length === 0) return [];
+    const [owner, name] = repo.split('/');
+    if (!owner || !name) {
+      throw new Error(
+        `batchLookupIssuesOrPrs: repo must be "owner/name", got: ${repo}`,
+      );
+    }
+    const out: Issue[] = [];
+    for (const chunk of chunkNumbers(numbers, BATCH_LOOKUP_CHUNK_SIZE)) {
+      const query = buildBatchLookupQuery(chunk);
+      const result = await this.runner('gh', [
+        'api',
+        'graphql',
+        '-F',
+        `owner=${owner}`,
+        '-F',
+        `repo=${name}`,
+        '-f',
+        `query=${query}`,
+      ]);
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        // Unparseable stdout: a non-zero exit is a transport/GraphQL failure
+        // (surface stderr); a zero exit is a shape drift worth flagging.
+        failIfNonZero(result, 'api graphql (batchLookupIssuesOrPrs)');
+        const ghVer = await captureGhVersion(this.runner);
+        throw formatShapeMismatchError(
+          'batchLookupIssuesOrPrs JSON.parse',
+          result.stdout,
+          'malformed JSON',
+          ghVer,
+        );
+      }
+
+      const shape = BatchLookupResponseSchema.safeParse(parsed);
+      if (!shape.success) {
+        const ghVer = await captureGhVersion(this.runner);
+        throw formatShapeMismatchError(
+          'batchLookupIssuesOrPrs shape',
+          result.stdout,
+          shape.error.message,
+          ghVer,
+        );
+      }
+
+      // `gh api graphql` exits non-zero when the envelope carries an `errors`
+      // array even though `data` is printed. Tolerate only when every error is
+      // NOT_FOUND (stale epic-body refs); any other error → throw.
+      if (result.exitCode !== 0) {
+        const errors = shape.data.errors ?? [];
+        const allNotFound =
+          errors.length > 0 && errors.every((e) => e.type === 'NOT_FOUND');
+        if (!allNotFound) {
+          failIfNonZero(result, 'api graphql (batchLookupIssuesOrPrs)');
+        }
+      }
+
+      for (const node of Object.values(shape.data.data.repository)) {
+        if (node == null) continue;
+        out.push(mapBatchLookupNode(node));
+      }
+    }
+    return out;
   }
 
   async addLabels(repo: string, issue: number, labels: string[]): Promise<void> {

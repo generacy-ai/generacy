@@ -30,7 +30,6 @@ describe('SC-002 — watch emits every transition across a 10-step phase walk', 
       const result = await runOnePoll(prev, {
         gh,
         refs: [{ repo: 'o/r', number: 42 }],
-        epicOwnerRepo: 'o/r',
       });
       allEvents.push(...result.events);
       prev = result.curr;
@@ -56,14 +55,14 @@ describe('SC-002 — watch emits every transition across a 10-step phase walk', 
 
 describe('#801 — watch poll loop iterates per child repo for cross-repo epic scope', () => {
   it("polls each repo exactly once and embeds only that repo's issue numbers", async () => {
-    const queries: string[] = [];
+    const lookups: Array<{ repo: string; numbers: number[] }> = [];
     const gh = new FakeGh({
-      issuesByQuery: (query: string): Issue[] => {
-        queries.push(query);
-        if (query.startsWith('repo:a/b ')) {
+      lookupByRepo: (repo: string, numbers: number[]): Issue[] => {
+        lookups.push({ repo, numbers });
+        if (repo === 'a/b') {
           return [makeIssue({ number: 1, url: 'https://github.com/a/b/issues/1' })];
         }
-        if (query.startsWith('repo:c/d ')) {
+        if (repo === 'c/d') {
           return [makeIssue({ number: 2, url: 'https://github.com/c/d/issues/2' })];
         }
         return [];
@@ -76,12 +75,11 @@ describe('#801 — watch poll loop iterates per child repo for cross-repo epic s
         { repo: 'a/b', number: 1 },
         { repo: 'c/d', number: 2 },
       ],
-      epicOwnerRepo: 'generacy-ai/tetrad-development',
     });
 
-    expect(queries).toHaveLength(2);
-    expect(queries[0]).toBe('repo:a/b 1');
-    expect(queries[1]).toBe('repo:c/d 2');
+    expect(lookups).toHaveLength(2);
+    expect(lookups[0]).toEqual({ repo: 'a/b', numbers: [1] });
+    expect(lookups[1]).toEqual({ repo: 'c/d', numbers: [2] });
 
     const repos = new Set<string>();
     for (const snap of result.curr.values()) {

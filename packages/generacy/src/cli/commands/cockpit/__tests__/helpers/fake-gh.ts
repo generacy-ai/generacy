@@ -21,6 +21,11 @@ import type {
 export interface FakeGhConfig {
   issuesByQuery?: (query: string, options?: ListIssuesOptions) => Issue[];
   issuesScript?: Issue[][];
+  /**
+   * Callback form for `batchLookupIssuesOrPrs()`. When set, overrides the
+   * `issuesScript` fallback. Receives the repo and the in-scope numbers.
+   */
+  lookupByRepo?: (repo: string, numbers: number[]) => Issue[];
   checksByPr?: Record<string, CheckRunSummary[]>;
   prByPr?: Record<string, PullRequestSummary>;
   resolveIssueToPRByIssue?: Record<string, number | null>;
@@ -48,6 +53,18 @@ export class FakeGh implements GhWrapper {
   async listIssues(query: string, options?: ListIssuesOptions): Promise<Issue[]> {
     this.calls.push({ method: 'listIssues', args: [query, options] });
     if (this.config.issuesByQuery != null) return this.config.issuesByQuery(query, options);
+    if (this.config.issuesScript != null) {
+      const page = this.config.issuesScript[this.scriptCursor] ?? [];
+      this.scriptCursor += 1;
+      return page;
+    }
+    return [];
+  }
+
+  async batchLookupIssuesOrPrs(repo: string, numbers: number[]): Promise<Issue[]> {
+    this.calls.push({ method: 'batchLookupIssuesOrPrs', args: [repo, numbers] });
+    if (numbers.length === 0) return [];
+    if (this.config.lookupByRepo != null) return this.config.lookupByRepo(repo, numbers);
     if (this.config.issuesScript != null) {
       const page = this.config.issuesScript[this.scriptCursor] ?? [];
       this.scriptCursor += 1;
