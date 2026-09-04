@@ -219,7 +219,7 @@ export function createDoorbellDriver(opts: DoorbellDriverOptions): DoorbellDrive
         () => {
           const seenTypes = events.map((e) => e.type).join(', ') || '(none)';
           const recentStdout = stdoutLines.slice(-10).join('\n') || '(empty)';
-          return `[doorbell-driver] waitForEvent timed out after ${timeoutMs}ms. Event types seen: [${seenTypes}]. Recent stdout:\n${recentStdout}`;
+          return `[doorbell-driver] waitForEvent timed out after ${timeoutMs}ms. Event types seen: [${seenTypes}]. Recent stdout:\n${recentStdout}\nSTDERR:\n${stderrChunks.join('')}`;
         },
       );
     },

@@ -54,7 +54,21 @@ const DEFAULT_GATE_KEY = deriveGateKey(DEFAULT_WIRE_EPIC_REF, DEFAULT_GATE_TYPE,
 const DEFAULT_GATE_ID = deriveGateId(DEFAULT_GATE_KEY);
 const DEFAULT_SESSION_ID = 'sess-1024-default';
 const DEFAULT_ASKED_AT = '2026-07-21T12:00:00.000Z';
-const DEFAULT_ANSWERED_AT = '2026-07-21T12:05:00.000Z';
+/**
+ * Default `answeredAt` for {@link answerLineFixture} — evaluated at CALL time,
+ * not module load.
+ *
+ * A fixed absolute timestamp here is a time bomb: the doorbell's answers tailer
+ * bounds its byte-0 replay with an `answeredAt` recency window (24 h by default,
+ * `COCKPIT_ANSWERS_REPLAY_WINDOW_MS` — generacy#1228 FR-005), so a hard-coded
+ * date silently ages out and every harness answer starts getting window-dropped
+ * with no assertion pointing at the cause. Real cloud deliveries always carry a
+ * near-now `answeredAt`; the fixture must too. Callers that need determinism
+ * pass `answeredAt` explicitly.
+ */
+function defaultAnsweredAt(): string {
+  return new Date().toISOString();
+}
 const DEFAULT_OUTCOME_AT = '2026-07-21T12:05:01.000Z';
 
 const DEFAULT_ACTOR = {
@@ -160,7 +174,7 @@ export function answerLineFixture(overrides: AnswerLineFixtureOverrides = {}): G
     optionId: overrides.optionId !== undefined ? overrides.optionId : 'proceed',
     freeText: overrides.freeText !== undefined ? overrides.freeText : null,
     actor: overrides.actor ?? { ...DEFAULT_ACTOR },
-    answeredAt: overrides.answeredAt ?? DEFAULT_ANSWERED_AT,
+    answeredAt: overrides.answeredAt ?? defaultAnsweredAt(),
     deliveryId: overrides.deliveryId ?? 'dlv_1024_default',
   };
   return GateAnswerSchema.parse(body);

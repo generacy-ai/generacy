@@ -13,9 +13,16 @@ import {
   type GateAnswerEvent,
   type GateAnswerLine,
 } from '../watch/gate-answer.js';
+import { AnswersCursorStore } from './answers-cursor-store.js';
+import type {
+  EpicRefSetHolder,
+  MissRefreshOutcome,
+} from './ref-set-holder.js';
 
 export const DEFAULT_ANSWERS_FILE_PATH = '/workspaces/.generacy/cockpit/answers.ndjson';
 export const DEFAULT_REPLAY_LINE_CAP = 10_000;
+/** Recency window for replay branches: drop answers older than 24 h. */
+export const DEFAULT_REPLAY_WINDOW_MS = 86_400_000;
 export const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const MIN_POLL_INTERVAL_MS = 100;
 const READ_CHUNK_SIZE = 64 * 1024;
@@ -48,6 +55,13 @@ export interface FsFacade {
     path: string,
     opts?: { recursive?: boolean; signal?: AbortSignal },
   ): AsyncIterable<FsWatchEvent>;
+  // Optional write surface used only by AnswersCursorStore. Kept optional so
+  // existing read-only fake-fs test doubles remain valid; a store constructed
+  // over a façade lacking these treats reads as missing and writes as no-ops.
+  mkdir?(path: string, opts: { recursive: boolean }): Promise<void>;
+  readFile?(path: string): Promise<string>;
+  writeFile?(path: string, data: string): Promise<void>;
+  rename?(from: string, to: string): Promise<void>;
 }
 
 export interface AnswersFileSourceLogger {
@@ -57,17 +71,10 @@ export interface AnswersFileSourceLogger {
 
 export interface AnswersFileSourceOptions {
   /**
-   * Bound epic ref in "owner/repo#number" form. The frozen down-path
-   * gate-answer carries no `scope`; the repo-scope filter compares this epic's
-   * owner/repo against the owner/repo parsed from each answer's `gateKey`
-   * issue-ref (see `parseIssueRefFromGateKey`).
-   *
-   * KNOWN LIMITATION (cross-repo epics): the filter matches owner/repo only, so
-   * an answer for a child issue that lives in a DIFFERENT repo than the epic is
-   * dropped as cross-epic. Cross-repo remote gates are not yet exercised (the
-   * dogfood is single-repo); tracked as a follow-up — thread the epic's child
-   * ref-set into the tailer, or drop the repo filter and rely on downstream
-   * gateId matching (no open gate ⇒ no match ⇒ harmless over-delivery).
+   * Bound epic ref in "owner/repo#number" form. With a `refSetHolder`, answers
+   * are scoped by membership in the epic's resolved ref set (epic + children,
+   * cross-repo included). Without one (harness mode), the legacy
+   * case-insensitive owner/repo compare against this epic applies.
    */
   epicRef: string;
   /** Absolute path to the answers NDJSON file. */
@@ -86,7 +93,31 @@ export interface AnswersFileSourceOptions {
   now?: () => number;
   /** Test seam: fs promises façade. Default node:fs/promises. */
   fs?: FsFacade;
+  /**
+   * Shared scope oracle. Absent ⇒ legacy owner/repo compare (harness mode).
+   */
+  refSetHolder?: EpicRefSetHolder;
+  /** Recency window for replay branches. Default 86_400_000 (24 h). */
+  replayWindowMs?: number;
+  /** Cursor persistence. Absent ⇒ derived from `filePath`; injectable for tests. */
+  cursorStore?: AnswersCursorStore;
+  /** Test seam: override the cursor directory when deriving a default store. */
+  cursorDir?: string;
 }
+
+/**
+ * What one line's pass through `processLine()` did.
+ *
+ * - `consumed` — the line reached a terminal decision (emitted, or deliberately
+ *   dropped as malformed / out-of-window / out-of-scope). The cursor may
+ *   advance past it.
+ * - `deferred` — the line was NOT consumed: the emit sink rejected, `stop()`
+ *   raced the emit, or the scope oracle could not be re-resolved (throttled) so
+ *   FR-002's "drop only if still foreign after re-resolve" is unsatisfied. The
+ *   cursor must NOT advance; the reader stops the current pass and re-reads
+ *   from this line on the next tick.
+ */
+type LineOutcome = 'consumed' | 'deferred';
 
 export type TailerMode =
   | 'waiting-for-dir'
@@ -138,6 +169,25 @@ function nodeWatch(
   const iter = nodeFsPromises.watch(p, opts) as unknown as AsyncIterable<FsWatchEvent>;
   return iter;
 }
+
+/**
+ * Production `FsFacade` — the single default used by `doorbell.ts` and the
+ * AnswersCursorStore it wires. Read surface (stat/open/watch) plus the write
+ * surface (mkdir/readFile/writeFile/rename) the cursor store needs.
+ */
+export const nodeFsFacade: FsFacade = {
+  stat: nodeStat,
+  open: nodeOpen,
+  watch: nodeWatch,
+  mkdir: async (p, opts) => {
+    await nodeFsPromises.mkdir(p, opts);
+  },
+  readFile: (p) => nodeFsPromises.readFile(p, 'utf-8'),
+  writeFile: async (p, data) => {
+    await nodeFsPromises.writeFile(p, data);
+  },
+  rename: (from, to) => nodeFsPromises.rename(from, to),
+};
 
 function isEnoent(err: unknown): boolean {
   return (
@@ -197,6 +247,9 @@ export class AnswersFileSource {
   private readonly useFsWatch: boolean;
   private readonly now: () => number;
   private readonly fs: FsFacade;
+  private readonly holder: EpicRefSetHolder | null;
+  private readonly replayWindowMs: number;
+  private readonly cursorStore: AnswersCursorStore;
 
   private mode: TailerMode = 'waiting-for-dir';
   private running = false;
@@ -208,6 +261,13 @@ export class AnswersFileSource {
   private fsWatchAbort: AbortController | null = null;
   private tickInFlight = false;
   private pendingTick = false;
+  /**
+   * A replay that was cut short by a deferred line leaves the rest of the
+   * window-bounded region unread. The follow-up tail must keep applying the
+   * recency window over those same bytes, or a deferral would smuggle ancient
+   * answers past it.
+   */
+  private replayWindowPending = false;
 
   constructor(options: AnswersFileSourceOptions) {
     if (!EPIC_REF_REGEX.test(options.epicRef)) {
@@ -238,11 +298,19 @@ export class AnswersFileSource {
     this.pollIntervalMs = poll;
     this.useFsWatch = options.useFsWatch ?? true;
     this.now = options.now ?? (() => Date.now());
-    this.fs = options.fs ?? {
-      stat: nodeStat,
-      open: nodeOpen,
-      watch: nodeWatch,
-    };
+    this.fs = options.fs ?? nodeFsFacade;
+    this.holder = options.refSetHolder ?? null;
+    this.replayWindowMs = options.replayWindowMs ?? DEFAULT_REPLAY_WINDOW_MS;
+    this.cursorStore =
+      options.cursorStore ??
+      new AnswersCursorStore({
+        answersFilePath: this.filePath,
+        epicRef: this.epicRef,
+        logger: this.logger,
+        fs: this.fs,
+        now: this.now,
+        ...(options.cursorDir != null ? { cursorDir: options.cursorDir } : {}),
+      });
   }
 
   getState(): TailerMode {
@@ -267,6 +335,8 @@ export class AnswersFileSource {
       this.pollTimer = null;
     }
     await this.stopFsWatch();
+    // Persist the final consumed position so a restart resumes cleanly.
+    await this.cursorStore.flush();
     this.mode = 'stopped';
   }
 
@@ -359,7 +429,7 @@ export class AnswersFileSource {
     // File exists.
     if (this.lastKnownIno == null) {
       // First-time discovery from waiting-for-dir / waiting-for-file.
-      await this.doReplay(fileStat.ino);
+      await this.doFirstDiscovery(fileStat);
       return;
     }
 
@@ -367,7 +437,7 @@ export class AnswersFileSource {
       this.logger.info?.(
         `cockpit doorbell: answers file: rotation file=${this.filePath} oldIno=${this.lastKnownIno} newIno=${fileStat.ino}`,
       );
-      await this.doReplay(fileStat.ino);
+      await this.doReplay(fileStat.ino, true);
       return;
     }
 
@@ -375,7 +445,7 @@ export class AnswersFileSource {
       this.logger.info?.(
         `cockpit doorbell: answers file: truncation file=${this.filePath} ino=${fileStat.ino} oldSize=${this.lastKnownSize} newSize=${fileStat.size}`,
       );
-      await this.doReplay(fileStat.ino);
+      await this.doReplay(fileStat.ino, true);
       return;
     }
 
@@ -438,10 +508,45 @@ export class AnswersFileSource {
     }
   }
 
-  private async doReplay(ino: number): Promise<void> {
+  /**
+   * First discovery of the answers file. Consult the persisted cursor: a valid
+   * cursor for this exact inode whose offset lies within the current size lets
+   * us RESUME from `offset` with no replay and no recency window (only bytes the
+   * running doorbell never consumed are tailed). Any other state (missing/stale
+   * cursor, wrong ino, offset past EOF) falls back to a fresh byte-0 replay,
+   * which is window- and scope-bounded.
+   */
+  private async doFirstDiscovery(fileStat: FsStatResult): Promise<void> {
+    const cursor = await this.cursorStore.load();
+    if (!this.running) return;
+    if (
+      cursor != null &&
+      cursor.ino === fileStat.ino &&
+      cursor.offset <= fileStat.size
+    ) {
+      // Resume: adopt the cursor as the consumed high-water mark and tail only
+      // the unconsumed tail (if any) with no replay/window.
+      this.lastKnownIno = fileStat.ino;
+      this.lastKnownSize = cursor.offset;
+      this.mode = 'tailing';
+      if (fileStat.size > cursor.offset) {
+        await this.doTail(fileStat.size);
+      }
+      return;
+    }
+    await this.doReplay(fileStat.ino, true);
+  }
+
+  private async doReplay(ino: number, applyWindow: boolean): Promise<void> {
     this.mode = 'replaying';
     this.lastKnownIno = ino;
     this.lastKnownSize = 0;
+    // Every replay restarts consumption at byte 0. Rotation is covered by the
+    // ino change, but an in-place truncation keeps the SAME ino, so the store's
+    // monotonic-within-ino guard would swallow every advance below the old
+    // high-water mark and persist a stale offset over a smaller file. Reset it
+    // explicitly — contracts/answers-cursor-store.md: truncation ⇒ rewrite.
+    this.cursorStore.reset(ino, 0);
 
     let totalLines = 0;
     if (this.replayLineCap !== Infinity) {
@@ -453,9 +558,11 @@ export class AnswersFileSource {
         ? 0
         : Math.max(0, totalLines - this.replayLineCap);
 
-    const { nextConsumedByte, lastSkippedEndByte } = await this.emitFromHead(
-      skipFirst,
-    );
+    const { nextConsumedByte, lastSkippedEndByte, deferred } =
+      await this.emitFromHead(skipFirst, applyWindow);
+    // A deferred line cut the replay short; the follow-up tail must keep the
+    // window over the bytes the replay never reached.
+    this.replayWindowPending = deferred && applyWindow;
     if (skipFirst > 0) {
       const skippedTo = lastSkippedEndByte ?? 0;
       this.logger.warn(
@@ -463,6 +570,9 @@ export class AnswersFileSource {
       );
     }
     this.lastKnownSize = nextConsumedByte;
+    // Force-persist the consumed position at replay drain so a restart resumes
+    // from here instead of replaying the whole window again.
+    await this.cursorStore.flush();
     if (this.running) {
       this.mode = 'tailing';
     }
@@ -470,11 +580,24 @@ export class AnswersFileSource {
 
   private async doTail(newSize: number): Promise<void> {
     if (newSize <= this.lastKnownSize) return;
-    const { nextConsumedByte } = await this.readAndEmitRange(
+    const applyWindow = this.replayWindowPending;
+    const { nextConsumedByte, deferred } = await this.readAndEmitRange(
       this.lastKnownSize,
       newSize,
+      applyWindow,
     );
     this.lastKnownSize = nextConsumedByte;
+    if (!deferred) this.replayWindowPending = false;
+  }
+
+  /**
+   * Advance the persisted cursor to `lineEndByte` for the current inode after a
+   * line has been fully processed (emitted, or dropped by window/scope/schema).
+   * The store debounces the write and is monotonic within an inode.
+   */
+  private advanceCursor(lineEndByte: number): void {
+    if (this.lastKnownIno == null) return;
+    this.cursorStore.advance(this.lastKnownIno, lineEndByte);
   }
 
   private async countLines(): Promise<number> {
@@ -503,7 +626,12 @@ export class AnswersFileSource {
 
   private async emitFromHead(
     skipFirst: number,
-  ): Promise<{ nextConsumedByte: number; lastSkippedEndByte: number | null }> {
+    applyWindow: boolean,
+  ): Promise<{
+    nextConsumedByte: number;
+    lastSkippedEndByte: number | null;
+    deferred: boolean;
+  }> {
     const handle = await this.fs.open(this.filePath, 'r');
     const chunk = Buffer.alloc(READ_CHUNK_SIZE);
     let filePos = 0;
@@ -537,11 +665,26 @@ export class AnswersFileSource {
           if (lineIndex < skipFirst) {
             lastSkippedEndByte = lineEndByte;
           } else {
-            await this.processLine(lineBuf.toString('utf-8'), byteOffset);
+            const outcome = await this.processLine(
+              lineBuf.toString('utf-8'),
+              byteOffset,
+              applyWindow,
+            );
+            if (outcome === 'deferred') {
+              // Not consumed: leave the cursor short of this line so the next
+              // tick re-reads it (FR-004 — the cursor advances on emit).
+              return {
+                nextConsumedByte: byteOffset,
+                lastSkippedEndByte,
+                deferred: true,
+              };
+            }
+            this.advanceCursor(lineEndByte);
             if (!this.running) {
               return {
                 nextConsumedByte: lineEndByte,
                 lastSkippedEndByte,
+                deferred: false,
               };
             }
           }
@@ -556,6 +699,7 @@ export class AnswersFileSource {
       return {
         nextConsumedByte: leftoverStartByte,
         lastSkippedEndByte,
+        deferred: false,
       };
     } finally {
       try {
@@ -569,7 +713,8 @@ export class AnswersFileSource {
   private async readAndEmitRange(
     fromByte: number,
     toByte: number,
-  ): Promise<{ nextConsumedByte: number }> {
+    applyWindow: boolean,
+  ): Promise<{ nextConsumedByte: number; deferred: boolean }> {
     const handle = await this.fs.open(this.filePath, 'r');
     const chunk = Buffer.alloc(READ_CHUNK_SIZE);
     let filePos = fromByte;
@@ -600,9 +745,19 @@ export class AnswersFileSource {
           const lineBuf = combined.subarray(searchFrom, idx);
           const byteOffset = leftoverStartByte + searchFrom;
           const lineEndByte = byteOffset + lineBuf.length + 1;
-          await this.processLine(lineBuf.toString('utf-8'), byteOffset);
+          const outcome = await this.processLine(
+            lineBuf.toString('utf-8'),
+            byteOffset,
+            applyWindow,
+          );
+          if (outcome === 'deferred') {
+            // Not consumed: hold the cursor at this line's first byte so the
+            // next tick re-reads it instead of silently losing it.
+            return { nextConsumedByte: byteOffset, deferred: true };
+          }
+          this.advanceCursor(lineEndByte);
           if (!this.running) {
-            return { nextConsumedByte: lineEndByte };
+            return { nextConsumedByte: lineEndByte, deferred: false };
           }
           searchFrom = idx + 1;
         }
@@ -611,7 +766,7 @@ export class AnswersFileSource {
         leftoverStartByte = leftoverStartByte + searchFrom;
         filePos += bytesRead;
       }
-      return { nextConsumedByte: leftoverStartByte };
+      return { nextConsumedByte: leftoverStartByte, deferred: false };
     } finally {
       try {
         await handle.close();
@@ -621,8 +776,12 @@ export class AnswersFileSource {
     }
   }
 
-  private async processLine(line: string, byteOffset: number): Promise<void> {
-    if (!this.running) return;
+  private async processLine(
+    line: string,
+    byteOffset: number,
+    applyWindow: boolean,
+  ): Promise<LineOutcome> {
+    if (!this.running) return 'deferred';
 
     // (a) JSON.parse
     let raw: unknown;
@@ -634,7 +793,7 @@ export class AnswersFileSource {
       this.logger.warn(
         `cockpit doorbell: answers file: malformed line (not JSON) file=${this.filePath} byteOffset=${byteOffset}${gateSuffix}`,
       );
-      return;
+      return 'consumed';
     }
 
     // (b) Schema validation
@@ -645,33 +804,97 @@ export class AnswersFileSource {
       this.logger.warn(
         `cockpit doorbell: answers file: malformed line (schema) file=${this.filePath} byteOffset=${byteOffset}${gateSuffix}`,
       );
-      return;
+      return 'consumed';
     }
     const gateLine: GateAnswerLine = parsed.data;
 
-    // (c) Repo-scope filter. The frozen down-path gate-answer carries no
-    // `scope`; the bound epic is compared against the owner/repo parsed out of
-    // the answer's `gateKey` issue-ref. Per-issue gates (a child issue of the
-    // epic, or the epic itself for a phase-queue gate) share the epic's
-    // owner/repo, so the filter matches on owner/repo only — NOT the issue
-    // number — so legitimate child-issue answers are not dropped. A gateKey
-    // whose issue-ref cannot be parsed (a non-issue filing / scope-drained
-    // target) is emitted; downstream matches on gateId. Foreign-repo answers
-    // are dropped + logged. The owner/repo comparison is case-insensitive
-    // because GitHub owner/repo names are case-insensitive and gate producers
-    // disagree on casing (operator-typed vs. lowercase vs. GitHub-canonical);
-    // a raw `!==` here silently drops every same-repo answer that differs only
-    // by letter case.
+    // (c′) Recency window (replay branches only). Drop answers older than the
+    // window so a fresh byte-0 replay never re-fires ancient gates. Evaluated
+    // BEFORE the scope test so an out-of-window line never triggers a miss
+    // refresh. Never applied to resumed-cursor tailing (applyWindow=false); an
+    // unparseable answeredAt is kept (fail-open — schema already validated it as
+    // a datetime, so this is defensive).
+    if (applyWindow) {
+      const answeredMs = Date.parse(gateLine.answeredAt);
+      if (Number.isFinite(answeredMs) && answeredMs < this.now() - this.replayWindowMs) {
+        this.logger.info?.(
+          `cockpit doorbell: answers file: window drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} answeredAt=${gateLine.answeredAt}`,
+        );
+        return 'consumed';
+      }
+    }
+
+    // (c″) Scope filter. The frozen down-path gate-answer carries no `scope`;
+    // the owner/repo/number is parsed out of the answer's `gateKey` issue-ref.
+    // A gateKey whose issue-ref cannot be parsed (a non-issue filing /
+    // scope-drained target) bypasses scoping and is emitted; downstream matches
+    // on gateId. With a ref-set holder, membership is tested against the bound
+    // epic's resolved ref set (epic + children, cross-repo included) keyed
+    // `owner/repo#number` lowercased; on a miss we re-resolve (throttled) and
+    // re-check before dropping, so a late-created child is not lost — and if
+    // that re-resolve was swallowed by a throttle window armed by a FAILED
+    // resolve, the line is deferred rather than dropped. If the oracle has
+    // never resolved at all, the test fails open to the owner/repo compare.
+    // Without a holder (harness mode), that legacy case-insensitive owner/repo
+    // compare against the bound epic is the only rule.
     const gateScope = parseIssueRefFromGateKey(gateLine.gateKey);
-    if (
-      gateScope != null &&
-      (gateScope.owner.toLowerCase() !== this.epicScope.owner.toLowerCase() ||
-        gateScope.repo.toLowerCase() !== this.epicScope.repo.toLowerCase())
-    ) {
-      this.logger.info?.(
-        `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
-      );
-      return;
+    if (gateScope != null) {
+      const dropLog = (): void => {
+        this.logger.info?.(
+          `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
+        );
+      };
+      if (this.holder != null) {
+        const key = `${gateScope.owner.toLowerCase()}/${gateScope.repo.toLowerCase()}#${gateScope.number}`;
+        let refSet = this.holder.current;
+        let inScope = refSet?.issues.has(key) ?? false;
+        let missOutcome: MissRefreshOutcome | null = null;
+        if (!inScope) {
+          missOutcome = await this.holder.refreshOnMiss();
+          if (!this.running) return 'deferred';
+          refSet = this.holder.current;
+          inScope = refSet?.issues.has(key) ?? false;
+        }
+        if (!inScope) {
+          if (refSet == null) {
+            // FAIL-OPEN. The scope oracle has NEVER resolved successfully — a
+            // GitHub 403/rate-limit or network failure at startup is routine on
+            // a shared account. `holder.current` is null for EVERY answer, so
+            // the membership test rejects the bound epic's own answers too;
+            // combined with advance-on-emit that is permanent, silent loss of
+            // every answer for as long as GitHub is unhappy. Degrade to the
+            // pre-holder owner/repo compare (the shipped behaviour before
+            // #1228) rather than dropping blind.
+            this.logger.warn(
+              `cockpit doorbell: answers file: scope oracle unresolved — falling back to owner/repo scope file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} boundEpic=${this.epicRef}`,
+            );
+            if (this.isForeignRepo(gateScope)) {
+              dropLog();
+              return 'consumed';
+            }
+          } else if (missOutcome === 'throttled-stale') {
+            // FR-002: drop only if still foreign AFTER a re-resolve. Here the
+            // throttle window was armed by a resolve that FAILED, so no
+            // authoritative re-resolve has happened and a late-created child
+            // would be dropped permanently (advance-on-emit makes that
+            // unrecoverable). Defer instead — the next tick retries and the
+            // window expires within ~30 s, after which the miss resolves or
+            // fails for real and a decision is made. A `throttled` outcome
+            // (window armed by a SUCCESSFUL resolve) is authoritative and still
+            // drops immediately, so a foreign backlog cannot stall the tailer.
+            this.logger.info?.(
+              `cockpit doorbell: answers file: scope miss deferred (refresh throttled) file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
+            );
+            return 'deferred';
+          } else {
+            dropLog();
+            return 'consumed';
+          }
+        }
+      } else if (this.isForeignRepo(gateScope)) {
+        dropLog();
+        return 'consumed';
+      }
     }
 
     // (d) Build event
@@ -684,8 +907,10 @@ export class AnswersFileSource {
       line: gateLine,
     };
 
-    // (e) Emit
-    if (!this.running) return;
+    // (e) Emit. FR-004 defines the cursor as advancing ON EMIT — so a line the
+    // sink rejected, or one `stop()` raced before the emit, is NOT consumed and
+    // must not move the cursor past it.
+    if (!this.running) return 'deferred';
     try {
       await this.onEvent(event);
     } catch (err) {
@@ -694,6 +919,21 @@ export class AnswersFileSource {
           err instanceof Error ? err.message : String(err)
         }`,
       );
+      return 'deferred';
     }
+    return 'consumed';
+  }
+
+  /**
+   * Legacy (pre-#1228) scope test: case-insensitive owner/repo compare against
+   * the bound epic. Still the rule in harness mode (no `gh`, nothing to
+   * resolve) and the fail-open fallback when the ref-set oracle has never
+   * resolved.
+   */
+  private isForeignRepo(gateScope: { owner: string; repo: string }): boolean {
+    return (
+      gateScope.owner.toLowerCase() !== this.epicScope.owner.toLowerCase() ||
+      gateScope.repo.toLowerCase() !== this.epicScope.repo.toLowerCase()
+    );
   }
 }
