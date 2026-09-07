@@ -7,7 +7,6 @@
  * Contract: `specs/978-summary-generacy-cockpit/contracts/smee-doorbell-source.md`.
  */
 import {
-  resolveEpic,
   type CommandRunner,
   type GhWrapper,
   type IssueRef,
@@ -26,6 +25,7 @@ import {
   maybeRefreshAggregate,
   type AggregateTrigger,
 } from './aggregate-on-demand.js';
+import { EpicRefSetHolder } from './ref-set-holder.js';
 
 export const DEFAULT_BASE_RECONNECT_DELAY_MS = 5_000;
 export const DEFAULT_REFRESH_DEBOUNCE_MS = 500;
@@ -48,6 +48,12 @@ export interface SmeeDoorbellSourceOptions {
   refreshDebounceMs?: number;
   safetyNetIntervalMs?: number;
   baseReconnectDelayMs?: number;
+  /**
+   * Shared scope oracle. When provided, ref-set resolution/storage is delegated
+   * to it (one refresh feeds both this source and the answers tailer). When
+   * absent, an internal holder is constructed from `epicRef`/`gh`/`logger`.
+   */
+  refSetHolder?: EpicRefSetHolder;
 }
 
 // IssueRef.repo casing is captured verbatim from the epic body (operator-typed)
@@ -148,10 +154,9 @@ export class SmeeDoorbellSource {
   private readonly safetyNetIntervalMs: number;
   private readonly baseReconnectDelayMs: number;
 
-  private refSet: RefSetView | null = null;
+  private readonly holder: EpicRefSetHolder;
   private aggState: AggregateState = initialAggregateState();
   private prev: SnapshotMap = new Map();
-  private currentResolved: ResolvedEpic | null = null;
 
   private reconnectAttempt = 0;
   private running = false;
@@ -183,20 +188,26 @@ export class SmeeDoorbellSource {
       options.safetyNetIntervalMs ?? DEFAULT_SAFETY_NET_INTERVAL_MS;
     this.baseReconnectDelayMs =
       options.baseReconnectDelayMs ?? DEFAULT_BASE_RECONNECT_DELAY_MS;
+    this.holder =
+      options.refSetHolder ??
+      new EpicRefSetHolder({
+        epicRef: this.epicRef,
+        gh: this.gh,
+        logger: this.logger,
+        now: this.now,
+        ...(this.onRefSetRefreshFailure != null
+          ? { onRefreshFailure: this.onRefSetRefreshFailure }
+          : {}),
+      });
   }
 
   async start(): Promise<void> {
     if (this.running) return;
 
     // Blocking startup ref-set refresh: propagate resolveEpic failures so the
-    // caller (`runSmeeMode`) can demote to poll-fallback.
-    const resolved = await resolveEpic({
-      epicRef: this.epicRef,
-      gh: this.gh,
-      logger: this.logger,
-    });
-    this.currentResolved = resolved;
-    this.refSet = buildRefSet(resolved);
+    // caller (`runSmeeMode`) can demote to poll-fallback. Delegated to the
+    // shared holder — throws when there is no prior successful set (startup).
+    await this.holder.refresh();
 
     this.running = true;
     this.abortController = new AbortController();
@@ -349,9 +360,10 @@ export class SmeeDoorbellSource {
   private async processEventBlock(block: string): Promise<void> {
     const payload = parseSseEventBlock(block);
     if (payload == null) return;
-    if (this.refSet == null) return;
+    const refSet = this.holder.current;
+    if (refSet == null) return;
 
-    if (isEpicPayload(payload, this.refSet.epicNumber)) {
+    if (isEpicPayload(payload, refSet.epicNumber)) {
       this.scheduleRefSetRefresh();
     }
 
@@ -359,7 +371,7 @@ export class SmeeDoorbellSource {
       payload.githubEvent,
       payload.action,
       payload.body,
-      this.refSet,
+      refSet,
       () => new Date(this.now()).toISOString(),
     );
     if (result != null) {
@@ -411,28 +423,10 @@ export class SmeeDoorbellSource {
 
   private async refreshRefSet(): Promise<void> {
     if (!this.running) return;
-    try {
-      const resolved = await resolveEpic({
-        epicRef: this.epicRef,
-        gh: this.gh,
-        logger: this.logger,
-      });
-      this.currentResolved = resolved;
-      this.refSet = buildRefSet(resolved);
-    } catch (err) {
-      this.logger.warn(
-        `cockpit doorbell: ref-set refresh failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      if (this.onRefSetRefreshFailure != null) {
-        try {
-          this.onRefSetRefreshFailure(err);
-        } catch {
-          /* callback errors are swallowed */
-        }
-      }
-    }
+    // Delegated to the shared holder: after the first successful resolve it
+    // warns + retains the previous set on failure and fires the wired
+    // `onRefSetRefreshFailure` callback, so semantics are unchanged.
+    await this.holder.refresh();
   }
 
   private scheduleAggregateRefresh(trigger: AggregateTrigger): void {
@@ -452,22 +446,24 @@ export class SmeeDoorbellSource {
   }
 
   private async runAggregateRefresh(trigger: AggregateTrigger): Promise<void> {
-    if (!this.running || this.refSet == null) return;
+    const refSet = this.holder.current;
+    if (!this.running || refSet == null) return;
     const output = await maybeRefreshAggregate({
       trigger,
       epicRef: this.epicRef,
-      epicRepo: this.refSet.epicRepo,
-      epicNumber: this.refSet.epicNumber,
+      epicRepo: refSet.epicRepo,
+      epicNumber: refSet.epicNumber,
       prevAgg: this.aggState,
       prev: this.prev,
-      currentResolved: this.currentResolved,
+      // Holder owns resolution; it is non-null once `start()` has resolved, so
+      // the aggregate reuses it and never re-resolves.
+      currentResolved: this.holder.resolved,
       gh: this.gh,
       logger: this.logger,
       now: () => new Date(this.now()).toISOString(),
     });
     this.aggState = output.nextAgg;
     this.prev = output.nextPrev;
-    this.currentResolved = output.nextResolved;
 
     for (const ev of output.events) {
       try {

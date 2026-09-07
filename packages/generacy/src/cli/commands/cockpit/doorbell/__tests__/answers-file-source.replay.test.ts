@@ -11,8 +11,10 @@ import {
   type FsStatResult,
 } from '../answers-file-source.js';
 import { EpicEventBus } from '../../mcp/event-bus.js';
+import { EpicRefSetHolder } from '../ref-set-holder.js';
 import type { GateAnswerEvent } from '../../watch/gate-answer.js';
 import type { CockpitStreamEvent } from '../../watch/stream-event.js';
+import type { GhWrapper, ResolvedEpic } from '@generacy-ai/cockpit';
 
 const FILE_PATH = '/mem/answers.ndjson';
 const PARENT_DIR = '/mem';
@@ -239,6 +241,152 @@ describe('AnswersFileSource — startup replay', () => {
     await src.stop();
 
     expect(events.map((e) => e.gateId)).toEqual(['g1', 'g2', 'g3', 'g4', 'g5']);
+  });
+});
+
+describe('AnswersFileSource — replay recency window (US4)', () => {
+  const NOW = Date.parse('2027-02-01T00:00:00.000Z');
+  const OLD = '2027-01-01T00:00:00.000Z'; // > 24 h before NOW
+  const RECENT = '2027-01-31T23:00:00.000Z'; // 1 h before NOW
+
+  it('drops answers older than the 24 h window on byte-0 replay, logs info(window drop)', async () => {
+    const content =
+      goodLine('old', { answeredAt: OLD }) + goodLine('recent', { answeredAt: RECENT });
+    const fs = makeFacade(content);
+    const events: GateAnswerEvent[] = [];
+    const logger = makeLogger();
+    const src = new AnswersFileSource({
+      epicRef: 'owner/repo#5',
+      filePath: FILE_PATH,
+      onEvent: async (e) => {
+        events.push(e);
+      },
+      logger,
+      useFsWatch: false,
+      pollIntervalMs: 100,
+      now: () => NOW,
+      fs,
+    });
+
+    await src.start();
+    await src.stop();
+
+    expect(events.map((e) => e.gateId)).toEqual(['recent']);
+    const windowDrops = logger.info.mock.calls
+      .map((c) => c[0] as string)
+      .filter((m) => m.includes('window drop'));
+    expect(windowDrops).toHaveLength(1);
+    expect(windowDrops[0]).toMatch(/gateId=old/);
+    expect(windowDrops[0]).toMatch(/answeredAt=2027-01-01/);
+  });
+
+  it('a custom replayWindowMs widens the window (old line now emits)', async () => {
+    const content = goodLine('old', { answeredAt: OLD });
+    const fs = makeFacade(content);
+    const events: GateAnswerEvent[] = [];
+    const src = new AnswersFileSource({
+      epicRef: 'owner/repo#5',
+      filePath: FILE_PATH,
+      onEvent: async (e) => {
+        events.push(e);
+      },
+      logger: makeLogger(),
+      useFsWatch: false,
+      pollIntervalMs: 100,
+      now: () => NOW,
+      replayWindowMs: 90 * 86_400_000, // 90 days
+      fs,
+    });
+
+    await src.start();
+    await src.stop();
+
+    expect(events.map((e) => e.gateId)).toEqual(['old']);
+  });
+
+  it('window is applied before the ref-set test — an out-of-window foreign line never triggers a miss refresh', async () => {
+    const content = goodLine('old', {
+      answeredAt: OLD,
+      gateKey: 'owner/repo#999:clarification:x',
+    });
+    const fs = makeFacade(content);
+    const resolve = vi.fn(
+      async (): Promise<ResolvedEpic> => ({
+        epic: { repo: 'owner/repo', number: 5 },
+        parsed: { phases: [], adhocRefs: [], allRefs: [], warnings: [] },
+        repos: ['owner/repo'],
+        bodyHash: 'x',
+      }),
+    );
+    const holder = new EpicRefSetHolder({
+      epicRef: 'owner/repo#5',
+      gh: {} as GhWrapper,
+      logger: makeLogger(),
+      resolve: resolve as never,
+      now: () => 0,
+    });
+    await holder.refresh();
+    resolve.mockClear();
+
+    const events: GateAnswerEvent[] = [];
+    const logger = makeLogger();
+    const src = new AnswersFileSource({
+      epicRef: 'owner/repo#5',
+      filePath: FILE_PATH,
+      onEvent: async (e) => {
+        events.push(e);
+      },
+      logger,
+      useFsWatch: false,
+      pollIntervalMs: 100,
+      now: () => NOW,
+      refSetHolder: holder,
+      fs,
+    });
+
+    await src.start();
+    await src.stop();
+
+    expect(events).toHaveLength(0);
+    // Dropped by the window, not the scope test — no miss refresh fired.
+    expect(resolve).not.toHaveBeenCalled();
+    const windowDrops = logger.info.mock.calls
+      .map((c) => c[0] as string)
+      .filter((m) => m.includes('window drop'));
+    expect(windowDrops).toHaveLength(1);
+  });
+
+  it('replay-line-cap backstop still applies alongside the window', async () => {
+    const lines: string[] = [];
+    for (let i = 1; i <= 15; i++) lines.push(goodLine(`g${i}`, { answeredAt: RECENT }));
+    const fs = makeFacade(lines.join(''));
+    const events: GateAnswerEvent[] = [];
+    const logger = makeLogger();
+    const src = new AnswersFileSource({
+      epicRef: 'owner/repo#5',
+      filePath: FILE_PATH,
+      onEvent: async (e) => {
+        events.push(e);
+      },
+      logger,
+      useFsWatch: false,
+      pollIntervalMs: 100,
+      replayLineCap: 10,
+      now: () => NOW,
+      fs,
+    });
+
+    await src.start();
+    await src.stop();
+
+    // All in-window, but the cap still trims to the last 10.
+    expect(events.map((e) => e.gateId)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `g${i + 6}`),
+    );
+    const capWarns = logger.warn.mock.calls
+      .map((c) => c[0] as string)
+      .filter((m) => m.includes('replay cap hit'));
+    expect(capWarns).toHaveLength(1);
   });
 });
 

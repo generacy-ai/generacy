@@ -9,6 +9,7 @@ import {
 } from '@generacy-ai/cockpit';
 import { resolveIssueContext } from './resolver.js';
 import { listAllIssues } from './shared/pagination.js';
+import { filterToRefSet } from './shared/ref-set-filter.js';
 import { classifyIssue } from './shared/classify-issue.js';
 import { rollup } from './watch/check-rollup.js';
 import { buildStatusRow, type StatusRow } from './status/row.js';
@@ -106,7 +107,8 @@ export async function runStatus(
   for (const { repo, query } of repoBatches) {
     let issues: Issue[] = [];
     try {
-      issues = await listAllIssues(gh, query, { logger });
+      const fetched = await listAllIssues(gh, query, { logger });
+      issues = filterToRefSet(fetched, repo, resolved.parsed.allRefs, logger);
     } catch (err) {
       stderr(
         `cockpit status: failed to list issues for ${repo}: ${err instanceof Error ? err.message : String(err)}`,

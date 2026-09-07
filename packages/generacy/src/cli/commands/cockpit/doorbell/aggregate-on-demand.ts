@@ -76,7 +76,6 @@ export async function maybeRefreshAggregate(
     pollResult = await runOnePoll(input.prev, {
       gh: input.gh,
       refs: resolved.parsed.allRefs,
-      epicOwnerRepo: resolved.epic.repo,
       logger: input.logger,
     });
   } catch (err) {

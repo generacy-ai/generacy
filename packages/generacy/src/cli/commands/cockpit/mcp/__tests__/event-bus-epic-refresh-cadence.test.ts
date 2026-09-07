@@ -42,6 +42,9 @@ function makeCountingGh(epicRepo: string, epicNumber: number): CountingGh {
     async listIssues(): Promise<Issue[]> {
       return [];
     },
+    async batchLookupIssuesOrPrs(): Promise<Issue[]> {
+      return [];
+    },
   };
   return { gh: gh as GhWrapper, epicGetIssueCount: () => epicGetIssueCount };
 }

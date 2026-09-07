@@ -60,6 +60,31 @@ describe('runStatus', () => {
     expect(joined).toContain('owner/repo-b');
   });
 
+  // T017 (SC-001) — status applies filterToRefSet to listAllIssues results:
+  // a free-text match outside the epic's resolved ref set never becomes a row.
+  it('drops a free-text-only match from the rows (SC-001)', async () => {
+    const body = epicBody(['owner/repo#1']);
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/epic#42': body },
+      issuesByQuery: (): Issue[] => [
+        makeIssue({ number: 1, url: 'https://github.com/owner/repo/issues/1' }),
+        // Free-text-only hit: shares no resolved ref, must be filtered out.
+        makeIssue({ number: 99, url: 'https://github.com/owner/repo/issues/99' }),
+      ],
+    });
+    const out: string[] = [];
+    const code = await runStatus(
+      'owner/epic#42',
+      { json: true },
+      { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out[0]!);
+    const numbers = parsed.rows.map((r: { number: number }) => r.number);
+    expect(numbers).toContain(1);
+    expect(numbers).not.toContain(99);
+  });
+
   it('--json emits a single-line JSON envelope', async () => {
     const body = epicBody(['owner/repo#1']);
     const gh = new FakeGh({

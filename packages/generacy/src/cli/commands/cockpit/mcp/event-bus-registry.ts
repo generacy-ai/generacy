@@ -410,7 +410,6 @@ async function runRealCycle(
   const result = await runOnePoll(state.prev, {
     gh,
     refs: resolved.parsed.allRefs,
-    epicOwnerRepo: resolved.epic.repo,
     logger,
   });
   for (const event of result.events) {

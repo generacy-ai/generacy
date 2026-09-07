@@ -54,7 +54,7 @@ describe('cockpit watch', () => {
           ]),
     );
     let epicCallIndex = 0;
-    const queries: string[] = [];
+    const lookups: Array<{ repo: string; numbers: number[] }> = [];
 
     const gh = new FakeGh({
       getIssueBy: (repo, number) => {
@@ -83,8 +83,8 @@ describe('cockpit watch', () => {
           createdAt: '',
         };
       },
-      issuesByQuery: (query) => {
-        queries.push(query);
+      lookupByRepo: (repo, numbers) => {
+        lookups.push({ repo, numbers });
         return [];
       },
     });
@@ -102,10 +102,18 @@ describe('cockpit watch', () => {
       },
     );
 
-    const tick1Queries = queries.filter((q) => q === 'repo:owner/repo-a 1');
-    const tick2Queries = queries.filter((q) => q === 'repo:owner/repo-a 1 2');
-    expect(tick1Queries.length).toBeGreaterThanOrEqual(1);
-    expect(tick2Queries.length).toBeGreaterThanOrEqual(1);
+    const tick1Lookups = lookups.filter(
+      (l) => l.repo === 'owner/repo-a' && l.numbers.length === 1 && l.numbers[0] === 1,
+    );
+    const tick2Lookups = lookups.filter(
+      (l) =>
+        l.repo === 'owner/repo-a' &&
+        l.numbers.length === 2 &&
+        l.numbers[0] === 1 &&
+        l.numbers[1] === 2,
+    );
+    expect(tick1Lookups.length).toBeGreaterThanOrEqual(1);
+    expect(tick2Lookups.length).toBeGreaterThanOrEqual(1);
   });
 
   it('--interval below floor emits one stderr clamp warning and continues (SC-006)', async () => {

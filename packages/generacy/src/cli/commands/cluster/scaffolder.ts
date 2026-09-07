@@ -142,6 +142,20 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   const claudeConfigMode = input.claudeConfigMode ?? 'bind';
   const variant = input.variant;
 
+  // Docker-in-Docker. Only the cluster-microservices image ships docker-ce and
+  // the `node ALL=(root) NOPASSWD: /usr/bin/dockerd` sudoers rule, so only that
+  // variant can honour ENABLE_DIND. cluster-base has no dockerd at all — it
+  // bakes a DOCKER_HOST pointing at the mounted host socket and must stay
+  // unprivileged, so gating on the variant is load-bearing, not cosmetic.
+  //
+  // Without these keys the cluster-microservices entrypoint hits the early
+  // return in setup-docker-dind.sh and never starts dockerd — silently, with
+  // nothing in the logs — leaving `docker` in every container reporting a
+  // missing /var/run/docker.sock. Mirrors the reference compose at
+  // cluster-microservices/.devcontainer/generacy/docker-compose.yml; these two
+  // have silently diverged before (#1226).
+  const enableDind = variant === 'cluster-microservices';
+
   // Claude account config is mounted READ-ONLY as a seed, never as the live
   // file. Every container copies it to ~/.claude.json on first start (see the
   // cluster-base entrypoints) and writes only to its private copy.
@@ -172,12 +186,17 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   // cluster-base devcontainer compose.
   //
   // claude-config (/home/node/.claude) is a SHARED named volume so the
-  // orchestrator's post-activation Claude setup — auth (`.credentials.json`),
-  // speckit slash commands, and conversation history — is visible to every
-  // worker. Without it, workers spawn an unauthenticated Claude CLI with no
-  // speckit commands; each phase exits "Not logged in" in <1s and the phase
-  // runner commits an empty phase, producing PRs with commits but no artifacts.
+  // orchestrator's post-activation Claude setup — speckit slash commands and
+  // conversation history — is visible to every worker. Without it, workers
+  // spawn a Claude CLI with no speckit commands, the phase runner commits an
+  // empty phase, and the PR has commits but no artifacts.
   // (~/.claude.json is the separate account-metadata file; both are mounted.)
+  //
+  // The volume no longer carries the login on its own: Claude Code keeps OAuth
+  // credentials in ~/.config/anthropic, outside ~/.claude, so sharing this
+  // volume left every worker unauthenticated and each phase exiting
+  // "Not logged in" in <1s. ANTHROPIC_CONFIG_DIR below relocates that store
+  // back inside the shared volume — see sharedClaudeAuthEnv.
   const commonVolumes = [
     claudeConfigVolume,
     'claude-config:/home/node/.claude',
@@ -215,6 +234,16 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
     'generacy-app-config-data:/var/lib/generacy-app-config:ro',
   ];
 
+  // Relocates Claude Code's OAuth credential store (default ~/.config/anthropic,
+  // which is container-local) into the shared claude-config volume, so one
+  // login on the orchestrator authenticates every worker and token refreshes
+  // propagate. Must be set on BOTH services or the halves diverge. Gateway-
+  // routed launches are unaffected — they authenticate via ANTHROPIC_BASE_URL /
+  // ANTHROPIC_AUTH_TOKEN in the gateway config dir's settings.json, which take
+  // precedence over anything in this store.
+  const sharedClaudeAuthEnv =
+    'ANTHROPIC_CONFIG_DIR=/home/node/.claude/anthropic-config';
+
   const tmpfsMounts = [
     '/run/generacy-credhelper:uid=1002',
     '/run/generacy-control-plane:uid=1000',
@@ -232,6 +261,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       orchestrator: {
         image: input.imageTag,
         command: '/usr/local/bin/entrypoint-orchestrator.sh',
+        ...(enableDind ? { privileged: true } : {}),
         restart: 'unless-stopped',
         ports: orchestratorPorts,
         volumes: orchestratorVolumes,
@@ -243,6 +273,12 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           `CLUSTER_VARIANT=${variant}`,
           'GENERACY_INITIAL_WORKERS=${WORKER_COUNT}',
           'GENERACY_CLUSTER_ROLE=orchestrator',
+          sharedClaudeAuthEnv,
+          // DOCKER_CONTEXT steers the docker CLI only. Worker-container
+          // management is unaffected: DockerEngineClient reads DOCKER_HOST and
+          // falls back to /var/run/docker-host.sock, so the orchestrator keeps
+          // scaling workers on the host daemon, not into its own DinD.
+          ...(enableDind ? ['ENABLE_DIND=true', 'DOCKER_CONTEXT=host'] : []),
         ],
         env_file: envFile,
         healthcheck: {
@@ -262,6 +298,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       worker: {
         image: input.imageTag,
         command: '/usr/local/bin/entrypoint-worker.sh',
+        ...(enableDind ? { privileged: true } : {}),
         restart: 'unless-stopped',
         deploy: {
           replicas: '${WORKER_COUNT:-1}',
@@ -275,6 +312,10 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           `DEPLOYMENT_MODE=${deploymentMode}`,
           `CLUSTER_VARIANT=${variant}`,
           'GENERACY_CLUSTER_ROLE=worker',
+          sharedClaudeAuthEnv,
+          // No docker-host.sock on workers by design — a worker's DinD is its
+          // own, so its default context is the only daemon it can reach.
+          ...(enableDind ? ['ENABLE_DIND=true'] : []),
         ],
         env_file: envFile,
         healthcheck: {

@@ -25,12 +25,10 @@ describe('watch is a read-only sensor', () => {
     const baseline = await runOnePoll(new Map(), {
       gh,
       refs,
-      epicOwnerRepo: 'o/r',
     });
     await runOnePoll(baseline.curr, {
       gh,
       refs,
-      epicOwnerRepo: 'o/r',
     });
 
     const mutationCalls = gh.calls.filter(

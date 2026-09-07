@@ -4,7 +4,7 @@ import type {
   IssueRef,
 } from '@generacy-ai/cockpit';
 import { classifyIssue } from '../shared/classify-issue.js';
-import { listAllIssues } from '../shared/pagination.js';
+import { filterToRefSet } from '../shared/ref-set-filter.js';
 import { rollup } from './check-rollup.js';
 import { computeTransitions, type CockpitEvent } from './diff.js';
 import { derivePrChecksNeeded, derivePrLifecycle } from './pr-state.js';
@@ -20,12 +20,8 @@ import {
 
 export interface PollDeps {
   gh: GhWrapper;
-  /** Refs resolved from the epic body for this tick. */
+  /** Refs resolved from the epic body for this tick — authoritative scope. */
   refs: IssueRef[];
-  /** `owner/repo` of the epic itself — used only as the zero-refs fallback query target. */
-  epicOwnerRepo: string;
-  safetyCap?: number;
-  pageSize?: number;
   logger?: { warn: (msg: string) => void; debug?: (msg: string) => void };
   now?: () => string;
   cycleNumber?: number;
@@ -41,17 +37,7 @@ function isPullRequest(issue: Issue): boolean {
   return issue.labels.includes('type:pr');
 }
 
-function queryForRepo(refs: IssueRef[], repo: string): string {
-  const numbers = refs.filter((r) => r.repo === repo).map((r) => r.number);
-  const nums = numbers.map((n) => String(n)).join(' ');
-  if (nums.length === 0) {
-    // Zero-result sentinel to keep the poll shape consistent.
-    return `repo:${repo} is:issue no:label cockpit-no-match-sentinel`;
-  }
-  return `repo:${repo} ${nums}`;
-}
-
-function reposFromRefs(refs: IssueRef[], fallback: string): string[] {
+function reposFromRefs(refs: IssueRef[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const ref of refs) {
@@ -60,7 +46,6 @@ function reposFromRefs(refs: IssueRef[], fallback: string): string[] {
       out.push(ref.repo);
     }
   }
-  if (out.length === 0) return [fallback];
   return out;
 }
 
@@ -76,15 +61,15 @@ export async function runOnePoll(
   deps: PollDeps,
 ): Promise<PollResult> {
   const curr: SnapshotMap = new Map();
-  const repos = reposFromRefs(deps.refs, deps.epicOwnerRepo);
+  const repos = reposFromRefs(deps.refs);
 
   for (const repo of repos) {
-    const query = queryForRepo(deps.refs, repo);
-    const issues = await listAllIssues(deps.gh, query, {
-      ...(deps.safetyCap != null ? { safetyCap: deps.safetyCap } : {}),
-      ...(deps.pageSize != null ? { pageSize: deps.pageSize } : {}),
-      ...(deps.logger != null ? { logger: deps.logger } : {}),
-    });
+    const numbers = deps.refs
+      .filter((r) => r.repo === repo)
+      .map((r) => r.number);
+    if (numbers.length === 0) continue;
+    const fetched = await deps.gh.batchLookupIssuesOrPrs(repo, numbers);
+    const issues = filterToRefSet(fetched, repo, deps.refs, deps.logger);
 
     for (const issue of issues) {
       const classified = classifyIssue(issue.labels);
