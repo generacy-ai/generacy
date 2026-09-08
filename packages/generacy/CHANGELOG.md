@@ -1,5 +1,98 @@
 # @generacy-ai/generacy
 
+## 0.11.0
+
+### Minor Changes
+
+- 318a7e7: Gateway-route validate warning + doctor `llm-gateway` check (#1200).
+
+  `generacy validate` now emits a warning when a config entry explicitly sets a
+  `model` that resolves to the LLM gateway route (one containing `/`) while
+  `GENERACY_LLM_GATEWAY_URL` is unset in the environment — the model would not
+  route anywhere at spawn time. Warnings walk the orchestrator agent tiers
+  (`default`, workflow defaults, phases) plus the tolerant `cockpit.auto.agents.*`
+  block, name the exact config path, and stay on the warnings-only channel
+  (exit code 0).
+
+  `generacy doctor` gains an `llm-gateway` check (category `services`, P1): it
+  skips when `GENERACY_LLM_GATEWAY_URL` is unset, fails fast without fetching when
+  the URL is set but `GENERACY_LLM_GATEWAY_TOKEN` is missing, and otherwise probes
+  `GET /v1/models` (falling back to a single-token `POST /v1/messages` on 404/405)
+  with a 2s per-request timeout to confirm the gateway is reachable and
+  authenticated.
+
+- 148534c: Add an opt-in LLM gateway (Bifrost) sidecar to scaffolded clusters (#1202). A
+  `--llm-gateway` / `--no-llm-gateway` flag (or `GENERACY_LLM_GATEWAY_ENABLED=true`)
+  on `launch` and `deploy` emits an `llm-gateway` compose service, a generate-once
+  `sk-bf-` token in `.env`, `llm-gateway/config.example.json` + create-if-absent
+  `config.json`, and a commented `.env.local`. The toggle persists as
+  `llmGateway: true` in `cluster.yaml`; disabled output stays byte-identical.
+
+### Patch Changes
+
+- d213439: Enable Docker-in-Docker in the scaffolded compose for cluster-microservices clusters
+
+  `scaffoldDockerCompose` never emitted `privileged: true`, `ENABLE_DIND=true`, or
+  `DOCKER_CONTEXT=host`, so every cluster created by `generacy launch` (the npx/UI path)
+  or `generacy deploy` ran with DinD off — including `cluster-microservices` clusters,
+  where the image ships dockerd specifically to support it. `setup-docker-dind.sh` takes
+  a silent early return when `ENABLE_DIND` is unset, so the only symptom was a missing
+  `/var/run/docker.sock` with nothing in the logs.
+
+  The scaffolder now mirrors the reference `cluster-microservices` devcontainer compose.
+  `cluster-base` is deliberately unchanged: it ships no dockerd and reaches the host
+  daemon through a baked-in `DOCKER_HOST`.
+
+  Existing affected clusters need `docker compose down && up` — `privileged` cannot be
+  changed on a live container.
+
+- 9ad3f70: Scope cockpit doorbell gate-answer replay by epic ref set and persist the
+  consumed position (#1228).
+
+  The answers-file tailer (`AnswersFileSource`) now scopes gate answers by
+  membership in the bound epic's resolved ref set (epic + children, cross-repo
+  included) via a shared `EpicRefSetHolder`, replacing the owner/repo string
+  compare that silently dropped legitimate cross-repo epic children (closes
+  #1111). Unknown refs trigger a throttled re-resolve before being dropped.
+
+  The tailer also persists its consumed `{ino, offset}` per epic scope in a new
+  `AnswersCursorStore` (atomic tmp+rename, debounced), so a doorbell restart
+  resumes from the last consumed byte instead of replaying from byte 0. A missing
+  or stale cursor falls back to a byte-0 replay bounded by an `answeredAt` recency
+  window (default 24 h, override `COCKPIT_ANSWERS_REPLAY_WINDOW_MS`) and the
+  ref-set scope. Harness mode (no `gh`) keeps the legacy owner/repo compare.
+
+  Review follow-ups on the same change:
+
+  - An in-place truncation of the answers file (same inode) no longer strands the cursor at
+    a stale, too-high offset: every replay branch now rewrites the cursor rather than
+    relying on the monotonic-within-inode `advance()` guard.
+  - If the epic ref-set oracle has never resolved (a GitHub 403 / rate limit at startup),
+    the scope test fails open to the legacy owner/repo compare instead of dropping every
+    answer — including the bound epic's own — as "cross-epic".
+  - A ref-set miss inside a throttle window that was armed by a _failed_ resolve now defers
+    the line for a later retry instead of dropping it permanently.
+  - The cursor advances only past a line that was actually consumed: a rejected `onEvent`
+    sink, or a `stop()` that races the emit, leaves the line for the next tick.
+  - `answerLineFixture()` (`@generacy-ai/cockpit`) now defaults `answeredAt` to call time.
+    A hard-coded date silently ages past the new replay recency window and made every
+    harness answer disappear with no assertion naming the cause.
+
+- ae10530: Cockpit poll path scopes events to the epic's resolved ref set: replace the free-text `gh search issues` query with an exact aliased-GraphQL `issueOrPullRequest(number:)` lookup (`GhWrapper.batchLookupIssuesOrPrs`) plus a defensive post-filter, so foreign issues no longer leak onto the epic event bus and PR refs are no longer hidden (#1229).
+- f251eca: Scaffolded cluster compose now sets `ANTHROPIC_CONFIG_DIR=/home/node/.claude/anthropic-config` on the orchestrator and every worker. Claude Code keeps its OAuth credentials in `~/.config/anthropic`, which is outside `~/.claude`, so the shared `claude-config` volume no longer carried the login on its own: workers spawned an unauthenticated CLI and each phase exited "Not logged in" in <1s while the phase runner committed an empty phase. Relocating that store into the shared volume restores one login for the whole cluster.
+- Updated dependencies [ea367b0]
+- Updated dependencies [cd4f062]
+- Updated dependencies [df3e00f]
+- Updated dependencies [3f2a026]
+- Updated dependencies [82543bc]
+- Updated dependencies [bbd6ff6]
+- Updated dependencies [9ad3f70]
+- Updated dependencies [ae10530]
+  - @generacy-ai/generacy-plugin-claude-code@0.7.0
+  - @generacy-ai/orchestrator@0.13.3
+  - @generacy-ai/workflow-engine@0.8.0
+  - @generacy-ai/cockpit@0.10.0
+
 ## 0.10.3
 
 ### Patch Changes

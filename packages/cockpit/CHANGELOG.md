@@ -1,5 +1,89 @@
 # @generacy-ai/cockpit
 
+## 0.10.0
+
+### Minor Changes
+
+- ae10530: Cockpit poll path scopes events to the epic's resolved ref set: replace the free-text `gh search issues` query with an exact aliased-GraphQL `issueOrPullRequest(number:)` lookup (`GhWrapper.batchLookupIssuesOrPrs`) plus a defensive post-filter, so foreign issues no longer leak onto the epic event bus and PR refs are no longer hidden (#1229).
+
+### Patch Changes
+
+- 3f2a026: Engine-native pause/resume for implement phases blocked on sibling issues (#1211).
+
+  Before this change, an implement agent that correctly declined to write code —
+  because a clarify answer told it to wait for a sibling issue to merge — hit the
+  no-progress guard and was reported as `failed:implement` + `agent:error`. The
+  `waiting-for:dependencies` label existed in the vocabulary but nothing read or
+  applied it. Every dependency block therefore cost an operator a mute, a manual
+  watch, and a `cockpit resume` — and each forced requeue rebased onto a moved
+  `develop`, generating conflict escalations of its own.
+
+  The implement agent can now emit a `SPECKIT_IMPLEMENT_BLOCKED: {"on": [...]}`
+  sentinel. The phase loop commits WIP, posts a `<!-- generacy-dependency-block -->`
+  marker comment carrying the canonical refs, and applies
+  `waiting-for:dependencies` via the normal gate path — a deliberate pause, not a
+  failure. A new `DependencyMonitorService` polls each blocked issue's refs and,
+  once all are closed, posts a re-arm comment, applies `completed:dependencies`,
+  and enqueues a `continue`. Refs closed as `not planned`, or PRs closed without
+  merging, are flagged with ⚠ in the re-arm comment; the resumed agent re-verifies
+  and can re-emit the sentinel if it is genuinely still blocked.
+
+  Runaway blocks are capped: three block cycles per grant escalate to
+  `waiting-for:dependency-limit` with a limit comment, and three consecutive
+  failures reading a ref post one escalation comment. Neither ever fails open —
+  the gate stays held.
+
+  - `workflow-engine` (minor): new label vocabulary (`completed:dependencies`,
+    `waiting-for:dependency-limit`, `completed:dependency-limit`) and a new public
+    `GitHubClient.getIssueRefState()` returning `state` / `state_reason` /
+    `isPullRequest` / `merged`, plus the `IssueRefState` type.
+  - `orchestrator` (patch): blocked-branch handling in the phase loop, the
+    `SPECKIT_IMPLEMENT_BLOCKED` sentinel parse, `dependency-block` helpers, the new
+    monitor service, and the `dependencies` / `dependency-limit` gate entries. No
+    new public exports.
+  - `cockpit` (patch): both new gates added to `WAITING_PIPELINE_ORDER`. The gate
+    vocabulary derives from `WORKFLOW_LABELS`, so `cockpit advance --gate
+dependencies` and `--gate dependency-limit` work with no CLI change.
+
+  The path is inert unless the agent emits the sentinel; no feature flag, and no
+  change to existing PARTIAL handling or the no-progress guard.
+
+- 9ad3f70: Scope cockpit doorbell gate-answer replay by epic ref set and persist the
+  consumed position (#1228).
+
+  The answers-file tailer (`AnswersFileSource`) now scopes gate answers by
+  membership in the bound epic's resolved ref set (epic + children, cross-repo
+  included) via a shared `EpicRefSetHolder`, replacing the owner/repo string
+  compare that silently dropped legitimate cross-repo epic children (closes
+  #1111). Unknown refs trigger a throttled re-resolve before being dropped.
+
+  The tailer also persists its consumed `{ino, offset}` per epic scope in a new
+  `AnswersCursorStore` (atomic tmp+rename, debounced), so a doorbell restart
+  resumes from the last consumed byte instead of replaying from byte 0. A missing
+  or stale cursor falls back to a byte-0 replay bounded by an `answeredAt` recency
+  window (default 24 h, override `COCKPIT_ANSWERS_REPLAY_WINDOW_MS`) and the
+  ref-set scope. Harness mode (no `gh`) keeps the legacy owner/repo compare.
+
+  Review follow-ups on the same change:
+
+  - An in-place truncation of the answers file (same inode) no longer strands the cursor at
+    a stale, too-high offset: every replay branch now rewrites the cursor rather than
+    relying on the monotonic-within-inode `advance()` guard.
+  - If the epic ref-set oracle has never resolved (a GitHub 403 / rate limit at startup),
+    the scope test fails open to the legacy owner/repo compare instead of dropping every
+    answer — including the bound epic's own — as "cross-epic".
+  - A ref-set miss inside a throttle window that was armed by a _failed_ resolve now defers
+    the line for a later retry instead of dropping it permanently.
+  - The cursor advances only past a line that was actually consumed: a rejected `onEvent`
+    sink, or a `stop()` that races the emit, leaves the line for the next tick.
+  - `answerLineFixture()` (`@generacy-ai/cockpit`) now defaults `answeredAt` to call time.
+    A hard-coded date silently ages past the new replay recency window and made every
+    harness answer disappear with no assertion naming the cause.
+
+- Updated dependencies [3f2a026]
+- Updated dependencies [bbd6ff6]
+  - @generacy-ai/workflow-engine@0.8.0
+
 ## 0.9.0
 
 ### Minor Changes
