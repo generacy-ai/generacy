@@ -34,6 +34,8 @@ const BASE_DEPS = {
 
 const GATE_ID_A = 'a'.repeat(24);
 const GATE_ID_B = 'b'.repeat(24);
+const INBOX_URL_A = `https://app.generacy.ai/dashboard/inbox?gate=${GATE_ID_A}`;
+const INBOX_URL_B = `https://app.generacy.ai/dashboard/inbox?gate=${GATE_ID_B}`;
 
 const CANONICAL_INPUT: Record<string, unknown> = {
   issueRef: 'generacy-ai/generacy#1038',
@@ -66,7 +68,8 @@ describe('cockpit_gate_list parity (#1038)', () => {
     });
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
-    expect(result.data.gates).toEqual([gate]);
+    // #1235 — every row enriched with an inboxUrl from its own gateId.
+    expect(result.data.gates).toEqual([{ ...gate, inboxUrl: INBOX_URL_A }]);
   });
 
   it('many-entry list', async () => {
@@ -87,6 +90,9 @@ describe('cockpit_gate_list parity (#1038)', () => {
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
     expect(result.data.gates).toHaveLength(2);
+    // #1235 — each row carries an inboxUrl derived from ITS OWN gateId.
+    expect(result.data.gates[0]?.inboxUrl).toBe(INBOX_URL_A);
+    expect(result.data.gates[1]?.inboxUrl).toBe(INBOX_URL_B);
   });
 
   it('gateType filter narrows list — forwarded to URL', async () => {

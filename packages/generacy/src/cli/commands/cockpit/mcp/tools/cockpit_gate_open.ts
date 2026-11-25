@@ -19,6 +19,7 @@ import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import { CockpitGateOpenInputSchema } from '../schemas.js';
 import { invokeGate } from '../gates/client.js';
 import { resolveGateOptions } from '../gates/options.js';
+import { buildInboxUrl } from '../gates/inbox-url.js';
 import {
   deriveGateId,
   deriveGateKey,
@@ -31,6 +32,11 @@ import type { BuildMcpServerDeps } from '../server.js';
 export interface CockpitGateOpenData {
   gateId: string;
   status: string;
+  /**
+   * #1235 — dashboard inbox deep-link for this gate. Locally derived (never
+   * echoed by the fire-and-forget ack), present on both `open` and `retained`.
+   */
+  inboxUrl: string;
   [k: string]: unknown;
 }
 
@@ -155,6 +161,9 @@ export function cockpitGateOpen(
         ...envelope.data,
         gateId,
         status: envelope.data.retained ? 'retained' : 'open',
+        // #1235 — spread LAST: the locally-derived inbox link is authoritative
+        // and must never be clobbered by a passthrough ack field of the same name.
+        inboxUrl: buildInboxUrl(options.appUrl, gateId),
       },
     };
   });

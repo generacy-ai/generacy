@@ -90,3 +90,30 @@ export const CockpitGateListDataSchema = z.object({
   truncated: z.boolean().optional(),
 });
 export type CockpitGateListData = z.infer<typeof CockpitGateListDataSchema>;
+
+// ---------------------------------------------------------------------------
+// #1235 — MCP-facing OUTPUT types (post-decode enrichment).
+//
+// The wire schemas above (parsed by `query-client.ts` `decodeResponse`) are
+// UNCHANGED — the orchestrator `GET /cockpit/gates` responses carry no
+// `inboxUrl`. The read tools enrich the decoded payload with a locally-built
+// `inboxUrl` (`gates/inbox-url.ts`) and surface these result types instead.
+// ---------------------------------------------------------------------------
+
+/**
+ * `cockpit_gate_status` result. `inboxUrl` is non-null exactly when `gateId`
+ * is non-null: `open`/`answered` carry a real deep-link; `absent` has no gate
+ * to link, so it carries `inboxUrl: null` (present-and-null, mirroring its
+ * `gateId: null` convention).
+ */
+export type CockpitGateStatusResult =
+  | { gateId: string; status: 'open' | 'answered'; inboxUrl: string }
+  | { gateId: null; status: 'absent'; inboxUrl: null };
+
+/** `cockpit_gate_list` row: every entry carries an `inboxUrl` from its own `gateId`. */
+export type CockpitGateListEntryResult = CockpitGateListEntry & { inboxUrl: string };
+
+export type CockpitGateListResult = {
+  gates: CockpitGateListEntryResult[];
+  truncated?: boolean;
+};

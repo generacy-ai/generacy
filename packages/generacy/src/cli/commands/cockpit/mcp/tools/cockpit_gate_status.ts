@@ -17,8 +17,9 @@ import { getLogger } from '../../../../utils/logger.js';
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import {
   CockpitGateStatusInputSchema,
-  type CockpitGateStatusData,
+  type CockpitGateStatusResult,
 } from '../gates/query-schemas.js';
+import { buildInboxUrl } from '../gates/inbox-url.js';
 import {
   createGateQueryClient,
   isRetryableGateQueryError,
@@ -33,8 +34,8 @@ import type { BuildMcpServerDeps } from '../server.js';
 export function cockpitGateStatus(
   input: unknown,
   deps: BuildMcpServerDeps = {},
-): Promise<ToolResult<CockpitGateStatusData>> {
-  return wrapToolBoundary<CockpitGateStatusData>(async () => {
+): Promise<ToolResult<CockpitGateStatusResult>> {
+  return wrapToolBoundary<CockpitGateStatusResult>(async () => {
     const parsed = CockpitGateStatusInputSchema.safeParse(input);
     if (!parsed.success) {
       return {
@@ -80,7 +81,17 @@ export function cockpitGateStatus(
         },
         `gate-status runId source: ${runIdSource}`,
       );
-      return { status: 'ok', data };
+      // #1235 — enrich the decoded wire payload with a locally-built inbox
+      // link. `absent` (gateId: null) has no gate to link → inboxUrl: null.
+      const result: CockpitGateStatusResult =
+        data.gateId === null
+          ? { gateId: null, status: 'absent', inboxUrl: null }
+          : {
+              gateId: data.gateId,
+              status: data.status,
+              inboxUrl: buildInboxUrl(options.appUrl, data.gateId),
+            };
+      return { status: 'ok', data: result };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       getLogger().info(
