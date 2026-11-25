@@ -17,7 +17,7 @@
 - B: Longest-prefix cwd lookup in `~/.generacy/clusters.json` (`cloudUrl`) > `GENERACY_APP_URL` env > hardcoded production default — ties the link to the actual cluster's dashboard
 - C: `GENERACY_APP_URL` env only; when unset, omit `inboxUrl` from the response (field becomes optional)
 
-**Answer**: *Pending*
+**Answer**: A, with the final default corrected to `https://app.generacy.ai`: `deps.appUrl` (new injection point) > `GENERACY_APP_URL` env > hardcoded `https://app.generacy.ai`. No registry/config-file reads; `inboxUrl` always present. Add `appUrl` to `resolveGateOptions` (the single process.env reader in this package). Rationale: the dashboard is served from app.generacy.ai — `https://generacy.ai/dashboard/inbox` 301-redirects there, and generacy-cloud's `PROD_APP_URL_DEFAULT` (`services/api/src/services/cloud-deploy/env-urls.ts:34`) is the same value. `GENERACY_APP_URL` is already written into cloud-deployed cluster `.env`s (`compose-template.ts:269`), so it is the natural staging override. B is unreliable because `clusters.json` `cloudUrl` is an API/relay URL, not the dashboard; C would leave local clusters (which never set the env) with no link. *(Answered by @christrudelpw via GitHub, 2026-11-25)*
 
 ---
 
@@ -31,7 +31,7 @@
 - A: Always include it — the link becomes valid once the retain queue flushes; simpler contract, matches the plugin's required `inboxUrl: string`
 - B: Omit it on `retained` — never hand the operator a link that does not work yet; field becomes optional in the response shape
 
-**Answer**: *Pending*
+**Answer**: A — always include it. Rationale: the playbook prints the pointer once per gate open, so omitting it on `retained` means the operator never gets a link for that gate. The inbox tolerates an early link: when `?gate=<id>` is not yet hydrated it waits and scrolls once the row arrives via SSE `gate:created` (generacy-cloud `GateInboxClient.test.tsx:367,467`). Keeping the field required also avoids loosening the plugin's `GateOpenResult` type. *(Answered by @christrudelpw via GitHub, 2026-11-25)*
 
 ---
 
@@ -45,7 +45,7 @@
 - A: Every gate, unconditionally — uniform schema (required field), consumers decide what to print
 - B: Only gates in an open/awaiting-answer state — optional field, absent on settled gates
 
-**Answer**: *Pending*
+**Answer**: A — every gate, unconditionally (uniform required field). Rationale: a link to a settled gate is not a dead end — the inbox auto-expands History and scrolls to a `?gate=` that names an answered/expired row (`GateInboxClient.test.tsx:506`). One required field across open/status/list keeps schemas and parity tests uniform, and the playbook already branches on gate state when deciding what to print. *(Answered by @christrudelpw via GitHub, 2026-11-25)*
 
 ---
 
@@ -60,4 +60,4 @@
 - B: Not yet supported — ship the param anyway (forward-compatible; landing on the plain inbox is acceptable in the interim)
 - C: Not supported and undesired — return the bare `/dashboard/inbox` URL without the query param until the cloud adds support
 
-**Answer**: *Pending*
+**Answer**: A — supported today; ship `?gate=${encodeURIComponent(gateId)}` as specced. Rationale: the production inbox reads `searchParams.get('gate')` in `GateInboxClient.tsx:167`, and the web app's own notifier builds exactly `/dashboard/inbox?gate=${encodeURIComponent(gateId)}` (`lib/notifications/gate-browser-notifier.ts:183-185`); generacy-cloud#947's gap is only the missing nav entry. *(Answered by @christrudelpw via GitHub, 2026-11-25)*

@@ -40,8 +40,9 @@ separately (agency follow-up; generacy-ai/generacy-cloud#947).
 **Acceptance Criteria**:
 - [ ] When a gate opens, `cockpit_gate_open` returns an `inboxUrl` pointing at the dashboard
       inbox and deep-linking to the gate (`?gate=<gateId>`).
-- [ ] The URL is derived locally from cluster config — no extra round-trip to the cloud, and no
-      dependence on the fire-and-forget ack echoing anything back.
+- [ ] The URL is derived locally (`deps.appUrl` > `GENERACY_APP_URL` > `https://app.generacy.ai`)
+      — no extra round-trip to the cloud, and no dependence on the fire-and-forget ack echoing
+      anything back.
 - [ ] The returned `inboxUrl` matches what the plugin's `GateOpenResult` type expects (parity
       tests pass).
 
@@ -60,11 +61,11 @@ separately (agency follow-up; generacy-ai/generacy-cloud#947).
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | `cockpit_gate_open` returns `inboxUrl` built as `${appUrl}/dashboard/inbox?gate=${encodeURIComponent(gateId)}`. | P1 | Uses the tool's already-derived `gateId`. |
-| FR-002 | `appUrl` is sourced from the cluster cloud config (`cloud.appUrl`, `cli/commands/launch/types.ts:26`), falling back to an env var and then the services/api default. | P1 | No new network dependency. |
-| FR-003 | `inboxUrl` is added to the `GateOpenResponse` / `CockpitGateOpenData` shapes and validated. | P1 | Keep frozen-shape / wire validation green. |
+| FR-002 | `appUrl` resolves as `deps.appUrl` (new injection point) > `GENERACY_APP_URL` env > hardcoded `https://app.generacy.ai`, via `resolveGateOptions` (`mcp/gates/options.ts`) — no registry/config-file reads, no network dependency. | P1 | Clarified Q1. `GENERACY_APP_URL` is already written into cloud-deployed cluster `.env`s; the default matches generacy-cloud's `PROD_APP_URL_DEFAULT`. |
+| FR-003 | `inboxUrl` is added to the `GateOpenResponse` / `CockpitGateOpenData` shapes as a **required** field and validated; it is present on both `open` and `retained` results. | P1 | Clarified Q2 — always included; keep frozen-shape / wire validation green. |
 | FR-004 | Parity tests between the CLI response shape and the plugin's `GateOpenResult` are updated to assert `inboxUrl`. | P1 | `gate-wire-types.ts:263-272`. |
-| FR-005 | `cockpit_gate_status` returns `inboxUrl` for its reported gate. | P2 | Closes reuse-path DATA GAP. |
-| FR-006 | `cockpit_gate_list` rows each include `inboxUrl`. | P2 | Closes adopt-path DATA GAP. |
+| FR-005 | `cockpit_gate_status` returns `inboxUrl` for its reported gate, regardless of gate state (required field). | P2 | Clarified Q3; closes reuse-path DATA GAP. |
+| FR-006 | `cockpit_gate_list` rows each include `inboxUrl`, regardless of gate state (required field). | P2 | Clarified Q3; closes adopt-path DATA GAP. |
 | FR-007 | A changeset is added covering every touched `packages/*/src/` package. | P1 | CI gate; `workflow:speckit-bugfix` → `patch`. |
 
 ## Success Criteria
@@ -77,10 +78,14 @@ separately (agency follow-up; generacy-ai/generacy-cloud#947).
 
 ## Assumptions
 
-- The dashboard inbox route is `/dashboard/inbox` and accepts a `?gate=<gateId>` query param to
-  deep-link to a specific gate.
-- `cloud.appUrl` (or an equivalent env/default) is reliably available in the CLI/orchestrator
-  context where the gate tools run.
+- **Verified (Q4)**: the dashboard inbox route is `/dashboard/inbox` and supports the
+  `?gate=<gateId>` deep-link today — `GateInboxClient.tsx:167` reads `searchParams.get('gate')`,
+  and the web app's own notifier builds `/dashboard/inbox?gate=${encodeURIComponent(gateId)}`
+  (`lib/notifications/gate-browser-notifier.ts:183-185`). The inbox tolerates links to
+  not-yet-hydrated gates (waits for SSE `gate:created`) and to settled gates (auto-expands
+  History and scrolls), so a required `inboxUrl` is safe on retained opens and settled rows.
+- `appUrl` is always resolvable (Q1): the `deps.appUrl` > `GENERACY_APP_URL` >
+  `https://app.generacy.ai` chain guarantees a value with no config-file or network reads.
 - `gateId` as derived by the tool is the identifier the inbox expects in `?gate=`.
 
 ## Out of Scope
