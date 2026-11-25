@@ -77,6 +77,9 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
     if (result.status !== 'ok') return;
     expect(result.data.gateId).toBe(EXPECTED_ID);
     expect(result.data.status).toBe('open');
+    expect(result.data.inboxUrl).toBe(
+      `https://app.generacy.ai/dashboard/inbox?gate=${EXPECTED_ID}`,
+    );
 
     // POSTs to the gate-open route.
     expect(spy.mock.calls[0]?.[0]).toBe('http://mock.local/cockpit/gates');
@@ -182,7 +185,10 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
     expect(bodyOf(spy).allowFreeText).toBe(true);
   });
 
-  it('passthrough response field forwarded (e.g. inboxUrl)', async () => {
+  it('#1235 — a passthrough inboxUrl in the ack is OVERRIDDEN by the local derivation', async () => {
+    // The orchestrator ack is fire-and-forget and never echoes a URL; but even
+    // if some field named `inboxUrl` rode along, the locally-built value (spread
+    // LAST) is authoritative and must win.
     const spy = vi.fn(async () =>
       jsonResponse(200, {
         accepted: true,
@@ -196,7 +202,30 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
     });
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
-    expect(result.data['inboxUrl']).toBe('https://app.example/inbox/g_2');
+    expect(result.data.inboxUrl).toBe(
+      `https://app.generacy.ai/dashboard/inbox?gate=${EXPECTED_ID}`,
+    );
+    expect(result.data.inboxUrl).not.toBe('https://app.example/inbox/g_2');
+  });
+
+  it('#1235 — retained ack also carries a locally-built inboxUrl', async () => {
+    const spy = vi.fn(async () =>
+      jsonResponse(200, {
+        accepted: true,
+        retained: true,
+        retainQueue: { count: 1, bytes: 512 },
+      }),
+    );
+    const result = await cockpitGateOpen(CANONICAL_INPUT, {
+      ...BASE_DEPS,
+      fetchImpl: spy as unknown as typeof fetch,
+    });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.data.status).toBe('retained');
+    expect(result.data.inboxUrl).toBe(
+      `https://app.generacy.ai/dashboard/inbox?gate=${EXPECTED_ID}`,
+    );
   });
 
   // Regression pins for the orchestrator response contract (#1036 follow-up):

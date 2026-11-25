@@ -17,8 +17,9 @@
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import {
   CockpitGateListInputSchema,
-  type CockpitGateListData,
+  type CockpitGateListResult,
 } from '../gates/query-schemas.js';
+import { buildInboxUrl } from '../gates/inbox-url.js';
 import {
   createGateQueryClient,
   isRetryableGateQueryError,
@@ -33,8 +34,8 @@ import type { BuildMcpServerDeps } from '../server.js';
 export function cockpitGateList(
   input: unknown,
   deps: BuildMcpServerDeps = {},
-): Promise<ToolResult<CockpitGateListData>> {
-  return wrapToolBoundary<CockpitGateListData>(async () => {
+): Promise<ToolResult<CockpitGateListResult>> {
+  return wrapToolBoundary<CockpitGateListResult>(async () => {
     const parsed = CockpitGateListInputSchema.safeParse(input);
     if (!parsed.success) {
       return {
@@ -70,7 +71,16 @@ export function cockpitGateList(
         schedule: QUERY_RETRY_SCHEDULE,
         shouldRetry: isRetryableGateQueryError,
       });
-      return { status: 'ok', data };
+      // #1235 — enrich every row with a locally-built inbox link from its own
+      // gateId, regardless of status.
+      const result: CockpitGateListResult = {
+        gates: data.gates.map((entry) => ({
+          ...entry,
+          inboxUrl: buildInboxUrl(options.appUrl, entry.gateId),
+        })),
+        ...(data.truncated !== undefined ? { truncated: data.truncated } : {}),
+      };
+      return { status: 'ok', data: result };
     } catch (err) {
       if (err instanceof QueryInvalidArgsError) {
         return { status: 'error', class: 'invalid-args', detail: err.message };

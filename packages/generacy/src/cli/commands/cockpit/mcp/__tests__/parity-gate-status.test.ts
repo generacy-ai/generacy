@@ -23,6 +23,7 @@ const BASE_DEPS = {
 };
 
 const GATE_ID = 'a'.repeat(24);
+const EXPECTED_INBOX_URL = `https://app.generacy.ai/dashboard/inbox?gate=${GATE_ID}`;
 
 const CANONICAL_INPUT: Record<string, unknown> = {
   issueRef: 'generacy-ai/generacy#1038',
@@ -41,7 +42,11 @@ describe('cockpit_gate_status parity (#1038)', () => {
     });
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
-    expect(result.data).toEqual({ gateId: GATE_ID, status: 'open' });
+    expect(result.data).toEqual({
+      gateId: GATE_ID,
+      status: 'open',
+      inboxUrl: EXPECTED_INBOX_URL,
+    });
     // GET request, /cockpit/gates query-string carries all three fields.
     expect(spy).toHaveBeenCalledTimes(1);
     const url = String(spy.mock.calls[0]?.[0]);
@@ -63,7 +68,11 @@ describe('cockpit_gate_status parity (#1038)', () => {
     });
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
-    expect(result.data).toEqual({ gateId: GATE_ID, status: 'answered' });
+    expect(result.data).toEqual({
+      gateId: GATE_ID,
+      status: 'answered',
+      inboxUrl: EXPECTED_INBOX_URL,
+    });
   });
 
   it('absent — { gateId: null, status:"absent" } is a SUCCESS envelope (FR-013)', async () => {
@@ -76,6 +85,8 @@ describe('cockpit_gate_status parity (#1038)', () => {
     if (result.status !== 'ok') return;
     expect(result.data.gateId).toBeNull();
     expect(result.data.status).toBe('absent');
+    // #1235 — absent has no gate to link → inboxUrl present-and-null.
+    expect(result.data.inboxUrl).toBeNull();
     // Must not be confusable with an error envelope.
     expect((result as unknown as Record<string, unknown>)['class']).toBeUndefined();
   });

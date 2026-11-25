@@ -42,6 +42,24 @@ describe('resolveGateOptions (#1022 — R2 precedence)', () => {
     expect(withoutArg.fetchImpl).toBe(fetch);
   });
 
+  it('appUrl arg wins over env and default', () => {
+    const opts = resolveGateOptions(
+      { appUrl: 'https://arg.example' },
+      { GENERACY_APP_URL: 'https://env.example' },
+    );
+    expect(opts.appUrl).toBe('https://arg.example');
+  });
+
+  it('appUrl env wins over default when arg omitted', () => {
+    const opts = resolveGateOptions({}, { GENERACY_APP_URL: 'https://env.example' });
+    expect(opts.appUrl).toBe('https://env.example');
+  });
+
+  it('appUrl falls back to https://app.generacy.ai when both arg and env omitted', () => {
+    const opts = resolveGateOptions({}, noopEnv);
+    expect(opts.appUrl).toBe('https://app.generacy.ai');
+  });
+
   it('env parameter defaulted to process.env but does not read it when custom env passed', () => {
     // Injection seam: passing a custom env silences process.env entirely for this call.
     const savedProcEnv = process.env['ORCHESTRATOR_URL'];

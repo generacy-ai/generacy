@@ -59,6 +59,12 @@ export interface BuildMcpServerDeps {
   orchestratorTimeoutMs?: number;
   /** #1022 — test-only fetch override for remote-gate tools. Production leaves undefined. */
   fetchImpl?: typeof fetch;
+  /**
+   * #1235 — gate tools only. Dashboard base URL used to build the `inboxUrl`
+   * deep-link. Precedence: arg > `$GENERACY_APP_URL` > `https://app.generacy.ai`
+   * (resolved in `gates/options.ts`, not here).
+   */
+  appUrl?: string;
 }
 
 function toCallToolResult<T>(result: ToolResult<T>): CallToolResult {
