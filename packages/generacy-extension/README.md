@@ -99,16 +99,7 @@ This is an initial release. Please report issues at: https://github.com/generacy
 
 ## Pricing
 
-**Local Mode**: FREE (with generacy.ai account)
-
-**Cloud Mode** (Organization):
-| Tier | Price | Features |
-|------|-------|----------|
-| Free | $0 (1 seat) | 1 concurrent agent, GitHub only |
-| Basic | $20/seat/mo | 2 concurrent agents, GitHub, Cloud UI |
-| Standard | $50/seat/mo | 5 concurrent agents, all integrations, SSO |
-| Professional | $100/seat/mo | 10 concurrent agents, all integrations, SSO |
-| Enterprise | Custom | Unlimited, compliance, SLA |
+See [Generacy pricing](https://generacy.ai/pricing) for current cloud plans and features.
 
 ---
 
