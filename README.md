@@ -1,12 +1,12 @@
 # Generacy
 
-Message routing system connecting Agency instances with Humancy.
+Generacy helps GitHub teams coordinate AI-assisted changes across repositories. Start with an issue from your backlog, let agents work in isolated environments, and review linked draft pull requests from the affected repositories before merging.
 
-## Overview
+**Trying Generacy?** Follow the [product onboarding guide](https://generacy.ai/docs/onboarding) to connect a GitHub repository and run your first issue. For a first trial, use a disposable repository and review the resulting pull request without merging it.
 
-Generacy is a message routing and coordination system that enables communication between Agency AI instances and Humancy (human oversight). It provides the infrastructure for distributed AI agent coordination, message queuing, and human-in-the-loop workflows.
+**Contributing to Generacy?** Use the development instructions below to build and test this repository.
 
-## Quick Start
+## Contributor Quick Start
 
 ### Prerequisites
 
