@@ -120,56 +120,111 @@ export class OutputCapture {
   private static readonly SENTINEL_BLOCKED_PREFIX = 'SPECKIT_IMPLEMENT_BLOCKED: ';
 
   /**
+   * Apply a SPECKIT_IMPLEMENT_PARTIAL sentinel's payload (the text after the prefix).
+   * #1211 Q2=A: PARTIAL keeps last-wins for its OWN fields, but must not clobber a
+   * `blocked_on` set by a BLOCKED sentinel in the same increment.
+   */
+  private applyPartialSentinel(jsonPart: string, line: string): void {
+    try {
+      const parsed = JSON.parse(jsonPart) as ImplementPartialResult;
+      const priorBlockedOn = this._implementResult?.blocked_on;
+      this._implementResult = {
+        ...parsed,
+        ...(priorBlockedOn !== undefined && parsed.blocked_on === undefined
+          ? { blocked_on: priorBlockedOn }
+          : {}),
+      };
+      this.logger.debug({ implementResult: this._implementResult }, 'Parsed SPECKIT_IMPLEMENT_PARTIAL sentinel');
+    } catch {
+      this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_PARTIAL sentinel — ignoring');
+    }
+  }
+
+  /**
+   * Apply a SPECKIT_IMPLEMENT_BLOCKED sentinel's payload (the text after the prefix).
+   */
+  private applyBlockedSentinel(jsonPart: string, line: string): void {
+    try {
+      const parsed = JSON.parse(jsonPart) as { on: string[] };
+      if (Array.isArray(parsed.on) && parsed.on.length > 0) {
+        this._implementResult = {
+          ...(this._implementResult ?? {}),
+          blocked_on: parsed.on,
+        };
+        this.logger.debug({ blocked_on: parsed.on }, 'Parsed SPECKIT_IMPLEMENT_BLOCKED sentinel');
+      } else {
+        this.logger.warn({ line, parsed }, 'SPECKIT_IMPLEMENT_BLOCKED sentinel missing valid "on" array — ignoring');
+      }
+    } catch {
+      this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_BLOCKED sentinel — ignoring');
+    }
+  }
+
+  /**
+   * Detect and apply either sentinel from a single line. Returns true if the line
+   * matched a sentinel prefix (even if its payload was malformed).
+   */
+  private trySentinel(line: string): boolean {
+    if (line.startsWith(OutputCapture.SENTINEL_PREFIX)) {
+      this.applyPartialSentinel(line.slice(OutputCapture.SENTINEL_PREFIX.length), line);
+      return true;
+    }
+    if (line.startsWith(OutputCapture.SENTINEL_BLOCKED_PREFIX)) {
+      this.applyBlockedSentinel(line.slice(OutputCapture.SENTINEL_BLOCKED_PREFIX.length), line);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Yield text embedded in a stream-json envelope that may carry a sentinel:
+   * assistant `message.content[]` text blocks (FR-001) and the terminal `result`
+   * event's `result` string (FR-002). Duck-typed and type-guarded; never throws.
+   */
+  private *extractEmbeddedTexts(parsed: Record<string, unknown>): Generator<string> {
+    const message = parsed.message;
+    if (typeof message === 'object' && message !== null) {
+      const content = (message as Record<string, unknown>).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            typeof block === 'object' &&
+            block !== null &&
+            (block as Record<string, unknown>).type === 'text' &&
+            typeof (block as Record<string, unknown>).text === 'string'
+          ) {
+            yield (block as Record<string, unknown>).text as string;
+          }
+        }
+      }
+    }
+
+    if (typeof parsed.result === 'string') {
+      yield parsed.result;
+    }
+  }
+
+  /**
+   * Scan a successfully-parsed envelope's embedded text for sentinels, splitting
+   * each embedded string on `\n` and trimming each segment before the prefix check.
+   * Adds no chunks to the output buffer.
+   */
+  private scanEnvelopeForSentinels(parsed: Record<string, unknown>): void {
+    for (const text of this.extractEmbeddedTexts(parsed)) {
+      for (const segment of text.split('\n')) {
+        this.trySentinel(segment.trim());
+      }
+    }
+  }
+
+  /**
    * Parse a single line of JSON and push the resulting OutputChunk.
    */
   private parseLine(line: string): void {
-    // Check for the implement partial sentinel before attempting JSON parse.
-    // The sentinel is embedded in text chunks output by the Claude CLI.
-    if (line.startsWith(OutputCapture.SENTINEL_PREFIX)) {
-      const jsonPart = line.slice(OutputCapture.SENTINEL_PREFIX.length);
-      try {
-        const parsed = JSON.parse(jsonPart) as ImplementPartialResult;
-        // #1211 Q2=A: PARTIAL keeps last-wins for its OWN fields, but must not
-        // clobber a `blocked_on` set by a BLOCKED sentinel in the same increment.
-        const priorBlockedOn = this._implementResult?.blocked_on;
-        this._implementResult = {
-          ...parsed,
-          ...(priorBlockedOn !== undefined && parsed.blocked_on === undefined
-            ? { blocked_on: priorBlockedOn }
-            : {}),
-        };
-        this.logger.debug({ implementResult: this._implementResult }, 'Parsed SPECKIT_IMPLEMENT_PARTIAL sentinel');
-      } catch {
-        this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_PARTIAL sentinel — ignoring');
-      }
+    // Check for the implement sentinels before attempting JSON parse.
+    // On non-stream-json paths the sentinel arrives as a bare raw line.
+    if (this.trySentinel(line)) {
       // Still push as a text chunk so the full output is preserved
-      const chunk: OutputChunk = {
-        type: 'text',
-        data: { text: line },
-        timestamp: new Date().toISOString(),
-      };
-      this.buffer.push(chunk);
-      return;
-    }
-
-    // Check for the dependency-block sentinel.
-    // Same shape as PARTIAL: prefix match, JSON parse, last-wins, line preserved.
-    if (line.startsWith(OutputCapture.SENTINEL_BLOCKED_PREFIX)) {
-      const jsonPart = line.slice(OutputCapture.SENTINEL_BLOCKED_PREFIX.length);
-      try {
-        const parsed = JSON.parse(jsonPart) as { on: string[] };
-        if (Array.isArray(parsed.on) && parsed.on.length > 0) {
-          this._implementResult = {
-            ...(this._implementResult ?? {}),
-            blocked_on: parsed.on,
-          };
-          this.logger.debug({ blocked_on: parsed.on }, 'Parsed SPECKIT_IMPLEMENT_BLOCKED sentinel');
-        } else {
-          this.logger.warn({ line, parsed }, 'SPECKIT_IMPLEMENT_BLOCKED sentinel missing valid "on" array — ignoring');
-        }
-      } catch {
-        this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_BLOCKED sentinel — ignoring');
-      }
       const chunk: OutputChunk = {
         type: 'text',
         data: { text: line },
@@ -193,6 +248,10 @@ export class OutputCapture {
       this.buffer.push(chunk);
       return;
     }
+
+    // Under --output-format stream-json, every stdout line is a JSON envelope and the
+    // sentinel is embedded inside it rather than at the start of a raw line (#1240).
+    this.scanEnvelopeForSentinels(parsed);
 
     const rawType = typeof parsed.type === 'string' ? parsed.type : 'text';
     const type: OutputChunk['type'] = KNOWN_TYPES.has(rawType as OutputChunk['type'])
