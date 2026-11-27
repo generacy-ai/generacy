@@ -13,6 +13,7 @@ import type {
 import { isNamespacedAction } from '../../types/action.js';
 import type { GitHubClient } from '../github/client/index.js';
 import { createGitHubClient } from '../github/client/index.js';
+import { findSpecDirName } from '../../specs/index.js';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -52,7 +53,7 @@ export class PostTasksSummaryAction extends BaseAction {
       let targetDir = featureDir;
       if (!targetDir) {
         const dirs = readdirSync(specsDir);
-        const found = dirs.find(d => d.startsWith(`${issueNumber}-`));
+        const found = findSpecDirName(dirs, issueNumber);
         if (!found) {
           return this.failureResult(`No spec directory found for issue #${issueNumber}`);
         }

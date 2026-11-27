@@ -13,6 +13,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   executeTasksToIssues,
+  findSpecDirName,
 } from '@generacy-ai/workflow-engine';
 import type {
   TasksToIssuesOutput,
@@ -299,7 +300,7 @@ export class EpicPostTasks {
 
     try {
       const dirs = readdirSync(specsDir);
-      const match = dirs.find((d) => d.startsWith(`${issueNumber}-`));
+      const match = findSpecDirName(dirs, issueNumber);
       if (match) {
         return join(specsDir, match);
       }

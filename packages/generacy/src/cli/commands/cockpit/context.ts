@@ -23,6 +23,7 @@ import {
   type CommandRunner,
   type GhWrapper,
 } from '@generacy-ai/cockpit';
+import { findSpecDirName } from '@generacy-ai/workflow-engine';
 import { resolveIssueContext, type IssueRef } from './resolver.js';
 import { findClarificationComment } from './clarification-comment-finder.js';
 import { buildReviewContextPayload } from './shared/review-context-json.js';
@@ -405,19 +406,14 @@ async function findSpecDir(
   } catch {
     return null;
   }
-  const prefix = `${issueNumber}-`;
   let entries: string[];
   try {
     entries = await readdir(specsRoot);
   } catch {
     return null;
   }
-  for (const entry of entries) {
-    if (entry.startsWith(prefix)) {
-      return join(specsRoot, entry);
-    }
-  }
-  return null;
+  const match = findSpecDirName(entries, issueNumber);
+  return match === undefined ? null : join(specsRoot, match);
 }
 
 async function readArtifact(path: string): Promise<ArtifactOutput | null> {

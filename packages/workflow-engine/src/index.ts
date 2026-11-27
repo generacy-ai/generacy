@@ -276,3 +276,7 @@ export type {
   SkippedCommentInfo,
 } from './types/github.js';
 export { aggregateCiVerdict } from './actions/github/client/ci-verdict.js';
+
+// #1241 — shared numeric spec-dir resolver (single source of truth for
+// resolving zero-padded `specs/NNN-…` directories by issue number).
+export * from './specs/index.js';
