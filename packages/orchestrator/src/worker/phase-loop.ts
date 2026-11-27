@@ -1973,7 +1973,7 @@ export class PhaseLoop {
           // #958 FR-008/FR-009 — integration + safety-net posting already ran
           // in step 5c above. This branch is now a pure boolean check against
           // the freshly-integrated file (fail-closed per FR-007).
-          gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber);
+          gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber, this.logger);
           if (!gateActive) {
             this.logger.info(
               { phase, gateLabel: gate.gateLabel },

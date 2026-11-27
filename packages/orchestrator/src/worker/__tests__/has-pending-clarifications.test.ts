@@ -36,10 +36,30 @@ describe('#958 FR-007 — hasPendingClarifications fails closed', () => {
     expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
-  it('readFileSync throws (unreadable / I/O error) → true', () => {
+  it('#1246 — readFileSync throws ENOENT (spec dir present) → false (zero-question advance)', () => {
     mockReaddirSync.mockReturnValue(['42-feature']);
     mockReadFileSync.mockImplementation(() => {
-      throw new Error('EACCES: permission denied');
+      const err = new Error('ENOENT: no such file') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+  });
+
+  it('readFileSync throws EACCES (unreadable / permission) → true', () => {
+    mockReaddirSync.mockReturnValue(['42-feature']);
+    mockReadFileSync.mockImplementation(() => {
+      const err = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      throw err;
+    });
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
+  });
+
+  it('readFileSync throws a plain Error with no code → true (fail closed)', () => {
+    mockReaddirSync.mockReturnValue(['42-feature']);
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error('something went wrong');
     });
     expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });

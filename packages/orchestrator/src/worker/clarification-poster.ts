@@ -478,23 +478,26 @@ export function formatComment(questions: ClarificationQuestion[], issueNumber: n
 // ---------------------------------------------------------------------------
 
 /**
- * #958 FR-007 — Check whether the clarify phase produced pending questions.
+ * #958 FR-007 / #1246 — Check whether the clarify phase produced pending questions.
  *
- * Fail-closed contract: unknown states pause on a human gate. The three
- * unknown branches all return `true`:
+ * Fail-closed contract: unknown states pause on a human gate. These branches
+ * return `true`:
  *  - missing spec directory
- *  - `readFileSync` throws (unreadable / permission / I/O)
+ *  - `readFileSync` throws with a non-ENOENT `code` (unreadable / permission / I/O)
+ *    or no `code` at all
  *  - non-empty file content with zero parsed questions (parse failure)
  *
- * Legit empty file (`content.trim() === ''`) is the ONE branch that returns
- * `false`: a `clarifications.md` file with no questions at all is a valid
- * post-clarify state.
+ * Two branches return `false` (gate skips, workflow advances):
+ *  - a missing `clarifications.md` (ENOENT) when the spec dir is present — the
+ *    normal output of a zero-question clarify run (#1246)
+ *  - a legit empty file (`content.trim() === ''`)
  *
  * Returns `true` when at least one parsed question is unanswered.
  */
 export function hasPendingClarifications(
   checkoutPath: string,
   issueNumber: number,
+  logger?: Logger,
 ): boolean {
   const specsDir = join(checkoutPath, 'specs');
   const specDir = findSpecDir(specsDir, issueNumber);
@@ -505,8 +508,18 @@ export function hasPendingClarifications(
   let content: string;
   try {
     content = readFileSync(clarificationsPath, 'utf-8');
-  } catch {
-    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Spec dir exists (findSpecDir returned it above) but no
+      // clarifications.md — the normal output of a zero-question clarify run;
+      // the playbook only writes the file on its has-questions path (#1246).
+      logger?.info(
+        { issueNumber, clarificationsPath },
+        'no clarifications.md — clarify produced no questions; gate will skip',
+      );
+      return false;
+    }
+    return true; // EACCES / EIO / no code — unknown state, fail closed (#958 FR-007)
   }
 
   // Legit empty file — no questions is a valid resolved state.
