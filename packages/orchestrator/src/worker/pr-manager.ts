@@ -18,7 +18,8 @@ import { readReviewArtifact, setMarkedReadyByEngine } from './review-artifact.js
 type CommitAndPushOutcome =
   | { kind: 'pushed' }
   | { kind: 'no-changes' }
-  | { kind: 'refused'; refusal: Extract<PushGuardDecision, { kind: 'refuse' }> };
+  | { kind: 'refused'; refusal: Extract<PushGuardDecision, { kind: 'refuse' }> }
+  | { kind: 'commit-error'; message: string };
 
 /**
  * Manages draft PR creation and git commit/push operations between workflow phases.
@@ -107,6 +108,13 @@ export class PrManager {
         pushRefused: { reason, prNumber, branch, owner, repo, issueNumber },
       };
     }
+    if (outcome.kind === 'commit-error') {
+      // #1239 FR-005: staging/commit threw. Short-circuit BEFORE ensureDraftPr
+      // (mirroring the `refused` branch) — the phase produced no commit, so
+      // opening/updating a PR here would misrepresent the phase as progressed.
+      // `commitError` is the signal for the phase loop to abort and retry.
+      return { hasChanges: false, commitError: { message: outcome.message } };
+    }
     const prUrl = await this.ensureDraftPr();
     return { ...(prUrl !== undefined ? { prUrl } : {}), hasChanges: outcome.kind === 'pushed' };
   }
@@ -131,6 +139,15 @@ export class PrManager {
     try {
       let committed = false;
 
+      // #1239 FR-005: the staging/commit span is wrapped in its own try/catch so a
+      // throw here (a getStatus parse failure, a staging or commit error) surfaces
+      // as a distinct `commit-error` outcome the phase loop aborts on, rather than
+      // being swallowed by the outer catch as a benign `no-changes` that silently
+      // advances the phase losing the work. Only this span is inner-wrapped; the
+      // revert, remote queries, push guard, and push below stay under the outer
+      // catch and keep collapsing to `no-changes` (Q2: A).
+      let excluded: string[] = [];
+      try {
       // #1162 FR-001: stage only genuine product paths, never engine sidecars.
       // Replaces the unscoped `git add -A` that committed `.generacy/review-*`
       // and `pause-context-*` bookkeeping into product PR diffs. A phase whose
@@ -168,7 +185,7 @@ export class PrManager {
       // safer than rewriting an existing commit. The prompt-side pin that stops
       // the agent writing these files at all lives in agency (agency#511).
       const isSpecStage = PHASE_TO_STAGE[phase] !== 'implementation';
-      const excluded = isSpecStage
+      excluded = isSpecStage
         ? candidates.filter((p) => EXCLUDED_EXACT_PATHS.includes(p))
         : [];
       const toStage = isSpecStage
@@ -188,6 +205,14 @@ export class PrManager {
           'Committed phase changes',
         );
         committed = true;
+      }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          { phase, error: message },
+          'Failed to stage/commit phase changes',
+        );
+        return { kind: 'commit-error', message };
       }
 
       // #1218 FR-002/FR-003: revert the excluded agent-context files in the

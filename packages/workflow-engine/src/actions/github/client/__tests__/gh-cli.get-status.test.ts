@@ -31,7 +31,7 @@ describe('GhCliGitHubClient.getStatus', () => {
     mockExecuteCommand.mockReset();
   });
 
-  it('runs `git status --porcelain --untracked-files=all` in the workdir', async () => {
+  it('runs `git status --porcelain -z --untracked-files=all` in the workdir', async () => {
     mockExecuteCommand
       .mockResolvedValueOnce(ok('feature\n'))   // branch --show-current
       .mockResolvedValueOnce(ok(''))            // status
@@ -42,13 +42,14 @@ describe('GhCliGitHubClient.getStatus', () => {
 
     expect(mockExecuteCommand.mock.calls[1]).toEqual([
       'git',
-      ['status', '--porcelain', '--untracked-files=all'],
+      ['status', '--porcelain', '-z', '--untracked-files=all'],
       { cwd: '/tmp/checkout' },
     ]);
   });
 
   it('reports each untracked file under an untracked directory individually', async () => {
-    // What git emits WITH --untracked-files=all for a wholly-untracked .generacy/.
+    // What git emits WITH -z --untracked-files=all for a wholly-untracked
+    // .generacy/: NUL-terminated entries, no `\n`.
     mockExecuteCommand
       .mockResolvedValueOnce(ok('feature\n'))
       .mockResolvedValueOnce(ok([
@@ -58,7 +59,7 @@ describe('GhCliGitHubClient.getStatus', () => {
         '?? .generacy/review-findings-o_r_42.json',
         '?? .generacy/pause-context-o_r_42.json',
         '?? src/new.ts',
-      ].join('\n') + '\n'))
+      ].join('\0') + '\0'))
       .mockResolvedValueOnce(ok('0\n'));
     const client = new GhCliGitHubClient('/tmp/checkout');
 
@@ -74,5 +75,67 @@ describe('GhCliGitHubClient.getStatus', () => {
     expect(status.staged).toEqual(['src/added.ts', 'src/both.ts']);
     expect(status.has_changes).toBe(true);
     expect(status.branch).toBe('feature');
+  });
+
+  // #1239: with -z, a rename/copy entry emits the destination path in the
+  // header token and the source path as the immediately-following NUL token,
+  // instead of the `old -> new` arrow the line-split format produced. The parser
+  // must consume both and surface real paths — never the arrow artifact.
+  it('parses a staged rename into source + dest, never the arrow artifact', async () => {
+    mockExecuteCommand
+      .mockResolvedValueOnce(ok('feature\n'))
+      // `R  new.ts\0old.ts\0` — staged rename (index column R, dest then source).
+      .mockResolvedValueOnce(ok('R  src/new.ts\0src/old.ts\0'))
+      .mockResolvedValueOnce(ok('0\n'));
+    const client = new GhCliGitHubClient('/tmp/checkout');
+
+    const status = await client.getStatus();
+
+    expect(status.staged).toEqual(['src/new.ts', 'src/old.ts']);
+    expect(status.unstaged).toEqual([]);
+    expect(status.untracked).toEqual([]);
+    expect(status.has_changes).toBe(true);
+    for (const p of [...status.staged, ...status.unstaged, ...status.untracked]) {
+      expect(p).not.toContain('->');
+    }
+  });
+
+  it('parses an `RM` entry: dest+source staged, dest unstaged, one has_changes entry', async () => {
+    mockExecuteCommand
+      .mockResolvedValueOnce(ok('feature\n'))
+      // `RM new.ts\0old.ts\0` — renamed in index (R) with further working-tree
+      // modification (M). Source rides the next token; dest is both staged and
+      // unstaged. Plus a plain working-tree modification.
+      .mockResolvedValueOnce(ok('RM src/new.ts\0src/old.ts\0 M src/other.ts\0'))
+      .mockResolvedValueOnce(ok('0\n'));
+    const client = new GhCliGitHubClient('/tmp/checkout');
+
+    const status = await client.getStatus();
+
+    expect(status.staged).toEqual(['src/new.ts', 'src/old.ts']);
+    expect(status.unstaged).toEqual(['src/new.ts', 'src/other.ts']);
+    expect(status.untracked).toEqual([]);
+    // Two porcelain entries (RM + ` M`), not the four NUL tokens.
+    expect(status.has_changes).toBe(true);
+    for (const p of [...status.staged, ...status.unstaged, ...status.untracked]) {
+      expect(p).not.toContain('->');
+    }
+  });
+
+  it('preserves paths containing spaces verbatim (no v1 quoting under -z)', async () => {
+    mockExecuteCommand
+      .mockResolvedValueOnce(ok('feature\n'))
+      .mockResolvedValueOnce(ok([
+        'R  dst dir/new name.ts',
+        'src dir/old name.ts',
+        '?? untracked file.ts',
+      ].join('\0') + '\0'))
+      .mockResolvedValueOnce(ok('0\n'));
+    const client = new GhCliGitHubClient('/tmp/checkout');
+
+    const status = await client.getStatus();
+
+    expect(status.staged).toEqual(['dst dir/new name.ts', 'src dir/old name.ts']);
+    expect(status.untracked).toEqual(['untracked file.ts']);
   });
 });

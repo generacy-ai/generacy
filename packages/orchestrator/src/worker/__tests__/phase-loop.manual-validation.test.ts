@@ -280,6 +280,24 @@ describe('PhaseLoop — manual-validation pause (#1214)', () => {
     expect(deps.labelManager.onError).not.toHaveBeenCalled();
   });
 
+  it('commitError at the pause commit → aborts with gateHit false and zero label mutations (#1239)', async () => {
+    const context = createMockContext([]);
+    deps.evaluateTasksMd = vi.fn().mockReturnValue(manualOnlyEval());
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({
+      hasChanges: false,
+      commitError: { message: 'git commit failed: nothing staged' },
+    });
+
+    const result = await phaseLoop.executeLoop(context, createConfig(), deps, ['implement']);
+
+    expect(result.gateHit).toBe(false);
+    expect(result.completed).toBe(false);
+    expect(result.lastPhase).toBe('implement');
+    expect(deps.labelManager.onPhaseComplete).not.toHaveBeenCalled();
+    expect(deps.labelManager.onGateHit).not.toHaveBeenCalled();
+    expect(deps.labelManager.onError).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // T013 — precedence and mixed remainders
   // -------------------------------------------------------------------------

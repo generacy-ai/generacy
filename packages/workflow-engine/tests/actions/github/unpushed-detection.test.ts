@@ -89,7 +89,7 @@ describe('GhCliGitHubClient.getStatus() unpushed detection', () => {
 
   it('includes both working tree status and unpushed info', async () => {
     mockExecuteCommand.mockResolvedValueOnce(successResult('feature\n'));
-    mockExecuteCommand.mockResolvedValueOnce(successResult(' M src/file.ts\n?? new-file.ts\n'));
+    mockExecuteCommand.mockResolvedValueOnce(successResult(' M src/file.ts\0?? new-file.ts\0'));
     mockExecuteCommand.mockResolvedValueOnce(successResult('2\n'));
 
     const status = await client.getStatus();
