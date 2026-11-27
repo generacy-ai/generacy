@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm baseline: run `pnpm --filter @generacy-ai/orchestrator test` and verify
+- [X] T001 Confirm baseline: run `pnpm --filter @generacy-ai/orchestrator test` and verify
   `output-capture.test.ts` and `output-capture.blocked-sentinel.test.ts` pass green before any
   change (SC-002 baseline). No code edits.
 
@@ -19,7 +19,7 @@
 All core work is in `packages/orchestrator/src/worker/output-capture.ts`. These tasks touch
 the same file and are therefore sequential (no `[P]`).
 
-- [ ] T002 [US2] Extract the state-mutation portions of the existing inline PARTIAL/BLOCKED
+- [X] T002 [US2] Extract the state-mutation portions of the existing inline PARTIAL/BLOCKED
   handling in `parseLine` into private methods `applyPartialSentinel(payload, line)` and
   `applyBlockedSentinel(payload, line)` in
   `packages/orchestrator/src/worker/output-capture.ts`. Move the logic **verbatim**: PARTIAL
@@ -28,21 +28,21 @@ the same file and are therefore sequential (no `[P]`).
   BLOCKED keeps its `Array.isArray(parsed.on)` non-empty validation and warnings. No behavioral
   change.
 
-- [ ] T003 [US2] Add private `trySentinel(line: string): boolean` in `output-capture.ts` that
+- [X] T003 [US2] Add private `trySentinel(line: string): boolean` in `output-capture.ts` that
   checks `line.startsWith(SENTINEL_PREFIX)` → `applyPartialSentinel` and
   `line.startsWith(SENTINEL_BLOCKED_PREFIX)` → `applyBlockedSentinel`, returning `true` on any
   prefix match (even for malformed payloads). Rewire the raw-line path in `parseLine` to call
   `trySentinel(line)`; on true, push the line as a `text` chunk exactly as today and return
   (FR-003, US2/AC2 — preserves `getOutput()` behavior).
 
-- [ ] T004 [US1] Add private `extractEmbeddedTexts(parsed): string[]` (or generator) in
+- [X] T004 [US1] Add private `extractEmbeddedTexts(parsed): string[]` (or generator) in
   `output-capture.ts`. Duck-typed, type-guarded, never throws: if `parsed.message` is a
   non-null object and `parsed.message.content` is an array, yield `block.text` for each element
   that is a non-null object with `block.type === 'text'` and `typeof block.text === 'string'`
   (FR-001); if `typeof parsed.result === 'string'`, yield it (FR-002). Non-matching shapes yield
   nothing.
 
-- [ ] T005 [US1] Add private `scanEnvelopeForSentinels(parsed): void` that, for each embedded
+- [X] T005 [US1] Add private `scanEnvelopeForSentinels(parsed): void` that, for each embedded
   string from `extractEmbeddedTexts`, splits on `\n`, `trim()`s each segment, and calls
   `trySentinel(segment)` (FR-001/FR-002 line-splitting, D4 trim). Call it in `parseLine` after
   the successful `JSON.parse(line)` and before the envelope chunk is pushed. The scan adds **no**
@@ -51,7 +51,7 @@ the same file and are therefore sequential (no `[P]`).
 
 ## Phase 3: Tests
 
-- [ ] T006 [US1] Create new test file
+- [X] T006 [US1] Create new test file
   `packages/orchestrator/src/worker/__tests__/output-capture.stream-json-sentinel.test.ts`,
   mirroring the `mockLogger` + `vi.fn()` emitter pattern from
   `output-capture.blocked-sentinel.test.ts`. Cover the full Test Plan:
@@ -77,7 +77,7 @@ the same file and are therefore sequential (no `[P]`).
 
 ## Phase 4: Changeset (CI gate — required)
 
-- [ ] T007 [P] Hand-write `.changeset/1240-stream-json-sentinels.md` as a **newly added** file:
+- [X] T007 [P] Hand-write `.changeset/1240-stream-json-sentinels.md` as a **newly added** file:
   `@generacy-ai/orchestrator: patch` (defect fix, `workflow:speckit-bugfix`). Must be a new file
   in the PR diff — `output-capture.ts` is a non-test `src/` change, so the changeset bot gate
   requires it. (The new `.test.ts` alone would be test-only-exempt, but the handler extraction is
@@ -85,13 +85,13 @@ the same file and are therefore sequential (no `[P]`).
 
 ## Phase 5: Verification
 
-- [ ] T008 [US2] Run `pnpm --filter @generacy-ai/orchestrator test` and confirm: the new
+- [X] T008 [US2] Run `pnpm --filter @generacy-ai/orchestrator test` and confirm: the new
   `output-capture.stream-json-sentinel.test.ts` passes (SC-001), and the existing
   `output-capture.test.ts` + `output-capture.blocked-sentinel.test.ts` pass **unchanged**
   (SC-002, 0 regressions). SC-003 needs no phase-loop change — the existing increment path keys
   off `result.implementResult !== undefined`, now populated under stream-json.
 
-- [ ] T009 Typecheck/build the orchestrator package (cross-package imports resolve to built
+- [X] T009 Typecheck/build the orchestrator package (cross-package imports resolve to built
   `dist/` — rebuild dependencies first if needed) to confirm the refactor introduces no type
   errors in the new private methods.
 
