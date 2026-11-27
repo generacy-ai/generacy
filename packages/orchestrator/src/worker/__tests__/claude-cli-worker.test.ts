@@ -91,6 +91,41 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
     (content: string, sourceLabel: string) =>
       `<untrusted-data source="${sourceLabel}">\n${content}\n</untrusted-data>`,
   ),
+  // #1241 — real implementations of the shared numeric spec-dir resolver so
+  // the worker's evaluateTasksMd (matchSpecDir) and its epic/clarification
+  // helpers (findSpecDirName) resolve dirs. Canonical impl tested in
+  // workflow-engine's own suite.
+  matchSpecDir: (entries: string[], issueNumber: number) => {
+    const candidates: string[] = [];
+    const exact: string[] = [];
+    const target = String(issueNumber);
+    for (const entry of entries) {
+      const m = /^(\d+)-/.exec(entry);
+      if (m === null || Number(m[1]) !== issueNumber) continue;
+      candidates.push(entry);
+      if (m[1] === target) exact.push(entry);
+    }
+    if (exact.length === 1) return { kind: 'match', dir: exact[0] };
+    if (exact.length > 1) return { kind: 'ambiguous', dirs: exact };
+    if (candidates.length === 1) return { kind: 'match', dir: candidates[0] };
+    if (candidates.length > 1) return { kind: 'ambiguous', dirs: candidates };
+    return { kind: 'none' };
+  },
+  findSpecDirName: (entries: string[], issueNumber: number): string | undefined => {
+    const candidates: string[] = [];
+    const exact: string[] = [];
+    const target = String(issueNumber);
+    for (const entry of entries) {
+      const m = /^(\d+)-/.exec(entry);
+      if (m === null || Number(m[1]) !== issueNumber) continue;
+      candidates.push(entry);
+      if (m[1] === target) exact.push(entry);
+    }
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) return undefined;
+    if (candidates.length === 1) return candidates[0];
+    return undefined;
+  },
 }));
 
 // #1159 T010: hoist a shared switchBranch spy so the head-ref resolution test

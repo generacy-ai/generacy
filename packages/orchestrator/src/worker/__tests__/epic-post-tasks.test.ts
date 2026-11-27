@@ -10,6 +10,23 @@ const mockExecuteTasksToIssues = vi.fn<(...args: unknown[]) => Promise<TasksToIs
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
   executeTasksToIssues: (...args: unknown[]) => mockExecuteTasksToIssues(...args),
+  // #1241 — real implementation of the shared numeric spec-dir resolver so
+  // resolveFeatureDir resolves dirs; canonical impl tested in workflow-engine.
+  findSpecDirName: (entries: string[], issueNumber: number): string | undefined => {
+    const candidates: string[] = [];
+    const exact: string[] = [];
+    const target = String(issueNumber);
+    for (const entry of entries) {
+      const m = /^(\d+)-/.exec(entry);
+      if (m === null || Number(m[1]) !== issueNumber) continue;
+      candidates.push(entry);
+      if (m[1] === target) exact.push(entry);
+    }
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) return undefined;
+    if (candidates.length === 1) return candidates[0];
+    return undefined;
+  },
 }));
 
 // Mock readdirSync for resolveFeatureDir

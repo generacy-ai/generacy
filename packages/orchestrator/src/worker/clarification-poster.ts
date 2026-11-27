@@ -14,6 +14,7 @@ import {
   type CommentTrustContext,
   PENDING_ANSWER_LITERAL,
   isPendingAnswerValue,
+  findSpecDirName,
 } from '@generacy-ai/workflow-engine';
 import type { Comment as TrustComment } from '@generacy-ai/workflow-engine';
 import {
@@ -211,9 +212,10 @@ export function commentMatchesAnswerPattern(body: string): boolean {
  * Find the spec directory for a given issue number.
  *
  * Spec directories are named `{number}-{slug}` where the number may be
- * zero-padded (e.g., `008-fix-something`). This function parses the numeric
- * prefix from each directory and compares as integers to handle both padded
- * and unpadded naming conventions.
+ * zero-padded (e.g., `008-fix-something`). Resolution is delegated to the
+ * shared numeric resolver (#1241): it compares the leading digits as integers
+ * (padded and non-padded both match), prefers an exact non-padded dir, and
+ * returns `undefined` on an ambiguous listing.
  */
 function findSpecDir(specsDir: string, issueNumber: number): string | undefined {
   let dirs: string[];
@@ -222,10 +224,7 @@ function findSpecDir(specsDir: string, issueNumber: number): string | undefined 
   } catch {
     return undefined;
   }
-  return dirs.find((d) => {
-    const match = d.match(/^(\d+)-/);
-    return match !== null && parseInt(match[1]!, 10) === issueNumber;
-  });
+  return findSpecDirName(dirs, issueNumber);
 }
 
 // ---------------------------------------------------------------------------

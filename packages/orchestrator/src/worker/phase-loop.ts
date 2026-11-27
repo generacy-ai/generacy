@@ -1138,6 +1138,13 @@ export class PhaseLoop {
             );
             return { results, completed: false, lastPhase: phase, gateHit: false };
           }
+          if (wipOutcome.commitError) {
+            this.logger.warn(
+              { phase, commitError: wipOutcome.commitError.message },
+              'Phase loop aborted at dependency-block: staging/commit failed',
+            );
+            return { results, completed: false, lastPhase: phase, gateHit: false };
+          }
           if (wipOutcome.prUrl) context.prUrl = wipOutcome.prUrl;
 
           // Step 3: Cycle-cap check
@@ -1330,6 +1337,13 @@ export class PhaseLoop {
           );
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
+        if (partialOutcome.commitError) {
+          this.logger.warn(
+            { phase, commitError: partialOutcome.commitError.message },
+            'Phase loop aborted at implement increment: staging/commit failed',
+          );
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
         if (partialOutcome.prUrl) context.prUrl = partialOutcome.prUrl;
 
         // Clear session for a fresh context window on next increment
@@ -1370,6 +1384,13 @@ export class PhaseLoop {
             this.logger.warn(
               { phase, refusal: retryOutcome.pushRefused },
               'Phase loop aborted at implement retry: pre-push guard refused',
+            );
+            return { results, completed: false, lastPhase: phase, gateHit: false };
+          }
+          if (retryOutcome.commitError) {
+            this.logger.warn(
+              { phase, commitError: retryOutcome.commitError.message },
+              'Phase loop aborted at implement retry: staging/commit failed',
             );
             return { results, completed: false, lastPhase: phase, gateHit: false };
           }
@@ -1536,6 +1557,13 @@ export class PhaseLoop {
               );
               return { results, completed: false, lastPhase: 'remediate', gateHit: false };
             }
+            if (remediateCommitOutcome.commitError) {
+              this.logger.warn(
+                { phase: 'remediate', commitError: remediateCommitOutcome.commitError.message },
+                'Phase loop aborted: staging/commit failed in flag-OFF validate-fix remediate cycle',
+              );
+              return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+            }
             if (remediateCommitOutcome.prUrl) {
               context.prUrl = remediateCommitOutcome.prUrl;
             }
@@ -1631,6 +1659,18 @@ export class PhaseLoop {
         this.logger.warn(
           { phase, refusal: commitOutcome.pushRefused },
           'Phase loop aborted: pre-push guard refused this cycle — see prior push-refused log for details',
+        );
+        return { results, completed: false, lastPhase: phase, gateHit: false };
+      }
+
+      // #1239 FR-005: staging/commit threw inside commitAndPush. Mirror the
+      // pushRefused abort — a swallowed throw here would otherwise look like a
+      // legitimate `hasChanges: false` no-op, advance the phase, and silently
+      // lose the phase's work. Normal retry policy applies (Q1: A).
+      if (commitOutcome.commitError) {
+        this.logger.warn(
+          { phase, commitError: commitOutcome.commitError.message },
+          'Phase loop aborted: staging/commit failed this cycle',
         );
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
@@ -2369,6 +2409,13 @@ export class PhaseLoop {
             );
             return { results, completed: false, lastPhase: 'remediate', gateHit: false };
           }
+          if (remediateCommitOutcome.commitError) {
+            this.logger.warn(
+              { phase: 'remediate', commitError: remediateCommitOutcome.commitError.message },
+              'Phase loop aborted: staging/commit failed in remediate cycle',
+            );
+            return { results, completed: false, lastPhase: 'remediate', gateHit: false };
+          }
           if (remediateCommitOutcome.prUrl) {
             context.prUrl = remediateCommitOutcome.prUrl;
           }
@@ -2558,6 +2605,13 @@ export class PhaseLoop {
       this.logger.warn(
         { phase, refusal: wipOutcome.pushRefused },
         'Phase loop aborted at manual-validation pause: pre-push guard refused',
+      );
+      return { results, completed: false, lastPhase: phase, gateHit: false };
+    }
+    if (wipOutcome.commitError) {
+      this.logger.warn(
+        { phase, commitError: wipOutcome.commitError.message },
+        'Phase loop aborted at manual-validation pause: staging/commit failed',
       );
       return { results, completed: false, lastPhase: phase, gateHit: false };
     }

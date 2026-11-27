@@ -110,9 +110,9 @@ function setupFullFlowMocks(opts: {
       return success('feature-branch\n');
     }
 
-    // git status --porcelain --untracked-files=all
-    if (cmd === 'git' && argsStr === 'status --porcelain --untracked-files=all') {
-      if (siblingDirty && callIndex <= 3) return success(' M file.ts\n');
+    // git status --porcelain -z --untracked-files=all
+    if (cmd === 'git' && argsStr === 'status --porcelain -z --untracked-files=all') {
+      if (siblingDirty && callIndex <= 3) return success(' M file.ts\0');
       return success('');
     }
 
@@ -302,8 +302,8 @@ describe('siblingFanoutHandler', () => {
         const argsStr = (args as string[]).join(' ');
 
         if (cmd === 'git' && argsStr === 'branch --show-current') return success('feature-branch\n');
-        if (cmd === 'git' && argsStr === 'status --porcelain --untracked-files=all') {
-          if (callCount <= 3) return success(' M file.ts\n');
+        if (cmd === 'git' && argsStr === 'status --porcelain -z --untracked-files=all') {
+          if (callCount <= 3) return success(' M file.ts\0');
           return success('');
         }
         if (cmd === 'git' && argsStr.includes('rev-list --count')) return success('0\n');
@@ -372,9 +372,9 @@ describe('siblingFanoutHandler', () => {
           workdirContext = cwd;
           return success('feature-branch\n');
         }
-        if (cmd === 'git' && argsStr === 'status --porcelain --untracked-files=all') {
+        if (cmd === 'git' && argsStr === 'status --porcelain -z --untracked-files=all') {
           // Both siblings have changes
-          return success(' M file.ts\n');
+          return success(' M file.ts\0');
         }
         if (cmd === 'git' && argsStr.includes('rev-list --count')) return success('0\n');
         if (cmd === 'git' && argsStr.includes('log -1 --format=%s')) return success('feat: stuff\n');
