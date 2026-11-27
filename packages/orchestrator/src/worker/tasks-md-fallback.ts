@@ -1,6 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { matchSpecDir } from '@generacy-ai/workflow-engine';
+
 import type { WorkerContext } from './types.js';
 
 /**
@@ -168,20 +170,18 @@ export function evaluateTasksMd(context: WorkerContext): TasksMdEvaluation {
     return { kind: 'unreadable', reason: `specs dir not readable: ${String(error)}` };
   }
 
-  const prefix = `${issueNumber}-`;
-  const matches = entries.filter((entry) => entry.startsWith(prefix));
-  const specDir = matches[0];
-  if (specDir === undefined) {
+  const match = matchSpecDir(entries, issueNumber);
+  if (match.kind === 'none') {
     return { kind: 'unreadable', reason: `no spec dir for issue ${issueNumber}` };
   }
-  if (matches.length > 1) {
+  if (match.kind === 'ambiguous') {
     return {
       kind: 'unreadable',
-      reason: `ambiguous spec dirs for issue ${issueNumber}: ${matches.join(', ')}`,
+      reason: `ambiguous spec dirs for issue ${issueNumber}: ${match.dirs.join(', ')}`,
     };
   }
 
-  const tasksPath = join(specsDir, specDir, 'tasks.md');
+  const tasksPath = join(specsDir, match.dir, 'tasks.md');
   let content: string;
   try {
     content = readFileSync(tasksPath, 'utf8');

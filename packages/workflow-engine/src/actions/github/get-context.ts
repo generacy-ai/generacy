@@ -13,6 +13,7 @@ import type {
   CorePhase,
 } from '../../types/index.js';
 import { isNamespacedAction } from '../../types/action.js';
+import { findSpecDirName } from '../../specs/index.js';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -120,7 +121,7 @@ export class GetContextAction extends BaseAction {
     }
 
     const dirs = readdirSync(specsDir);
-    return dirs.find(d => d.startsWith(`${issueNumber}-`));
+    return findSpecDirName(dirs, issueNumber);
   }
 
   /**

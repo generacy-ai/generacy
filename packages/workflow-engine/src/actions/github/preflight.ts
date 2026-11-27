@@ -21,6 +21,7 @@ import type {
 import { isNamespacedAction } from '../../types/action.js';
 import type { GitHubClient } from './client/index.js';
 import { createGitHubClient } from './client/index.js';
+import { findSpecDirName } from '../../specs/index.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -295,7 +296,7 @@ export class PreflightAction extends BaseAction {
     // Find the feature directory
     const { readdirSync } = await import('node:fs');
     const dirs = readdirSync(specsDir);
-    const featureDir = dirs.find(d => d.startsWith(`${issueNumber}-`));
+    const featureDir = findSpecDirName(dirs, issueNumber);
 
     if (!featureDir) {
       return { spec_exists: false, plan_exists: false, tasks_exists: false };

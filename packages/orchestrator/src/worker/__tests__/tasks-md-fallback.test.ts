@@ -521,4 +521,47 @@ describe('evaluateTasksMd classification matrix', () => {
 
     expect(result).toEqual({ kind: 'complete', unchecked: 0, checked: 2, total: 2 });
   });
+
+  it('resolves a zero-padded spec dir for a low-numbered issue (#1241, SC-001)', async () => {
+    await writeTasksMd(checkoutPath, '006-foo', '- [x] T001 done\n- [ ] T002 remaining');
+
+    const result = evaluateTasksMd(contextFor(checkoutPath, 6));
+
+    expect(result).toEqual({
+      kind: 'incomplete',
+      unchecked: 1,
+      automatable: 1,
+      manual: 0,
+      checked: 1,
+      total: 2,
+    });
+  });
+
+  it('prefers the exact non-padded dir over a padded one (#1241, SC-004)', async () => {
+    await writeTasksMd(checkoutPath, '6-foo', '- [ ] T001 the real tasks');
+    await writeTasksMd(checkoutPath, '006-bar', '- [x] T001 the padded decoy');
+
+    const result = evaluateTasksMd(contextFor(checkoutPath, 6));
+
+    expect(result).toEqual({
+      kind: 'incomplete',
+      unchecked: 1,
+      automatable: 1,
+      manual: 0,
+      checked: 0,
+      total: 1,
+    });
+  });
+
+  it('classifies multiple padded dirs for the same issue as unreadable (#1241)', async () => {
+    await writeTasksMd(checkoutPath, '006-foo', '- [ ] T001');
+    await writeTasksMd(checkoutPath, '0006-bar', '- [ ] T001');
+
+    const result = evaluateTasksMd(contextFor(checkoutPath, 6));
+
+    expect(result.kind).toBe('unreadable');
+    if (result.kind === 'unreadable') {
+      expect(result.reason).toContain('ambiguous');
+    }
+  });
 });
