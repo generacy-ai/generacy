@@ -468,6 +468,49 @@ describe.each([['speckit-feature'], ['speckit-bugfix']])(
       expect(github.labels.has('completed:clarification')).toBe(false);
     });
 
+    it('#1246: zero-question clarify (spec dir present, no clarifications.md) skips the gate and advances', async () => {
+      // A clarify run that finds the spec unambiguous produces NO questions and
+      // never writes clarifications.md. The on-questions gate must read this as
+      // "no pending questions" (ENOENT ⇒ false) and let the loop advance.
+      const github = makeLabelBackedGithub([]);
+      const labelManager = new LabelManager(github as any, OWNER, REPO, ISSUE, mockLogger);
+
+      const deps = baseDeps(labelManager);
+      // The clarify phase creates the spec dir (as /specify did) but writes NO
+      // clarifications.md — the zero-question normal case.
+      const specDir = path.join(checkoutPath, 'specs', `${ISSUE}-feature`);
+      (deps.cliSpawner.spawnPhase as any).mockImplementation(async (phase: WorkflowPhase) => {
+        if (phase === 'clarify') {
+          await fs.mkdir(specDir, { recursive: true });
+        }
+        return makeSuccessResult(phase);
+      });
+
+      const ctx = makeContext(github, checkoutPath, workflowName, 'clarify');
+      const config = makeConfig({
+        gates: {
+          [workflowName]: [
+            { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
+          ],
+        },
+      });
+      const result = await phaseLoop.executeLoop(
+        ctx,
+        config,
+        deps,
+        ['clarify', 'plan'] as WorkflowPhase[],
+      );
+
+      // The gate skipped: no pause labels, loop advanced past clarify to plan,
+      // and no completed:clarification force-advance override was needed.
+      expect(result.completed).toBe(true);
+      expect(result.gateHit).toBe(false);
+      expect(result.lastPhase).toBe('plan');
+      expect(github.labels.has('waiting-for:clarification')).toBe(false);
+      expect(github.labels.has('agent:paused')).toBe(false);
+      expect(github.labels.has('completed:clarification')).toBe(false);
+    });
+
     it('ci re-pause after a completed:ci resume leaves no stale completed:ci', async () => {
       // The operator answered `waiting-for:ci` with `completed:ci`; validate
       // re-runs and CI is still red on the head → it must re-pause cleanly.

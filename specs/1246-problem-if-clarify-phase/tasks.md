@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Narrow the `readFileSync` catch in `hasPendingClarifications`
+- [X] T001 [US1] Narrow the `readFileSync` catch in `hasPendingClarifications`
   (`packages/orchestrator/src/worker/clarification-poster.ts:495`): add an optional
   trailing `logger?: Logger` parameter (the pino-style `Logger` already imported from
   `./types.js`), and inside the existing catch discriminate on
@@ -22,7 +22,7 @@
   `false` (FR-006), non-empty-zero-parse → `true` (FR-005). Decision table:
   `contracts/has-pending-clarifications.md`.
 
-- [ ] T002 [US1] Pass the phase-loop logger at the gate call site
+- [X] T002 [US1] Pass the phase-loop logger at the gate call site
   (`packages/orchestrator/src/worker/phase-loop.ts:1976`): change
   `hasPendingClarifications(context.checkoutPath, context.item.issueNumber)` to
   `hasPendingClarifications(context.checkoutPath, context.item.issueNumber, this.logger)`.
@@ -30,7 +30,7 @@
 
 ## Phase 2: Tests
 
-- [ ] T003 [US1] [US2] Update the #958 unit suite
+- [X] T003 [US1] [US2] Update the #958 unit suite
   (`packages/orchestrator/src/worker/__tests__/has-pending-clarifications.test.ts`):
   - **New** (FR-001): `readFileSync` throws an error with `code: 'ENOENT'`, spec dir present
     → asserts `false`.
@@ -41,7 +41,7 @@
   - Keep every other assertion unchanged (missing dir → `true` FR-003, non-empty-zero-parse
     → `true` FR-005, empty file → `false` FR-006, pending/answered/placeholder) (SC-003).
 
-- [ ] T004 [US1] [US2] Add the gate-level regression case to
+- [X] T004 [US1] [US2] Add the gate-level regression case to
   `packages/orchestrator/src/worker/__tests__/phase-loop.resume-gates.integration.test.ts`:
   create the spec dir `specs/<issue>-*/` with **no** `clarifications.md`, run the clarify
   phase against the real temp checkout, and assert (a) `waiting-for:clarification` /
@@ -52,7 +52,7 @@
 
 ## Phase 3: Release
 
-- [ ] T005 [P] [US1] Add the changeset (required CI gate — non-test `src/` change in
+- [X] T005 [P] [US1] Add the changeset (required CI gate — non-test `src/` change in
   `packages/orchestrator`). Create **new** file
   `.changeset/1246-zero-question-clarify-gate.md` with a `patch` bump for
   `@generacy-ai/orchestrator` (defect fix, speckit-bugfix workflow) and the body from
@@ -61,7 +61,7 @@
 
 ## Phase 4: Verification
 
-- [ ] T006 [US1] [US2] Rebuild and verify: `pnpm --filter @generacy-ai/orchestrator build`
+- [X] T006 [US1] [US2] Rebuild and verify: `pnpm --filter @generacy-ai/orchestrator build`
   (cross-package imports resolve to built `dist/`), then run the two affected suites —
   `has-pending-clarifications.test.ts` and `phase-loop.resume-gates.integration.test.ts` —
   and confirm all FR/SC criteria pass (SC-001..SC-004). Confirm the changeset is a newly
