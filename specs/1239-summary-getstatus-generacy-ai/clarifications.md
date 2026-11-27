@@ -17,7 +17,7 @@
 - B: Observability only — new `{ kind: 'error' }` outcome is logged/emitted prominently (e.g. warning with error kind in the phase result), but the phase loop continues as today (non-fatal)
 - C: Defer FR-005 entirely to a follow-up issue; this PR fixes only the `getStatus()` parsing (FR-001–FR-004)
 
-**Answer**: *Pending*
+**Answer**: A — Treat it like `refused`: abort the phase visibly (the phase fails with a commit-error reason the operator can see), and the normal retry policy applies. Rationale: for `implement`, option B still ends in a failed phase — the product-code guard fails it as `no-product-code-changes` with "Own-commit files: []", the misleading symptom this issue reports — so B makes the run harder to debug without keeping it alive. A gives the failure its real reason, reuses the existing `refused` handling in the phase loop, and matches the goal of turning silent work loss into a visible failure. (Answered by @christrudelpw via GitHub, 2026-11-27)
 
 ---
 
@@ -31,7 +31,7 @@
 - A: Staging/commit only — wrap stage+commit narrowly; push/remote-query failures keep today's non-fatal log-and-`no-changes` behavior
 - B: Whole body — any throw inside `commitAndPush` yields the distinct error outcome instead of `no-changes`
 
-**Answer**: *Pending*
+**Answer**: A — Staging/commit only: wrap `getStatus` → `stageFiles` → `commit` narrowly. Push and remote-query failures keep today's non-fatal log-and-`no-changes` behavior. Rationale: once the commit exists locally, a failed push loses nothing — the next `commitAndPush` sees it through the `hasUnpushed` check (`getCommitsBetween`) and pushes it, so keeping push best-effort costs no work and transient network errors don't fail phases. Stage/commit failures are the only kind that lose work, which is this bug. The narrow scope also leaves the push-guard/`refused` paths untouched. (Answered by @christrudelpw via GitHub, 2026-11-27)
 
 ---
 
@@ -45,4 +45,4 @@
 - A: Unit-level is sufficient — `getStatus()` parsing tests over real/simulated porcelain output plus existing `pr-manager` test updates; SC-001 verified once manually
 - B: Add an automated integration-style test — temp git repo with `git mv` + modifications, assert `getStatus()` output stages and commits cleanly end-to-end
 
-**Answer**: *Pending*
+**Answer**: B — Add an automated test on a temp git repo that does `git mv` plus a modification (giving `RM`, `R ` and ` M` entries), checking that `getStatus()` → `stageFiles()` → `commit()` makes a commit containing both the source and destination paths. Rationale: the bug lived in the contract between the parser and staging, which mock-level `pr-manager` tests cannot see — mocks return clean path arrays, which is how the `old -> new` string got through. The package already has a test against a real temp repo (`gh-cli.revert-paths.test.ts`), so this is cheap and follows an existing pattern. (Answered by @christrudelpw via GitHub, 2026-11-27)

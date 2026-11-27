@@ -74,6 +74,12 @@ failure rather than a `no-changes` result,
 - [ ] A staging or commit error inside `commitAndPush` is distinguishable in the
       outcome from a legitimate empty working tree (not collapsed into
       `no-changes`).
+- [ ] The phase loop treats the new error outcome like `refused`: the phase
+      fails visibly with a commit-error reason and the normal retry policy
+      applies (Q1: A).
+- [ ] Only the `getStatus` → `stageFiles` → `commit` span gets the distinct
+      error outcome; push and remote-query failures keep today's non-fatal
+      log-and-`no-changes` behavior (Q2: A).
 
 ## Functional Requirements
 
@@ -83,13 +89,13 @@ failure rather than a `no-changes` result,
 | FR-002 | For an `R` or `C` entry, both the source (old) and destination (new) paths MUST be captured so `stageFiles` records both the removal and the addition. | P1 | Index side and working side (` R`, `R `, `RM`) all handled. |
 | FR-003 | Existing status semantics MUST be preserved: `--untracked-files=all` behavior (#1162), the `staged`/`unstaged`/`untracked` split, `has_changes`, and unpushed-commit detection. | P1 | Do not regress #1162. |
 | FR-004 | Paths with spaces or special characters MUST round-trip correctly through the chosen parse format. | P2 | `-z` / v2 avoid porcelain v1's quoting. |
-| FR-005 | A genuine staging/commit error in `commitAndPush` SHOULD surface as a distinct, visible outcome rather than being swallowed as `no-changes`. | P2 | Issue "also consider"; scope to be confirmed in clarify. |
+| FR-005 | A genuine staging or commit error in `commitAndPush` MUST surface as a distinct outcome that fails the phase visibly (handled like `refused`, with a commit-error reason; retry policy applies). Coverage is the `getStatus` → `stageFiles` → `commit` span only; push and remote-query failures keep the non-fatal log-and-`no-changes` behavior. | P2 | Scope resolved in clarify (Q1: A, Q2: A). |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Rename-only `implement` phase commits its work | 100% | Repro scenario: phase with `git mv` produces a commit containing the renamed paths; no `no-product-code-changes`. |
+| SC-001 | Rename-only `implement` phase commits its work | 100% | Automated integration-style test against a temp git repo with `git mv` + a modification (`RM`, `R `, ` M` entries): `getStatus()` → `stageFiles()` → `commit()` produces a commit containing both source and destination paths (Q3: B; follow the `gh-cli.revert-paths.test.ts` pattern). |
 | SC-002 | `getStatus()` output for `R`/`RM`/`C` entries | No `->` substring; real paths present | Unit test over simulated porcelain output. |
 | SC-003 | No regression in existing status parsing | All existing `gh-cli.get-status` tests pass | `pnpm --filter @generacy-ai/workflow-engine test` |
 
