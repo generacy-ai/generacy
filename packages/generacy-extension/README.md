@@ -107,5 +107,5 @@ See [Generacy pricing](https://generacy.ai/pricing) for current cloud plans and 
 
 For more information:
 - 🌐 Website: https://generacy.ai
-- 📖 Documentation: https://docs.generacy.ai
-- 💬 Support: https://github.com/generacy-ai/generacy/discussions
+- 📖 Documentation: https://generacy.ai/docs/
+- 💬 Report an issue: https://github.com/generacy-ai/generacy/issues
