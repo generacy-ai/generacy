@@ -7,6 +7,10 @@
   "publisher": "generacy-ai",
   "license": "Apache-2.0",
   "icon": "resources/icon.png",
+  "homepage": "https://generacy.ai/",
+  "bugs": {
+    "url": "https://github.com/generacy-ai/generacy/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/generacy-ai/generacy.git",
