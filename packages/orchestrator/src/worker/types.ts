@@ -586,6 +586,15 @@ export interface CommitResult {
    * TS2322/TS2345 failures the review caught.
    */
   pushRefused?: Omit<Extract<PushGuardDecision, { kind: 'refuse' }>, 'kind'>;
+  /**
+   * Present iff staging/commit threw inside `commitAndPush` (#1239 FR-005).
+   * Mutually exclusive with `pushRefused`; when present, `hasChanges` is false,
+   * no push occurred, and `ensureDraftPr` was NOT called. Phase-loop consumers
+   * that treat `hasChanges: false` as a legitimate no-op MUST check this (and
+   * `pushRefused`) first and abort — no `onPhaseComplete`, no advancement,
+   * `completed: false`; normal retry policy then applies.
+   */
+  commitError?: { message: string };
 }
 
 /**

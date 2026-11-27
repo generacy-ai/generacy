@@ -1321,30 +1321,51 @@ export class GhCliGitHubClient implements GitHubClient {
     // which hides the files inside from path-based consumers (e.g. the
     // orchestrator's engine-sidecar staging filter, #1162 — a bare `.generacy/`
     // entry would be staged wholesale, committing every sidecar).
+    // `-z`: NUL-terminate entries and emit verbatim (unquoted) paths. The default
+    // line-split output quotes paths with special chars and renders rename/copy
+    // entries as `old -> new` on a single line, so a naive parser stages the
+    // literal `old -> new` string instead of the real paths (#1239). `-z` instead
+    // emits the destination path in the header entry and the source path as a
+    // separate following NUL token for R/C entries.
     const statusResult = await executeCommand(
       'git',
-      ['status', '--porcelain', '--untracked-files=all'],
+      ['status', '--porcelain', '-z', '--untracked-files=all'],
       { cwd: this.workdir },
     );
-    const lines = statusResult.stdout.split('\n').filter(l => l);
+    const tokens = statusResult.stdout.split('\0').filter(t => t.length > 0);
 
     const staged: string[] = [];
     const unstaged: string[] = [];
     const untracked: string[] = [];
 
-    for (const line of lines) {
-      const indexStatus = line[0];
-      const workingStatus = line[1];
-      const file = line.substring(3);
+    let entryCount = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      const entry = tokens[i]!;
+      const indexStatus = entry[0];
+      const workingStatus = entry[1];
+      const dest = entry.slice(3);
+      entryCount++;
+
+      // Rename/copy entries carry their source path as the next NUL token.
+      let source: string | undefined;
+      if (indexStatus === 'R' || indexStatus === 'C' || workingStatus === 'R' || workingStatus === 'C') {
+        source = tokens[++i];
+      }
 
       if (indexStatus === '?' && workingStatus === '?') {
-        untracked.push(file);
+        untracked.push(dest);
       } else {
         if (indexStatus && indexStatus !== ' ' && indexStatus !== '?') {
-          staged.push(file);
+          staged.push(dest);
+          if ((indexStatus === 'R' || indexStatus === 'C') && source !== undefined) {
+            staged.push(source);
+          }
         }
         if (workingStatus && workingStatus !== ' ' && workingStatus !== '?') {
-          unstaged.push(file);
+          unstaged.push(dest);
+          if ((workingStatus === 'R' || workingStatus === 'C') && source !== undefined) {
+            unstaged.push(source);
+          }
         }
       }
     }
@@ -1372,7 +1393,7 @@ export class GhCliGitHubClient implements GitHubClient {
 
     return {
       branch,
-      has_changes: lines.length > 0,
+      has_changes: entryCount > 0,
       staged,
       unstaged,
       untracked,
@@ -1421,9 +1442,25 @@ export class GhCliGitHubClient implements GitHubClient {
   async stageFiles(files: string[]): Promise<void> {
     if (files.length === 0) return;
 
-    const result = await executeCommand('git', ['add', ...files], { cwd: this.workdir });
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to stage files: ${result.stderr}`);
+    const result = await executeCommand('git', ['add', '--', ...files], { cwd: this.workdir });
+    if (result.exitCode === 0) return;
+
+    // #1239: `getStatus` now surfaces the SOURCE path of a rename/copy entry
+    // (git reports `R`/`C` only for staged renames, so the source is already
+    // staged as a deletion and no longer exists in the working tree). A batch
+    // `git add src dst …` aborts atomically with `pathspec '<src>' did not match
+    // any files` because there is nothing left to stage for the source. That one
+    // benign case must not fail the whole commit. Fall back to per-file staging
+    // and skip only paths that git reports as unmatched — they are already in
+    // their final staged state, and the commit's explicit pathspec still records
+    // them. Genuine unstaged deletions (` D`) are NOT unmatched (`git add` stages
+    // the removal and exits 0), so this preserves deletion staging for whole-index
+    // commit callers. Any other add error stays fatal.
+    for (const file of files) {
+      const perFile = await executeCommand('git', ['add', '--', file], { cwd: this.workdir });
+      if (perFile.exitCode !== 0 && !/did not match any files/.test(perFile.stderr)) {
+        throw new Error(`Failed to stage files: ${perFile.stderr}`);
+      }
     }
   }
 
